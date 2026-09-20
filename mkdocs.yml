@@ -1,0 +1,37 @@
+# FIXME: set site_name, site_description, and repo_url for your project
+site_name: m365-gdap-runner
+site_description: FIXME
+repo_url: https://github.com/DrollRobot/m365-gdap-runner
+
+theme:
+  name: material
+  features:
+    - navigation.sections     # collapsible sections in left nav
+    - navigation.expand       # expand all by default
+    - content.code.copy       # copy button on code blocks
+    - search.highlight
+
+nav:
+  - Home: index.md
+  - Smoke test: smoke-test.md
+  - Reference: reference/m365_gdap_runner.md
+
+markdown_extensions:
+  - admonition                # !!! note style callouts
+  - pymdownx.superfences      # fenced code with language detection
+  - pymdownx.highlight        # syntax highlighting
+  - pymdownx.inlinehilite     # inline `code` highlighting
+  - toc:
+      permalink: true         # ¶ link on each heading
+
+plugins:
+  - search
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: google
+            show_source: true
+            show_signature_annotations: true
