@@ -59,7 +59,7 @@ CLI_NAME = APP_NAME.replace("_", "-") + "-config"
 #
 # Validated at use time by secrets.schema_backend_policy(); an unknown value
 # fails loudly there. Settings below declares no secret fields (sign-in is
-# interactive; the MSAL token cache is handled by auth.py), so the secret
+# interactive; the token cache is handled by azure-auth), so the secret
 # machinery is never consulted and this policy has no effect at runtime. It
 # stays at the template default because the template's config tests exercise
 # secret storage with their own test schema.
@@ -145,14 +145,30 @@ class Settings:
     treat instances as immutable value objects.
     """
 
-    partner_tenant_id: str = option(help="Entra tenant ID of the MSP partner tenant")
-    client_id: str = option(
-        default_value="14d82eec-204b-4c2f-b7e8-296a70dab67e",
-        help="Public client app ID used to sign in (default: Microsoft Graph Command Line Tools)",
+    partner_tenant_id: str = option(
+        help="Tenant ID or verified domain name of the MSP partner tenant"
     )
-    persist_token_cache: bool = option(
-        default_value=False,
-        help="Keep the token cache in an encrypted file so later runs skip the browser sign-in",
+    username: str = option(help="User principal name of the partner account that signs in")
+    client_id: str = option(
+        default_value="",
+        help=(
+            "Application (client) ID to sign in with for every client; empty uses "
+            "Microsoft's first-party apps (Graph, Exchange Online and Azure PowerShell)"
+        ),
+    )
+    cache: str = option(
+        default_value="memory",
+        help=(
+            "Token cache: 'memory' lives for one run; 'disk' is an encrypted file that lets "
+            "later runs skip the browser sign-in"
+        ),
+    )
+    cloud: str = option(
+        default_value="",
+        help=(
+            "Microsoft cloud of the partner tenant (Commercial, USGov, USGovDoD or China); "
+            "empty looks it up"
+        ),
     )
 
 

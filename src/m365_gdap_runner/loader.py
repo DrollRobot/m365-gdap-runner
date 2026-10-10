@@ -1,9 +1,14 @@
 """Load a payload from a ``.py`` file or an installed entry point and validate it.
 
-A payload module must define ``run(ctx)`` and ``SCOPES``, a non-empty list of
-the delegated scopes it needs in each customer tenant. The runner requests
-exactly those scopes per tenant, so a scope missing consent fails the tenant
-before ``run()`` starts; ``.default`` would bypass that check and is rejected.
+A payload module defines ``run(ctx)`` and declares what it uses:
+
+- ``CLIENTS``: which of ``ctx.graph``, ``ctx.exchange``, ``ctx.ipps`` and ``ctx.azure``
+  it needs. Defaults to ``["graph"]``. The runner signs in once per client at the
+  partner tenant and checks each one in every customer tenant before ``run()``.
+- ``SCOPES``: the delegated Graph scopes it needs in each customer tenant. Required
+  when ``graph`` is in ``CLIENTS``, not allowed otherwise. The runner requests exactly
+  these scopes per tenant, so a scope missing consent fails the tenant before
+  ``run()`` starts; ``.default`` would bypass that check and is rejected.
 """
 
 from __future__ import annotations
@@ -18,11 +23,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
 
-from m365_gdap_runner.auth import RESERVED_SCOPES
-from m365_gdap_runner.tenants import TenantContext
+from m365_gdap_runner.context import CLIENT_KINDS, TenantContext
 
 # Entry point group installed payload packages register under.
 ENTRY_POINT_GROUP = "m365_gdap_runner.payloads"
+
+# Scopes MSAL adds itself and rejects when passed in.
+RESERVED_SCOPES = frozenset({"openid", "profile", "offline_access"})
+
+# What a payload gets when it declares no ``CLIENTS``.
+DEFAULT_CLIENTS: tuple[str, ...] = ("graph",)
 
 
 class PayloadNotFound(LookupError):
@@ -40,12 +50,14 @@ class Payload:
     Attributes:
         name: File stem or entry point name.
         run: The payload's ``run(ctx)`` function.
-        scopes: Delegated scopes the payload needs in each tenant.
+        scopes: Delegated Graph scopes the payload needs in each tenant.
+        clients: Client kinds the payload uses (``graph``, ``exchange``, ``ipps``, ``azure``).
     """
 
     name: str
     run: Callable[[TenantContext], object]
     scopes: tuple[str, ...]
+    clients: tuple[str, ...] = DEFAULT_CLIENTS
 
 
 def load_payload(spec: str) -> Payload:
@@ -139,7 +151,7 @@ def payload_from_module(module: ModuleType, name: str) -> Payload:
 
     Raises:
         PayloadInvalid: If ``run`` is missing or cannot take one positional
-            argument, or ``SCOPES`` is invalid.
+            argument, or ``CLIENTS`` or ``SCOPES`` is invalid.
     """
     run = getattr(module, "run", None)
     if not callable(run):
@@ -150,27 +162,68 @@ def payload_from_module(module: ModuleType, name: str) -> Payload:
         raise PayloadInvalid(
             f"Payload {name!r}: run() must accept exactly one positional argument (ctx)."
         ) from exc
-    scopes = validate_scopes(getattr(module, "SCOPES", None), name)
-    return Payload(name=name, run=run, scopes=scopes)
+    clients = validate_clients(getattr(module, "CLIENTS", None), name)
+    scopes = validate_scopes(getattr(module, "SCOPES", None), name, graph="graph" in clients)
+    return Payload(name=name, run=run, scopes=scopes, clients=clients)
 
 
-def validate_scopes(value: object, name: str) -> tuple[str, ...]:
+def validate_clients(value: object, name: str) -> tuple[str, ...]:
+    """Validate a payload's ``CLIENTS``.
+
+    Args:
+        value: The ``CLIENTS`` value (None when undefined, which means ``graph``).
+        name: Payload name for error messages.
+
+    Returns:
+        The client kinds, deduplicated, in declaration order.
+
+    Raises:
+        PayloadInvalid: If ``CLIENTS`` is defined but empty, not a list, or names
+            an unknown client.
+    """
+    if value is None:
+        return DEFAULT_CLIENTS
+    known = ", ".join(CLIENT_KINDS)
+    if not isinstance(value, list | tuple) or not value:
+        raise PayloadInvalid(
+            f"Payload {name!r}: CLIENTS must be a non-empty list drawn from {known}."
+        )
+    clients: list[str] = []
+    for kind in value:
+        if not isinstance(kind, str) or kind.strip().lower() not in CLIENT_KINDS:
+            raise PayloadInvalid(f"Payload {name!r}: unknown client {kind!r}; expected {known}.")
+        if kind.strip().lower() not in clients:
+            clients.append(kind.strip().lower())
+    return tuple(clients)
+
+
+def validate_scopes(value: object, name: str, *, graph: bool = True) -> tuple[str, ...]:
     """Validate a payload's ``SCOPES``.
 
     Args:
         value: The ``SCOPES`` value (None when undefined).
         name: Payload name for error messages.
+        graph: Whether the payload uses Graph. Scopes are required then, and not
+            allowed otherwise, because they only mean something to Graph.
 
     Returns:
-        The scopes, stripped, as a tuple.
+        The scopes, stripped, as a tuple; empty when *graph* is false.
 
     Raises:
         PayloadInvalid: If ``SCOPES`` is missing or empty, holds a non-string,
-            uses ``.default``, or lists a scope MSAL reserves.
+            uses ``.default``, lists a scope MSAL reserves, or is given by a
+            payload that does not use Graph.
     """
+    if not graph:
+        if value:
+            raise PayloadInvalid(
+                f"Payload {name!r}: SCOPES are Graph scopes, but 'graph' is not in CLIENTS. "
+                "Add it, or remove SCOPES."
+            )
+        return ()
     if not isinstance(value, list | tuple) or not value:
         raise PayloadInvalid(
-            f"Payload {name!r} must define SCOPES, a non-empty list of delegated scopes."
+            f"Payload {name!r} must define SCOPES, a non-empty list of delegated Graph scopes."
         )
     scopes: list[str] = []
     for scope in value:

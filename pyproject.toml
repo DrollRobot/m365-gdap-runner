@@ -12,10 +12,8 @@ description = "Run one Python payload across GDAP customer tenants from a single
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
-    "azure-core>=1.41,<2",
+    "azure-auth",
     "httpx>=0.28.1,<1",
-    "msal>=1.38,<2",
-    "msal-extensions>=1.3.1,<2",
     "platformdirs>=4.3,<5",
     "tomlkit>=0.13,<1",
 ]
@@ -60,9 +58,8 @@ constraint-dependencies = [
 ]
 
 [tool.uv.sources]
-# FIXME add any local/github dependencies here.
-# other-project = { git = "https://github.com/USERNAME/other-project.git", tag = "v1.2.3" }
-# other-project = { path = "/PATH/TO/PROJECT", editable = true }
+# Pinned to a tag on purpose: azure-auth is pre-1.0 and still makes breaking changes.
+azure-auth = { git = "https://github.com/DrollRobot/azure-auth.git", tag = "v0.3.0" }
 
 [project.scripts]
 m365-gdap-runner = "m365_gdap_runner.main:main"
@@ -123,8 +120,3 @@ files = ["src", "tests", "scripts", "examples"]
 mypy_path = ["scripts", "scripts/template_setup"]
 
 # AGENTS: ONLY ADD OVERRIDES IF, AFTER RESEARCHING, THERE IS NO TYPES STUB AVAILABLE.
-# msal and msal-extensions ship no py.typed marker and have no stub package on PyPI
-# (checked against mypy.stubinfo). auth.py wraps them behind typed Protocols.
-[[tool.mypy.overrides]]
-module = ["msal", "msal.*", "msal_extensions", "msal_extensions.*"]
-ignore_missing_imports = true

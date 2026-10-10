@@ -1,49 +1,17 @@
-"""Unit tests for GDAP tenant enumeration and selection in tenants.py."""
+"""Unit tests for tenant selection in tenants.py."""
 
 from __future__ import annotations
 
-import httpx
 import pytest
 
-from m365_gdap_runner.tenants import Tenant, TenantSelectionError, list_gdap_tenants, select
-from tests._gdap_fakes import (
-    PARTNER_TENANT,
-    TENANT_A,
-    TENANT_B,
-    TENANT_C,
-    FakeSession,
-    bearer_tenant,
-    relationships_body,
-)
+from m365_gdap_runner.tenants import Tenant, TenantSelectionError, select
+from tests._gdap_fakes import TENANT_A, TENANT_B, TENANT_C
 
 pytestmark = pytest.mark.unit
 
 ALPHA = Tenant(TENANT_A, "Alpha")
 BETA = Tenant(TENANT_B, "beta corp")
 GAMMA = Tenant(TENANT_C, "Gamma")
-
-
-def test_list_gdap_tenants_dedupes_sorts_and_filters_active() -> None:
-    seen: list[httpx.Request] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        seen.append(request)
-        body = relationships_body(
-            (TENANT_B, "beta corp"), (TENANT_A, "Alpha"), (TENANT_B.upper(), "beta corp")
-        )
-        body["value"].append({"id": "no-customer", "status": "active"})
-        body["value"].append({"id": "no-name", "customer": {"tenantId": TENANT_C}})
-        return httpx.Response(200, json=body)
-
-    session = FakeSession()
-    tenants = list_gdap_tenants(session, transport=httpx.MockTransport(handler))
-
-    assert tenants == [ALPHA, BETA, Tenant(TENANT_C, TENANT_C)]
-    (request,) = seen
-    assert request.url.path == "/v1.0/tenantRelationships/delegatedAdminRelationships"
-    assert dict(request.url.params) == {"$filter": "status eq 'active'"}
-    assert bearer_tenant(request) == PARTNER_TENANT
-    assert session.credentials[PARTNER_TENANT].calls == [("DelegatedAdminRelationship.Read.All",)]
 
 
 def test_select_without_filters_keeps_everything() -> None:

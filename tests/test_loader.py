@@ -46,7 +46,30 @@ def test_load_from_path(tmp_path: Path) -> None:
     payload = load_payload(str(_write(tmp_path, VALID)))
     assert payload.name == "payload"
     assert payload.scopes == ("User.Read.All",)
+    assert payload.clients == ("graph",)
     assert callable(payload.run)
+
+
+def test_clients_are_normalized_and_deduplicated(tmp_path: Path) -> None:
+    body = """
+        CLIENTS = ["Exchange", "graph", " exchange ", "ipps"]
+        SCOPES = ["User.Read.All"]
+
+        def run(ctx):
+            return None
+    """
+    assert load_payload(str(_write(tmp_path, body))).clients == ("exchange", "graph", "ipps")
+
+
+def test_payload_without_graph_needs_no_scopes(tmp_path: Path) -> None:
+    body = """
+        CLIENTS = ["exchange"]
+
+        def run(ctx):
+            return None
+    """
+    payload = load_payload(str(_write(tmp_path, body)))
+    assert (payload.clients, payload.scopes) == (("exchange",), ())
 
 
 def test_two_files_with_the_same_name_load_independently(tmp_path: Path) -> None:
@@ -116,6 +139,18 @@ def test_run_with_optional_parameters_is_accepted(tmp_path: Path) -> None:
             'SCOPES = ["User.Read.All", "offline_access"]\ndef run(ctx):\n    pass\n',
             "automatically",
         ),
+        ('CLIENTS = []\nSCOPES = ["User.Read.All"]\ndef run(ctx):\n    pass\n', "non-empty list"),
+        (
+            'CLIENTS = "graph"\nSCOPES = ["User.Read.All"]\ndef run(ctx):\n    pass\n',
+            "non-empty list",
+        ),
+        ('CLIENTS = ["teams"]\ndef run(ctx):\n    pass\n', "unknown client 'teams'"),
+        ("CLIENTS = [1]\ndef run(ctx):\n    pass\n", "unknown client 1"),
+        (
+            'CLIENTS = ["exchange"]\nSCOPES = ["User.Read.All"]\ndef run(ctx):\n    pass\n',
+            "'graph' is not in CLIENTS",
+        ),
+        ('CLIENTS = ["graph", "exchange"]\ndef run(ctx):\n    pass\n', "must define SCOPES"),
         ('raise RuntimeError("boom")\n', "Importing payload .* failed: RuntimeError"),
     ],
 )

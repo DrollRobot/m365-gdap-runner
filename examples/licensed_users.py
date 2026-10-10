@@ -13,7 +13,11 @@ from __future__ import annotations
 
 from m365_gdap_runner import TenantContext
 
-# Delegated scopes this payload needs in every customer tenant.
+# Which of ctx.graph, ctx.exchange, ctx.ipps and ctx.azure this payload uses. The runner
+# signs in once per client at the partner tenant and checks each in every customer tenant.
+CLIENTS = ["graph"]
+
+# Delegated Graph scopes this payload needs in every customer tenant.
 SCOPES = ["User.Read.All"]
 
 
@@ -57,4 +61,5 @@ if __name__ == "__main__":
 
     from m365_gdap_runner import standalone
 
-    print(json.dumps(run(standalone(SCOPES)), indent=2))
+    with standalone(SCOPES, CLIENTS) as ctx:
+        print(json.dumps(run(ctx), indent=2))

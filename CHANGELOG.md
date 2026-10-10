@@ -9,13 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `m365-gdap-runner` CLI: one partner sign-in, GDAP tenant enumeration, and a payload's
-  `run(ctx)` executed per tenant with consent checks, error isolation, `--jobs`
-  parallelism, and JSON/CSV output.
-- Payload contract (`SCOPES` + `run(ctx)`), file and entry-point loading, and
-  `standalone()` for running a payload against one tenant.
-- `GraphClient` with per-call v1.0/beta selection, paging, and throttling retries.
-- In-memory token cache by default; opt-in encrypted cache (`--persist-token-cache`).
-- Example payload `examples/licensed_users.py` and `docs/smoke-test.md`.
+- `m365-gdap-runner` CLI: one partner sign-in per client the payload uses, GDAP tenant
+  listing, and a payload's `run(ctx)` executed per tenant with consent checks, error
+  isolation, `--jobs` parallelism, and JSON/CSV output.
+- Payload contract: `run(ctx)`, the Graph `SCOPES` it needs, and `CLIENTS` naming which of
+  `ctx.graph`, `ctx.exchange`, `ctx.ipps` and `ctx.azure` it uses (default `graph`). File
+  and entry-point loading, and `standalone()` for running a payload against one tenant.
+- `TenantContext`: the tenant, its azure-auth context (`ctx.auth`, usable with any
+  azure-auth or Azure SDK client), and one ready-made client per declared kind, each
+  checked in the customer tenant before `run()` starts.
+- Settings `partner_tenant_id`, `username`, `client_id`, `cache` (`memory`, or `disk` for
+  an encrypted file) and `cloud`, with matching `--partner-tenant-id`, `--username`,
+  `--client-id`, `--cache` and `--cloud` flags.
+- Example payloads `examples/licensed_users.py` (Graph) and `examples/audit_disabled.py`
+  (Exchange Online), and `docs/smoke-test.md`.
+
+### Changed
+
+- Authentication, token caching, tenant lookup, and the Graph, Exchange Online, Security &
+  Compliance and Azure Resource Manager clients come from
+  [azure-auth](https://github.com/DrollRobot/azure-auth), pinned to v0.3.0. This package
+  no longer carries an MSAL session or a Graph client of its own.
 
 [Unreleased]: https://github.com/DrollRobot/m365_gdap_runner/commits/HEAD

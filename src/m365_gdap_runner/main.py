@@ -1,13 +1,14 @@
 """Command-line entry point: ``m365-gdap-runner``.
 
-Signs in once to the partner tenant, enumerates GDAP customer tenants, and runs
+Signs in once per client the payload uses, lists GDAP customer tenants, and runs
 one payload against the selected tenants::
 
     uv run m365-gdap-runner examples/licensed_users.py --tenant Contoso --format csv
 
 Configuration comes from the config system (see ``src/m365_gdap_runner/config/``);
-``--partner-tenant-id``, ``--client-id``, and ``--persist-token-cache`` override it.
-Progress and the summary go to stderr; stdout carries only output (``--output -``).
+``--partner-tenant-id``, ``--username``, ``--client-id``, ``--cache`` and ``--cloud``
+override it. Progress and the summary go to stderr; stdout carries only output
+(``--output -``).
 
 Exit codes: 0 all tenants ok; 1 any tenant not ok; 2 usage, configuration,
 payload, sign-in, enumeration, or tenant-selection error; 130 interrupted.
@@ -21,21 +22,14 @@ import sys
 from collections.abc import Sequence
 
 import httpx
+from azure_auth import AuthError, ResourceError
 
-from m365_gdap_runner.auth import (
-    LoginError,
-    MsalAppFactory,
-    PartnerSession,
-    TenantAuthError,
-    TokenCacheError,
-    default_app_factory,
-)
 from m365_gdap_runner.config import ConfigError, Settings, load_settings
-from m365_gdap_runner.graph import GraphError
 from m365_gdap_runner.loader import PayloadInvalid, PayloadNotFound, load_payload
 from m365_gdap_runner.output import FORMATS, STDOUT, OutputFormatError, write_results
 from m365_gdap_runner.runner import RunInterrupted, TenantLogFilter, run_payload, summarize
-from m365_gdap_runner.tenants import Tenant, TenantSelectionError, list_gdap_tenants, select
+from m365_gdap_runner.session import CACHE_KINDS, PartnerSession
+from m365_gdap_runner.tenants import Tenant, TenantSelectionError, select
 
 logger = logging.getLogger(__name__)
 
@@ -49,16 +43,38 @@ SETUP_ERRORS = (
     ConfigError,
     PayloadNotFound,
     PayloadInvalid,
-    TokenCacheError,
-    LoginError,
-    TenantAuthError,
+    AuthError,
     TenantSelectionError,
-    GraphError,
+    ResourceError,
     httpx.HTTPError,
 )
 
 # Library loggers kept at WARNING unless -vv is given.
-_LIBRARY_LOGGERS = ("httpx", "httpcore", "msal", "msal_extensions", "urllib3", "azure")
+_LIBRARY_LOGGERS = (
+    "httpx",
+    "httpcore",
+    "msal",
+    "msal_extensions",
+    "urllib3",
+    "azure",
+    "azure_auth",
+)
+
+# Settings a flag can override, with the flag's metavar.
+_SETTING_FLAGS = (
+    ("partner_tenant_id", "ID_OR_DOMAIN", "Partner tenant ID or domain name."),
+    ("username", "UPN", "Partner account to sign in with."),
+    (
+        "client_id",
+        "ID",
+        "Application ID to sign in with for every client (default: Microsoft's first-party apps).",
+    ),
+    (
+        "cloud",
+        "NAME",
+        "Cloud of the partner tenant: Commercial, USGov, USGovDoD or China (default: look it up).",
+    ),
+)
 
 
 def add_settings_arguments(parser: argparse.ArgumentParser) -> None:
@@ -72,20 +88,16 @@ def add_settings_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Config profile to use (default: default_profile from config.toml).",
     )
+    for name, metavar, help_text in _SETTING_FLAGS:
+        parser.add_argument(
+            "--" + name.replace("_", "-"), default=None, metavar=metavar, help=help_text
+        )
     parser.add_argument(
-        "--partner-tenant-id", default=None, metavar="ID", help="Partner tenant ID."
-    )
-    parser.add_argument(
-        "--client-id",
+        "--cache",
+        choices=CACHE_KINDS,
         default=None,
-        metavar="ID",
-        help="Public client app ID to sign in with (default: Microsoft Graph Command Line Tools).",
-    )
-    parser.add_argument(
-        "--persist-token-cache",
-        action="store_true",
-        default=None,
-        help="Keep an encrypted token cache so later runs skip the browser sign-in.",
+        help="Token cache: memory (default) or disk, an encrypted file that lets later runs "
+        "skip the browser sign-in.",
     )
 
 
@@ -102,12 +114,12 @@ def settings_from_args(args: argparse.Namespace) -> Settings:
         ConfigError: If a required value is missing or invalid.
     """
     overrides: dict[str, object] = {}
-    if args.partner_tenant_id is not None:
-        overrides["partner_tenant_id"] = args.partner_tenant_id
-    if args.client_id is not None:
-        overrides["client_id"] = args.client_id
-    if args.persist_token_cache:
-        overrides["persist_token_cache"] = True
+    for name, _metavar, _help in _SETTING_FLAGS:
+        value = getattr(args, name)
+        if value is not None:
+            overrides[name] = value
+    if args.cache is not None:
+        overrides["cache"] = args.cache
     return load_settings(profile=args.profile, overrides=overrides)
 
 
@@ -223,12 +235,7 @@ def _print_tenants(tenants: Sequence[Tenant]) -> None:
         print(f"{tenant.tenant_id}\t{tenant.display_name}")
 
 
-def run(
-    args: argparse.Namespace,
-    *,
-    app_factory: MsalAppFactory = default_app_factory,
-    transport: httpx.BaseTransport | None = None,
-) -> int:
+def run(args: argparse.Namespace, *, transport: httpx.BaseTransport | None = None) -> int:
     """Execute a parsed command line.
 
     The payload is loaded before sign-in, so payload errors never cost a
@@ -236,8 +243,7 @@ def run(
 
     Args:
         args: Arguments from :func:`parse_args`.
-        app_factory: Builds MSAL applications; tests inject a fake.
-        transport: Optional httpx transport for every Graph client (tests).
+        transport: Optional httpx transport for every client (tests).
 
     Returns:
         The process exit code.
@@ -245,9 +251,9 @@ def run(
     try:
         settings = settings_from_args(args)
         payload = None if args.list_tenants else load_payload(args.payload)
-        session = PartnerSession(settings, app_factory=app_factory)
-        session.login()
-        tenants = list_gdap_tenants(session, transport=transport)
+        session = PartnerSession(settings, transport=transport)
+        session.login(payload.clients if payload else ())
+        tenants = session.list_tenants()
         if payload is None:
             _print_tenants(tenants)
             return EXIT_OK
@@ -266,7 +272,6 @@ def run(
             continue_on_error=args.continue_on_error,
             jobs=args.jobs,
             output_format=args.format,
-            transport=transport,
         )
     except RunInterrupted as exc:
         results = exc.results

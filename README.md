@@ -6,7 +6,10 @@
 <!-- FIXME: match the badge and the link below to the license you chose -->
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-<!-- FIXME: one paragraph -- what this package does, and who should use it -->
+Run one Python payload across every customer tenant you reach through GDAP, from a single
+partner sign-in. The runner owns the loop: sign-in, tenant listing, consent checks, error
+isolation, parallelism and merged JSON/CSV output. Authentication and the service clients
+come from [azure-auth](https://github.com/DrollRobot/azure-auth); payloads contain neither.
 
 ## Installation
 
@@ -17,10 +20,29 @@ uv add git+https://github.com/DrollRobot/m365_gdap_runner.git
 
 ## Usage
 
-<!-- FIXME: the shortest example that does something useful -->
+A payload declares which clients it uses and, for Graph, which scopes, then implements
+`run(ctx)`:
+
 ```python
-import m365_gdap_runner
+from m365_gdap_runner import TenantContext
+
+CLIENTS = ["graph"]
+SCOPES = ["User.Read.All"]
+
+
+def run(ctx: TenantContext) -> list[dict[str, str]]:
+    users = ctx.graph.get_all("/users", params={"$select": "userPrincipalName"})
+    return [{"userPrincipalName": u["userPrincipalName"]} for u in users]
 ```
+
+```bash
+m365-gdap-runner-config init                         # partner tenant and sign-in name
+m365-gdap-runner users.py --format csv --output users.csv
+```
+
+`ctx` also offers `exchange`, `ipps` and `azure` clients when declared in `CLIENTS`, and
+`ctx.auth`, the azure-auth context, for anything else. See [docs/index.md](docs/index.md)
+and `examples/`.
 
 ## Development
 

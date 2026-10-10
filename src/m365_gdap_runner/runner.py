@@ -1,20 +1,20 @@
 """Run one payload across many tenants.
 
-For each tenant the runner requests a token for exactly the payload's
-``SCOPES`` before calling ``run()``. The refresh-token grant refuses to mint a
-token when any requested scope is not consented in that tenant, so missing
-consent becomes an ``auth_failed`` result and ``run()`` never starts.
-(``GraphClient`` fetches tokens lazily, which would be inside ``run()``.)
+For each tenant the runner builds a :class:`~m365_gdap_runner.context.TenantContext`
+and calls its ``probe()`` before ``run()``: every declared client asks the customer
+tenant for a token without prompting. A scope that is not consented there, or a
+Conditional Access policy that wants a sign-in, becomes an ``auth_failed`` result and
+``run()`` never starts.
 
 Consent is not authorization: a consented scope can still get 403 if the GDAP
-relationship lacks the needed role. That surfaces inside ``run()`` as a
-``GraphError`` and becomes an ``error`` result.
+relationship lacks the needed role. That surfaces inside ``run()`` as a resource
+error and becomes an ``error`` result.
 
 Tenants run serially or on a thread pool (``jobs``). Every input tenant gets
 exactly one :class:`TenantResult`, in input order. Stop-on-first-error is
 best-effort under parallelism: tenants already running finish and are recorded.
-Thread safety relies on MSAL's cache lock, the session's application lock, and
-one credential plus one ``GraphClient`` per tenant; nothing else is shared.
+Thread safety relies on azure-auth's locks around its token cache and on one
+context (with its own clients) per tenant; nothing else is shared.
 """
 
 from __future__ import annotations
@@ -26,16 +26,14 @@ from collections.abc import Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Protocol
 
-import httpx
-from azure.core.credentials import TokenCredential
+from azure_auth import AuthError
 
-from m365_gdap_runner.auth import GRAPH_RESOURCE, TenantAuthError, TokenSession, group_by_resource
-from m365_gdap_runner.graph import GraphClient
+from m365_gdap_runner.context import TenantContext
 from m365_gdap_runner.loader import Payload
 from m365_gdap_runner.output import OutputFormatError, check_result
-from m365_gdap_runner.tenants import Tenant, TenantContext
+from m365_gdap_runner.tenants import Tenant
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +44,16 @@ STATUSES: tuple[Status, ...] = ("ok", "auth_failed", "error", "skipped")
 
 # Display name of the tenant the current thread is processing, for log records.
 _current_tenant: ContextVar[str | None] = ContextVar("m365_gdap_runner_tenant", default=None)
+
+
+class ContextFactory(Protocol):
+    """What the runner needs from a session: a context per tenant."""
+
+    def context_for(
+        self, tenant: Tenant, *, scopes: Sequence[str] = (), clients: Sequence[str] = ("graph",)
+    ) -> TenantContext:
+        """Build the context a payload receives for one tenant."""
+        ...
 
 
 class TenantLogFilter(logging.Filter):
@@ -104,20 +112,6 @@ class RunInterrupted(Exception):
         super().__init__("Run interrupted.")
 
 
-def probe(credential: TokenCredential, scopes: Sequence[str]) -> None:
-    """Request a token for *scopes*, once per resource, to check consent up front.
-
-    Args:
-        credential: Credential bound to the tenant.
-        scopes: The payload's scopes.
-
-    Raises:
-        TenantAuthError: If any scope group cannot be granted in the tenant.
-    """
-    for group in group_by_resource(scopes).values():
-        credential.get_token(*group)
-
-
 def summarize(results: Sequence[TenantResult]) -> str:
     """Return a one-line count of results per status.
 
@@ -132,14 +126,13 @@ def summarize(results: Sequence[TenantResult]) -> str:
 
 
 def run_payload(
-    session: TokenSession,
+    session: ContextFactory,
     payload: Payload,
     tenants: Sequence[Tenant],
     *,
     continue_on_error: bool = False,
     jobs: int = 1,
     output_format: str = "json",
-    transport: httpx.BaseTransport | None = None,
 ) -> list[TenantResult]:
     """Run *payload* against every tenant.
 
@@ -151,7 +144,6 @@ def run_payload(
             never stop the run.
         jobs: Maximum tenants processed concurrently.
         output_format: Format results must fit (``json`` or ``csv``).
-        transport: Optional httpx transport for every Graph client (tests).
 
     Returns:
         One result per tenant, in input order.
@@ -169,7 +161,6 @@ def run_payload(
             tenants,
             continue_on_error=continue_on_error,
             output_format=output_format,
-            transport=transport,
         )
     return _run_parallel(
         session,
@@ -178,18 +169,16 @@ def run_payload(
         jobs=min(jobs, len(tenants)),
         continue_on_error=continue_on_error,
         output_format=output_format,
-        transport=transport,
     )
 
 
 def _run_serial(
-    session: TokenSession,
+    session: ContextFactory,
     payload: Payload,
     tenants: Sequence[Tenant],
     *,
     continue_on_error: bool,
     output_format: str,
-    transport: httpx.BaseTransport | None,
 ) -> list[TenantResult]:
     """Run tenants one at a time.
 
@@ -199,7 +188,6 @@ def _run_serial(
         tenants: Tenants in output order.
         continue_on_error: Keep going after a payload error.
         output_format: Format results must fit.
-        transport: Optional httpx transport (tests).
 
     Returns:
         One result per tenant; tenants after a stopping error are ``skipped``.
@@ -210,9 +198,7 @@ def _run_serial(
     results: list[TenantResult] = []
     for tenant in tenants:
         try:
-            tenant_result = _run_one(
-                session, payload, tenant, output_format=output_format, transport=transport
-            )
+            tenant_result = _run_one(session, payload, tenant, output_format=output_format)
         except KeyboardInterrupt:
             results.append(TenantResult(tenant, "error", error="interrupted"))
             raise RunInterrupted(_fill_skipped(results, tenants)) from None
@@ -224,14 +210,13 @@ def _run_serial(
 
 
 def _run_parallel(
-    session: TokenSession,
+    session: ContextFactory,
     payload: Payload,
     tenants: Sequence[Tenant],
     *,
     jobs: int,
     continue_on_error: bool,
     output_format: str,
-    transport: httpx.BaseTransport | None,
 ) -> list[TenantResult]:
     """Run tenants on a thread pool.
 
@@ -242,7 +227,6 @@ def _run_parallel(
         jobs: Worker threads.
         continue_on_error: Keep going after a payload error.
         output_format: Format results must fit.
-        transport: Optional httpx transport (tests).
 
     Returns:
         One result per tenant, in input order; cancelled tenants are ``skipped``.
@@ -253,9 +237,7 @@ def _run_parallel(
     done: dict[int, TenantResult] = {}
     executor = ThreadPoolExecutor(max_workers=jobs, thread_name_prefix="tenant")
     futures: dict[Future[TenantResult], int] = {
-        executor.submit(
-            _run_one, session, payload, tenant, output_format=output_format, transport=transport
-        ): index
+        executor.submit(_run_one, session, payload, tenant, output_format=output_format): index
         for index, tenant in enumerate(tenants)
     }
     interrupted = False
@@ -332,12 +314,7 @@ def _ordered(done: dict[int, TenantResult], tenants: Sequence[Tenant]) -> list[T
 
 
 def _run_one(
-    session: TokenSession,
-    payload: Payload,
-    tenant: Tenant,
-    *,
-    output_format: str,
-    transport: httpx.BaseTransport | None,
+    session: ContextFactory, payload: Payload, tenant: Tenant, *, output_format: str
 ) -> TenantResult:
     """Process one tenant and log its outcome.
 
@@ -346,7 +323,6 @@ def _run_one(
         payload: The validated payload.
         tenant: The tenant.
         output_format: Format the result must fit.
-        transport: Optional httpx transport (tests).
 
     Returns:
         The tenant's result.
@@ -354,7 +330,7 @@ def _run_one(
     context_token = _current_tenant.set(tenant.display_name)
     start = time.monotonic()
     try:
-        status, result, error = _execute(session, payload, tenant, output_format, transport)
+        status, result, error = _execute(session, payload, tenant, output_format)
         duration = time.monotonic() - start
         if error:
             logger.info("%s in %.1fs: %s", status, duration, error)
@@ -366,42 +342,43 @@ def _run_one(
 
 
 def _execute(
-    session: TokenSession,
-    payload: Payload,
-    tenant: Tenant,
-    output_format: str,
-    transport: httpx.BaseTransport | None,
+    session: ContextFactory, payload: Payload, tenant: Tenant, output_format: str
 ) -> tuple[Status, object, str | None]:
-    """Probe consent, call ``run()``, and check the result for one tenant.
+    """Build the context, probe every client, call ``run()``, and check the result.
 
     Args:
         session: A signed-in session.
         payload: The validated payload.
         tenant: The tenant.
         output_format: Format the result must fit.
-        transport: Optional httpx transport (tests).
 
     Returns:
         ``(status, result, error)``.
     """
     try:
-        credential = session.credential_for(tenant.tenant_id)
-        probe(credential, payload.scopes)
-    except TenantAuthError as exc:
+        context = session.context_for(tenant, scopes=payload.scopes, clients=payload.clients)
+    except AuthError as exc:
         return "auth_failed", None, str(exc)
     except Exception as exc:
-        logger.debug("Token request failed", exc_info=True)
+        logger.debug("Building the tenant context failed", exc_info=True)
         return "auth_failed", None, repr(exc)
 
-    graph_scopes = group_by_resource(payload.scopes).get(GRAPH_RESOURCE, [])
-    try:
-        with GraphClient(credential, graph_scopes, transport=transport) as graph:
-            result = payload.run(TenantContext(tenant=tenant, graph=graph, credential=credential))
-    except TenantAuthError as exc:
-        return "auth_failed", None, str(exc)
-    except Exception as exc:
-        logger.debug("Payload raised", exc_info=True)
-        return "error", None, repr(exc)
+    with context:
+        try:
+            context.probe()
+        except AuthError as exc:
+            return "auth_failed", None, str(exc)
+        except Exception as exc:
+            logger.debug("Token request failed", exc_info=True)
+            return "auth_failed", None, repr(exc)
+
+        try:
+            result = payload.run(context)
+        except AuthError as exc:
+            return "auth_failed", None, str(exc)
+        except Exception as exc:
+            logger.debug("Payload raised", exc_info=True)
+            return "error", None, repr(exc)
 
     try:
         check_result(result, output_format)

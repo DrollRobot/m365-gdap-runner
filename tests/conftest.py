@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 
 from m365_gdap_runner.config import Settings, load_settings
+from tests._gdap_fakes import FakeDiscovery, FakeMsal
 
 # ---------------------------------------------------------------------------
 # Destructive-test opt-in gates
@@ -177,11 +178,18 @@ def settings() -> Settings:
 
 
 # ---------------------------------------------------------------------------
-# FIXME: add project-specific fixtures below
+# Offline sign-in
 # ---------------------------------------------------------------------------
-# Example (secrets resolve through the credential backend automatically):
-#
-# @pytest.fixture(scope="session")
-# def client(settings: Settings) -> MyClient:
-#     """Return a client configured for live tests."""
-#     return MyClient(base_url=settings.api_url, secret=settings.client_secret)
+
+
+@pytest.fixture
+def fake_msal(monkeypatch: pytest.MonkeyPatch) -> FakeMsal:
+    """Make azure-auth sign in against a fake ``msal`` and never look a tenant up.
+
+    Every test that builds a ``PartnerSession`` or calls ``probe()`` needs this, or
+    azure-auth would open a browser and query Microsoft's discovery endpoints.
+    """
+    fake = FakeMsal()
+    monkeypatch.setattr("azure_auth.auth.context.msal", fake)
+    monkeypatch.setattr("azure_auth.auth.context.discover_tenant", FakeDiscovery())
+    return fake

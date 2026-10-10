@@ -7,10 +7,10 @@ import logging
 import threading
 from collections.abc import Callable, Iterator
 
-import httpx
 import pytest
+from azure_auth import AuthError, ConsentRequired, InteractionRequired
 
-from m365_gdap_runner.auth import TenantAuthError
+from m365_gdap_runner.context import TenantContext
 from m365_gdap_runner.loader import Payload
 from m365_gdap_runner.runner import (
     RunInterrupted,
@@ -19,8 +19,8 @@ from m365_gdap_runner.runner import (
     run_payload,
     summarize,
 )
-from m365_gdap_runner.tenants import Tenant, TenantContext
-from tests._gdap_fakes import TENANT_A, TENANT_B, TENANT_C, FakeSession, bearer_tenant
+from m365_gdap_runner.tenants import Tenant
+from tests._gdap_fakes import TENANT_A, TENANT_B, TENANT_C, FakeSession
 
 pytestmark = pytest.mark.unit
 
@@ -33,17 +33,19 @@ TENANTS = [ALPHA, BETA, GAMMA]
 Run = Callable[[TenantContext], object]
 
 
-def _payload(run: Run, scopes: tuple[str, ...] = ("User.Read.All",)) -> Payload:
-    return Payload(name="test", run=run, scopes=scopes)
+def _payload(
+    run: Run, scopes: tuple[str, ...] = ("User.Read.All",), clients: tuple[str, ...] = ("graph",)
+) -> Payload:
+    return Payload(name="test", run=run, scopes=scopes, clients=clients)
 
 
 def _statuses(results: list[TenantResult]) -> list[str]:
     return [r.status for r in results]
 
 
-def _consent_error(tenant_id: str) -> TenantAuthError:
-    return TenantAuthError(
-        tenant_id, "invalid_grant", "AADSTS65001: not consented", "consent_required"
+def _consent_error(tenant_id: str) -> ConsentRequired:
+    return ConsentRequired(
+        "invalid_grant: AADSTS65001 consent_required", tenant_id=tenant_id, scopes=["User.Read.All"]
     )
 
 
@@ -83,10 +85,20 @@ def test_results_cover_ok_auth_failed_and_error_in_order() -> None:
     assert _statuses(results) == ["ok", "auth_failed", "error"]
     assert results[0].result == {"tenant": "Alpha"}
     assert results[0].error is None
-    assert results[1].error is not None
-    assert "consent_required" in results[1].error
+    assert results[1].error == "invalid_grant: AADSTS65001 consent_required"
     assert results[2].error == "RuntimeError('boom')"
     assert all(r.duration_s >= 0 for r in results)
+
+
+def test_context_is_built_with_the_payloads_scopes_and_clients_and_closed() -> None:
+    session = FakeSession(auth_errors={TENANT_B: _consent_error(TENANT_B)})
+    payload = _payload(Recorder(), scopes=("Mail.Read",), clients=("graph", "exchange"))
+    run_payload(session, payload, [ALPHA, BETA])
+    assert session.requests == [
+        (TENANT_A, ("Mail.Read",), ("graph", "exchange")),
+        (TENANT_B, ("Mail.Read",), ("graph", "exchange")),
+    ]
+    assert all(context.closed for context in session.contexts.values())
 
 
 def test_run_is_not_called_after_auth_failure() -> None:
@@ -97,6 +109,13 @@ def test_run_is_not_called_after_auth_failure() -> None:
     assert _statuses(results) == ["ok", "auth_failed", "ok"]
 
 
+def test_interaction_required_is_auth_failed() -> None:
+    error = InteractionRequired("MFA wanted", tenant_id=TENANT_A, scopes=["User.Read.All"])
+    results = run_payload(FakeSession(auth_errors={TENANT_A: error}), _payload(Recorder()), [ALPHA])
+    assert _statuses(results) == ["auth_failed"]
+    assert results[0].error == "MFA wanted"
+
+
 def test_unexpected_token_failure_is_auth_failed() -> None:
     session = FakeSession(auth_errors={TENANT_A: ConnectionError("login host unreachable")})
     results = run_payload(session, _payload(Recorder()), [ALPHA])
@@ -104,27 +123,17 @@ def test_unexpected_token_failure_is_auth_failed() -> None:
     assert results[0].error == "ConnectionError('login host unreachable')"
 
 
-def test_probe_requests_scopes_per_resource_and_graph_uses_graph_scopes() -> None:
-    seen: list[httpx.Request] = []
+def test_failure_to_build_the_context_is_auth_failed() -> None:
+    class BrokenSession(FakeSession):
+        def context_for(self, tenant: Tenant, **kwargs: object) -> TenantContext:
+            raise AuthError(f"no such tenant {tenant.display_name}")
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        seen.append(request)
-        return httpx.Response(200, json={"id": "me"})
-
-    session = FakeSession()
-    exchange = "https://outlook.office365.com/EWS.AccessAsUser.All"
-    payload = _payload(lambda ctx: ctx.graph.get("/me"), scopes=("User.Read.All", exchange))
-    results = run_payload(session, payload, [ALPHA], transport=httpx.MockTransport(handler))
-    assert _statuses(results) == ["ok"]
-    assert session.credentials[TENANT_A].calls == [
-        ("User.Read.All",),
-        (exchange,),
-        ("User.Read.All",),
-    ]
-    assert bearer_tenant(seen[0]) == TENANT_A
+    results = run_payload(BrokenSession(), _payload(Recorder()), [ALPHA])
+    assert _statuses(results) == ["auth_failed"]
+    assert results[0].error == "no such tenant Alpha"
 
 
-def test_tenant_auth_error_inside_run_is_auth_failed() -> None:
+def test_auth_error_inside_run_is_auth_failed() -> None:
     payload = Recorder(failures={TENANT_A: _consent_error(TENANT_A)})
     assert _statuses(run_payload(FakeSession(), _payload(payload), [ALPHA])) == ["auth_failed"]
 
