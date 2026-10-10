@@ -13,7 +13,6 @@ theme:
 
 nav:
   - Home: index.md
-  - Smoke test: smoke-test.md
   - Reference: reference/m365_gdap_runner.md
 
 markdown_extensions:

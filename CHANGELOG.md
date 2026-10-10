@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an encrypted file) and `cloud`, with matching `--partner-tenant-id`, `--username`,
   `--client-id`, `--cache` and `--cloud` flags.
 - Example payloads `examples/licensed_users.py` (Graph) and `examples/audit_disabled.py`
-  (Exchange Online), and `docs/smoke-test.md`.
+  (Exchange Online).
 
 ### Changed
 

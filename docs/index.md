@@ -51,5 +51,4 @@ calling `run()`. A tenant that has not consented, or wants a fresh sign-in, is r
 `ctx.auth` is the azure-auth context for the tenant. Hand it to any azure-auth client, or to
 an Azure SDK client as `credential=`, for resources the four properties do not cover.
 
-See the [smoke test](smoke-test.md) for manual checks, and `examples/` for a Graph payload
-and an Exchange Online payload.
+See `examples/` for a Graph payload and an Exchange Online payload.
