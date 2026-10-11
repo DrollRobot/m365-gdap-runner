@@ -61,25 +61,30 @@ A run has to say which tenants it is for; one that names none is refused. Pick t
 `--exclude NAME_OR_ID` drops tenants from any of these.
 
 The tenants file is a CSV you edit in a spreadsheet, one row per customer. This package owns
-three columns, `m365_tenant_id`, `m365_tenant_name` and `m365_domain`, and reads one more
-per `--group`: a column holding TRUE or FALSE, where a blank cell counts as FALSE and
-anything else is an error. Every other column is left alone, so the same file can carry what
-other tools know about the same customers on other platforms. Tenants are matched by ID; the
-name and domain columns are there for you. A row with no `m365_tenant_id` is a customer
-without an M365 tenant and is skipped.
+four columns, `m365_tenant_id`, `m365_tenant_name`, `m365_domain` and `m365_cloud`, and
+reads one more per `--group`: a column holding TRUE or FALSE, where a blank cell counts as
+FALSE and anything else is an error. Every other column is left alone, so the same file can
+carry what other tools know about the same customers on other platforms. Tenants are matched
+by ID; the name and domain columns are there for you. A row with no `m365_tenant_id` is a
+customer without an M365 tenant and is skipped.
 
 ```csv
-m365_tenant_id,m365_tenant_name,m365_domain,pilot,patching,cw_company_id
-aaaaaaaa-0000-0000-0000-00000000000a,Alpha,alpha.example,TRUE,FALSE,1001
-bbbbbbbb-0000-0000-0000-00000000000b,beta corp,beta.example,TRUE,TRUE,1002
+m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,pilot,patching,cw_company_id
+aaaaaaaa-0000-0000-0000-00000000000a,Alpha,alpha.example,Commercial,TRUE,FALSE,1001
+bbbbbbbb-0000-0000-0000-00000000000b,beta corp,beta.example,USGov,TRUE,TRUE,1002
 ```
+
+`m365_cloud` is `Commercial`, `USGov`, `USGovDoD` or `China`. The file tracks tenants in
+every cloud, but a run signs in to one, so a group member in another cloud is skipped and the
+log says so. The runner fills the cell in itself, by OpenID Connect discovery, when it appends
+a tenant or finds the cell blank.
 
 The file is `tenants.csv` in the config directory (`m365-gdap-runner-config path` shows
 where), unless the `tenants_file` setting or `--tenants-file` points elsewhere. Every run
-keeps it current: a GDAP tenant with no row is appended with its name and every other column
-blank, and a warning names it. `m365-gdap-runner --list-tenants` does that and nothing else,
-so run it once to create the file, then add group columns. A row whose tenant no longer has
-a GDAP relationship is left alone; selecting it with `--group` is an error.
+keeps it current: a GDAP tenant with no row is appended with its name, its cloud and every
+other column blank, and a warning names it. `m365-gdap-runner --list-tenants` does that and
+nothing else, so run it once to create the file, then add group columns. A row whose tenant
+no longer has a GDAP relationship is left alone; selecting it with `--group` is an error.
 
 `ctx.auth` is the azure-auth context for the tenant. Hand it to any azure-auth client, or to
 an Azure SDK client as `credential=`, for resources the four properties do not cover.

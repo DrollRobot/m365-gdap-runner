@@ -279,14 +279,18 @@ def _print_tenants(tenants: Sequence[Tenant]) -> None:
         print(f"{tenant.tenant_id}\t{tenant.display_name}")
 
 
-def _sync_tenant_file(settings: Settings, tenants: Sequence[Tenant]) -> TenantFile:
-    """Load the tenants file, appending a row for every GDAP tenant it lacks.
+def _sync_tenant_file(
+    settings: Settings, session: PartnerSession, tenants: Sequence[Tenant]
+) -> TenantFile:
+    """Load the tenants file and bring it up to date with the GDAP tenants.
 
-    A missing file is created. A file that cannot be written (a spreadsheet may hold it
-    open) is reported and left as it was; the run goes on with the rows in memory.
+    A GDAP tenant with no row is appended; one whose cloud is blank gets it looked up. A
+    missing file is created. A file that cannot be written (a spreadsheet may hold it open)
+    is reported and left as it was; the run goes on with the rows in memory.
 
     Args:
         settings: Resolved settings, for the file's location.
+        session: The partner session, for cloud lookups.
         tenants: The GDAP tenants.
 
     Returns:
@@ -298,8 +302,8 @@ def _sync_tenant_file(settings: Settings, tenants: Sequence[Tenant]) -> TenantFi
     path = tenants_file_path(settings)
     existed = path.exists()
     tenant_file = TenantFile.load(path) if existed else TenantFile.empty(path)
-    added = tenant_file.add_missing(tenants)
-    if existed and not added:
+    report = tenant_file.sync(tenants, session.cloud_of)
+    if existed and not report.changed:
         logger.debug("Tenants file %s is up to date", path)
         return tenant_file
     try:
@@ -311,18 +315,27 @@ def _sync_tenant_file(settings: Settings, tenants: Sequence[Tenant]) -> TenantFi
         logger.info(
             "Created tenants file %s with %d tenant(s); add a TRUE/FALSE column per group",
             path,
-            len(added),
+            len(report.added),
         )
-    else:
-        names = ", ".join(tenant.display_name for tenant in added)
+        return tenant_file
+    if report.added:
+        names = ", ".join(tenant.display_name for tenant in report.added)
         logger.warning(
-            "Added %d tenant(s) to %s; they are in no group yet: %s", len(added), path, names
+            "Added %d tenant(s) to %s; they are in no group yet: %s",
+            len(report.added),
+            path,
+            names,
+        )
+    if report.clouds_filled:
+        names = ", ".join(tenant.display_name for tenant in report.clouds_filled)
+        logger.info(
+            "Filled in the cloud of %d tenant(s) in %s: %s", len(report.clouds_filled), path, names
         )
     return tenant_file
 
 
 def _select_tenants(
-    args: argparse.Namespace, tenants: Sequence[Tenant], tenant_file: TenantFile
+    args: argparse.Namespace, tenants: Sequence[Tenant], tenant_file: TenantFile, cloud: str
 ) -> list[Tenant]:
     """Apply ``--all``, ``--group``, ``--tenant`` and ``--exclude``.
 
@@ -331,18 +344,21 @@ def _select_tenants(
             ``--group`` or ``--tenant`` was given.
         tenants: The GDAP tenants.
         tenant_file: The tenants file, for ``--group``.
+        cloud: Name of the cloud this run signs in to; group members in another are skipped.
 
     Returns:
         The tenants to run, in enumeration order.
 
     Raises:
-        TenantFileError: If a group has no column, or a cell in it is not TRUE, FALSE or blank.
+        TenantFileError: If a group has no column, a cell in it is not TRUE, FALSE or blank,
+            or a member's cloud is not a known one.
         TenantSelectionError: If a value names no usable tenant, or the groups select none.
     """
     if args.all:
         return select(tenants, exclude=args.exclude)
     include = list(args.tenant or ())
-    include += [t.tenant_id for t in group_members(tenants, tenant_file, args.group or ())]
+    members = group_members(tenants, tenant_file, args.group or (), cloud=cloud)
+    include += [t.tenant_id for t in members]
     if not include:
         groups = ", ".join(args.group or ())
         raise TenantSelectionError(f"No tenant is marked TRUE in group(s) {groups}.")
@@ -368,11 +384,11 @@ def run(args: argparse.Namespace, *, transport: httpx.BaseTransport | None = Non
         session = PartnerSession(settings, transport=transport)
         session.login(payload.clients if payload else ())
         tenants = session.list_tenants()
-        tenant_file = _sync_tenant_file(settings, tenants)
+        tenant_file = _sync_tenant_file(settings, session, tenants)
         if payload is None:
             _print_tenants(tenants)
             return EXIT_OK
-        selected = _select_tenants(args, tenants, tenant_file)
+        selected = _select_tenants(args, tenants, tenant_file, session.cloud_name)
     except SETUP_ERRORS as exc:
         logger.error("%s", exc)
         return EXIT_USAGE

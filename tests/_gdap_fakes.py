@@ -192,7 +192,7 @@ class FakeDiscovery:
     cloud: Cloud = COMMERCIAL
     tenants: list[str] = field(default_factory=list)
 
-    def __call__(self, tenant: str) -> TenantInfo:
+    def __call__(self, tenant: str, **kwargs: Any) -> TenantInfo:
         self.tenants.append(tenant)
         try:
             guid = str(uuid.UUID(tenant))

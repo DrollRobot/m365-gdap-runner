@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
@@ -25,8 +26,9 @@ pytestmark = pytest.mark.unit
 ALPHA = Tenant(TENANT_A, "Alpha")
 BETA = Tenant(TENANT_B, "beta corp")
 GAMMA = Tenant(TENANT_C, "Gamma")
+DELTA = Tenant("dddddddd-0000-0000-0000-00000000000d", "Delta")
 
-M365 = "m365_tenant_id,m365_tenant_name,m365_domain"
+M365 = "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud"
 # A file shared with other tools: their columns sit beside this package's and the groups.
 HEADER = f"{M365},patching,pilot,cw_company_id,notes"
 
@@ -36,15 +38,25 @@ def _write(path: Path, *lines: str, encoding: str = "utf-8") -> Path:
     return path
 
 
+def commercial(tenant_id: str) -> str:
+    """A cloud lookup that finds every tenant in the commercial cloud."""
+    return "Commercial"
+
+
+def nowhere(tenant_id: str) -> str:
+    """A cloud lookup that finds nothing."""
+    return ""
+
+
 @pytest.fixture
 def csv_path(tmp_path: Path) -> Path:
     return _write(
         tmp_path / "tenants.csv",
         HEADER,
-        f"{TENANT_A},Alpha,alpha.example,TRUE,FALSE,1001,first one",
-        f"{TENANT_B},beta corp,beta.example,TRUE,TRUE,1002,",
-        f"{TENANT_C},Gamma,,FALSE,,1003,gone from GDAP",
-        ",,,TRUE,TRUE,1004,no M365 tenant",
+        f"{TENANT_A},Alpha,alpha.example,Commercial,TRUE,FALSE,1001,first one",
+        f"{TENANT_B},beta corp,beta.example,,TRUE,TRUE,1002,",
+        f"{TENANT_C},Gamma,,,FALSE,,1003,gone from GDAP",
+        ",,,,TRUE,TRUE,1004,no M365 tenant",
     )
 
 
@@ -114,6 +126,7 @@ def test_load_keeps_every_column_and_cell(csv_path: Path) -> None:
         "m365_tenant_id": TENANT_A,
         "m365_tenant_name": "Alpha",
         "m365_domain": "alpha.example",
+        "m365_cloud": "Commercial",
         "patching": "TRUE",
         "pilot": "FALSE",
         "cw_company_id": "1001",
@@ -135,6 +148,7 @@ def test_load_accepts_a_byte_order_mark_and_short_rows(tmp_path: Path) -> None:
             "m365_tenant_id": TENANT_A,
             "m365_tenant_name": "Alpha",
             "m365_domain": "",
+            "m365_cloud": "",
             "patching": "",
             "pilot": "",
             "cw_company_id": "",
@@ -150,10 +164,10 @@ def test_load_of_an_empty_file_is_a_fresh_file(tmp_path: Path) -> None:
     assert (tenant_file.columns, tenant_file.rows) == (list(REQUIRED_COLUMNS), [])
 
 
-def test_load_requires_the_three_m365_columns(tmp_path: Path) -> None:
+def test_load_requires_the_four_m365_columns(tmp_path: Path) -> None:
     path = _write(tmp_path / "t.csv", "m365_tenant_id,patching", f"{TENANT_A},TRUE")
     with pytest.raises(
-        TenantFileError, match=r"lacks the column\(s\) m365_tenant_name, m365_domain"
+        TenantFileError, match=r"lacks the column\(s\) m365_tenant_name, m365_domain, m365_cloud"
     ):
         TenantFile.load(path)
 
@@ -176,37 +190,63 @@ def test_load_reports_an_unreadable_path(tmp_path: Path) -> None:
 def test_members_returns_marked_rows_in_file_order(csv_path: Path) -> None:
     tenant_file = TenantFile.load(csv_path)
     assert tenant_file.members("patching") == [
-        TenantRow(TENANT_A, "Alpha", "alpha.example"),
-        TenantRow(TENANT_B, "beta corp", "beta.example"),
+        TenantRow(TENANT_A, "Alpha", "alpha.example", "Commercial"),
+        TenantRow(TENANT_B, "beta corp", "beta.example", ""),
     ]
-    assert tenant_file.members("pilot") == [TenantRow(TENANT_B, "beta corp", "beta.example")]
+    assert tenant_file.members("pilot") == [TenantRow(TENANT_B, "beta corp", "beta.example", "")]
 
 
 def test_members_skips_a_marked_row_with_no_m365_tenant(tmp_path: Path) -> None:
     # A customer another tool knows about, with no M365 tenant: not this package's business.
-    path = _write(tmp_path / "t.csv", f"{M365},g", ",Acme,,TRUE", f"{TENANT_A},Alpha,,TRUE")
+    path = _write(tmp_path / "t.csv", f"{M365},g", ",Acme,,,TRUE", f"{TENANT_A},Alpha,,,TRUE")
     assert [row.tenant_id for row in TenantFile.load(path).members("g")] == [TENANT_A]
 
 
 @pytest.mark.parametrize("cell", ["TRUE", "true", " True "])
 def test_members_accepts_true_in_any_case(tmp_path: Path, cell: str) -> None:
-    path = _write(tmp_path / "t.csv", f"{M365},g", f"{TENANT_A},Alpha,,{cell}")
+    path = _write(tmp_path / "t.csv", f"{M365},g", f"{TENANT_A},Alpha,,,{cell}")
     assert [row.tenant_id for row in TenantFile.load(path).members("g")] == [TENANT_A]
 
 
 @pytest.mark.parametrize("cell", ["FALSE", "false", "", "  "])
 def test_members_skips_false_and_blank(tmp_path: Path, cell: str) -> None:
-    path = _write(tmp_path / "t.csv", f"{M365},g", f"{TENANT_A},Alpha,,{cell}")
+    path = _write(tmp_path / "t.csv", f"{M365},g", f"{TENANT_A},Alpha,,,{cell}")
     assert TenantFile.load(path).members("g") == []
 
 
 @pytest.mark.parametrize("cell", ["maybe", "yes", "no", "1", "0", "x"])
 def test_members_rejects_everything_else_naming_the_row(tmp_path: Path, cell: str) -> None:
     path = _write(
-        tmp_path / "t.csv", f"{M365},g", f"{TENANT_A},Alpha,,TRUE", f"{TENANT_B},beta corp,,{cell}"
+        tmp_path / "t.csv",
+        f"{M365},g",
+        f"{TENANT_A},Alpha,,,TRUE",
+        f"{TENANT_B},beta corp,,,{cell}",
     )
     with pytest.raises(TenantFileError, match=f"row 3: '{cell}' in column 'g' is not TRUE, FALSE"):
         TenantFile.load(path).members("g")
+
+
+@pytest.mark.parametrize(("cell", "cloud"), [("usgov", "USGov"), ("CHINA", "China"), ("", "")])
+def test_members_spells_the_cloud_as_azure_auth_does(tmp_path: Path, cell: str, cloud: str) -> None:
+    path = _write(tmp_path / "t.csv", f"{M365},g", f"{TENANT_A},Alpha,,{cell},TRUE")
+    assert TenantFile.load(path).members("g")[0].cloud == cloud
+
+
+def test_members_rejects_an_unknown_cloud_on_a_marked_row_only(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "t.csv",
+        f"{M365},g,h",
+        f"{TENANT_A},Alpha,,Commercial,TRUE,FALSE",
+        f"{TENANT_B},beta corp,,Mars,FALSE,TRUE",
+    )
+    tenant_file = TenantFile.load(path)
+    assert len(tenant_file.members("g")) == 1  # the bad cloud is on a row 'g' does not select
+    with pytest.raises(
+        TenantFileError,
+        match=r"row 3: 'Mars' in column 'm365_cloud' is not a cloud\. Use Commercial, USGov, "
+        r"USGovDoD, China, or blank\.",
+    ):
+        tenant_file.members("h")
 
 
 def test_members_leaves_other_tools_columns_unchecked(csv_path: Path) -> None:
@@ -222,49 +262,75 @@ def test_members_matches_the_group_name_case_insensitively(csv_path: Path) -> No
 
 def test_members_unknown_group_lists_only_the_boolean_columns(csv_path: Path) -> None:
     with pytest.raises(
-        TenantFileError, match=r"no group column 'm365_domain'\. Groups: patching, pilot\."
+        TenantFileError, match=r"no group column 'm365_cloud'\. Groups: patching, pilot\."
     ):
-        TenantFile.load(csv_path).members("m365_domain")
+        TenantFile.load(csv_path).members("m365_cloud")
 
 
 def test_members_ambiguous_group_name_is_an_error(tmp_path: Path) -> None:
-    path = _write(tmp_path / "t.csv", f"{M365},Pilot,pilot", f"{TENANT_A},Alpha,,TRUE,TRUE")
+    path = _write(tmp_path / "t.csv", f"{M365},Pilot,pilot", f"{TENANT_A},Alpha,,,TRUE,TRUE")
     with pytest.raises(TenantFileError, match="'pilot' matches 2 columns"):
         TenantFile.load(path).members("pilot")
 
 
-# --- TenantFile.add_missing / save -----------------------------------------------------
+# --- TenantFile.sync / save ------------------------------------------------------------
 
 
-def test_add_missing_appends_blank_rows_for_unknown_ids_only(csv_path: Path) -> None:
+def test_sync_appends_unknown_tenants_and_fills_blank_clouds(csv_path: Path) -> None:
+    looked_up: list[str] = []
+
+    def lookup(tenant_id: str) -> str:
+        looked_up.append(tenant_id)
+        return "USGov"
+
     tenant_file = TenantFile.load(csv_path)
-    delta = Tenant("dddddddd-0000-0000-0000-00000000000d", "Delta")
-    added = tenant_file.add_missing([Tenant(TENANT_A.upper(), "Alpha renamed"), delta])
-    assert added == [delta]
+    report = tenant_file.sync([Tenant(TENANT_A.upper(), "Alpha renamed"), BETA, DELTA], lookup)
+    assert (report.added, report.clouds_filled, report.changed) == ([DELTA], [BETA], True)
+    assert looked_up == [TENANT_B, DELTA.tenant_id]  # Alpha's cloud is already known
+    assert tenant_file.rows[0]["m365_tenant_name"] == "Alpha"  # existing rows are left alone
+    assert tenant_file.rows[1]["m365_cloud"] == "USGov"
     assert tenant_file.rows[-1] == {
-        "m365_tenant_id": delta.tenant_id,
+        "m365_tenant_id": DELTA.tenant_id,
         "m365_tenant_name": "Delta",
         "m365_domain": "",
+        "m365_cloud": "USGov",
         "patching": "",
         "pilot": "",
         "cw_company_id": "",
         "notes": "",
     }
-    assert tenant_file.rows[0]["m365_tenant_name"] == "Alpha"  # existing rows are left alone
+
+
+def test_sync_leaves_the_cloud_blank_when_the_lookup_finds_nothing(csv_path: Path) -> None:
+    tenant_file = TenantFile.load(csv_path)
+    report = tenant_file.sync([BETA, DELTA], nowhere)
+    assert (report.added, report.clouds_filled) == ([DELTA], [])
+    assert tenant_file.rows[1]["m365_cloud"] == ""
+    assert tenant_file.rows[-1]["m365_cloud"] == ""
+
+
+def test_sync_with_nothing_to_do_changes_nothing_and_looks_nothing_up(csv_path: Path) -> None:
+    def never(tenant_id: str) -> str:
+        raise AssertionError(f"looked up {tenant_id}")
+
+    tenant_file = TenantFile.load(csv_path)
+    before = [dict(row) for row in tenant_file.rows]
+    report = tenant_file.sync([ALPHA], never)
+    assert report.changed is False
+    assert tenant_file.rows == before
 
 
 def test_save_round_trips_other_tools_data_and_appended_rows(csv_path: Path) -> None:
     tenant_file = TenantFile.load(csv_path)
-    delta = Tenant("dddddddd-0000-0000-0000-00000000000d", "Delta")
-    tenant_file.add_missing([delta])
+    tenant_file.sync([ALPHA, BETA, DELTA], commercial)
     tenant_file.save()
     assert csv_path.read_text(encoding="utf-8-sig").splitlines() == [
         HEADER,
-        f"{TENANT_A},Alpha,alpha.example,TRUE,FALSE,1001,first one",
-        f"{TENANT_B},beta corp,beta.example,TRUE,TRUE,1002,",
-        f"{TENANT_C},Gamma,,FALSE,,1003,gone from GDAP",
-        ",,,TRUE,TRUE,1004,no M365 tenant",
-        f"{delta.tenant_id},Delta,,,,,",
+        f"{TENANT_A},Alpha,alpha.example,Commercial,TRUE,FALSE,1001,first one",
+        f"{TENANT_B},beta corp,beta.example,Commercial,TRUE,TRUE,1002,",
+        f"{TENANT_C},Gamma,,,FALSE,,1003,gone from GDAP",
+        ",,,,TRUE,TRUE,1004,no M365 tenant",
+        f"{DELTA.tenant_id},Delta,,Commercial,,,,",
     ]
     assert csv_path.read_bytes().startswith(b"\xef\xbb\xbf")  # BOM for spreadsheets
     assert [p.name for p in csv_path.parent.iterdir()] == [csv_path.name]  # no temp file left
@@ -273,9 +339,12 @@ def test_save_round_trips_other_tools_data_and_appended_rows(csv_path: Path) -> 
 def test_save_creates_the_file_and_its_directory(tmp_path: Path) -> None:
     path = tmp_path / "deeper" / "tenants.csv"
     tenant_file = TenantFile.empty(path)
-    tenant_file.add_missing([ALPHA])
+    tenant_file.sync([ALPHA], commercial)
     tenant_file.save()
-    assert path.read_text(encoding="utf-8-sig").splitlines() == [M365, f"{TENANT_A},Alpha,"]
+    assert path.read_text(encoding="utf-8-sig").splitlines() == [
+        M365,
+        f"{TENANT_A},Alpha,,Commercial",
+    ]
 
 
 # --- group_members ---------------------------------------------------------------------
@@ -284,20 +353,39 @@ def test_save_creates_the_file_and_its_directory(tmp_path: Path) -> None:
 def test_group_members_unions_groups_in_gdap_order(csv_path: Path) -> None:
     tenant_file = TenantFile.load(csv_path)
     tenants = [BETA, ALPHA]  # GDAP order differs from file order
-    assert group_members(tenants, tenant_file, ["pilot"]) == [BETA]
-    assert group_members(tenants, tenant_file, ["pilot", "patching"]) == [BETA, ALPHA]
-    assert group_members(tenants, tenant_file, []) == []
+    assert group_members(tenants, tenant_file, ["pilot"], cloud="Commercial") == [BETA]
+    assert group_members(tenants, tenant_file, ["pilot", "patching"], cloud="Commercial") == [
+        BETA,
+        ALPHA,
+    ]
+    assert group_members(tenants, tenant_file, [], cloud="Commercial") == []
+
+
+def test_group_members_skips_tenants_in_another_cloud(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="m365_gdap_runner.tenants")
+    path = _write(
+        tmp_path / "t.csv",
+        f"{M365},g",
+        f"{TENANT_A},Alpha,,Commercial,TRUE",
+        f"{TENANT_B},beta corp,,,TRUE",  # blank: taken to be this run's cloud
+        f"{TENANT_C},Gamma,,USGov,TRUE",  # not reachable from a commercial sign-in
+    )
+    chosen = group_members([ALPHA, BETA], TenantFile.load(path), ["g"], cloud="commercial")
+    assert chosen == [ALPHA, BETA]
+    assert "Skipped 1 tenant(s) outside the commercial cloud: Gamma (USGov)" in caplog.text
 
 
 def test_group_members_without_gdap_is_an_error(csv_path: Path) -> None:
     # Gamma has a row but no GDAP relationship: harmless until a group selects it.
     tenant_file = TenantFile.load(csv_path)
-    assert group_members([ALPHA, BETA], tenant_file, ["pilot"]) == [BETA]
-    path = _write(csv_path, f"{M365},nope", f"{TENANT_C},Gamma,,TRUE")
+    assert group_members([ALPHA, BETA], tenant_file, ["pilot"], cloud="Commercial") == [BETA]
+    path = _write(csv_path, f"{M365},nope", f"{TENANT_C},Gamma,,,TRUE")
     with pytest.raises(TenantSelectionError, match=rf"'Gamma' \({TENANT_C}\) is in group 'nope'"):
-        group_members([ALPHA, BETA], TenantFile.load(path), ["nope"])
+        group_members([ALPHA, BETA], TenantFile.load(path), ["nope"], cloud="Commercial")
 
 
 def test_group_members_propagates_file_errors(csv_path: Path) -> None:
     with pytest.raises(TenantFileError, match="no group column 'missing'"):
-        group_members([ALPHA, BETA], TenantFile.load(csv_path), ["missing"])
+        group_members([ALPHA, BETA], TenantFile.load(csv_path), ["missing"], cloud="Commercial")

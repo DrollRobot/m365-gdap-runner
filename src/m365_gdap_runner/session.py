@@ -18,7 +18,7 @@ from collections.abc import Iterable, Sequence
 from typing import Literal, cast
 
 import httpx
-from azure_auth import AuthContext
+from azure_auth import AuthContext, AuthError, discover_tenant
 from azure_auth.clouds import get_cloud
 from azure_auth.sync import GraphClient
 
@@ -81,6 +81,31 @@ class PartnerSession:
     def partner_tenant_id(self) -> str:
         """The partner tenant's GUID."""
         return self.auth.tenant_id
+
+    @property
+    def cloud_name(self) -> str:
+        """Name of the cloud this session signs in to, as azure-auth spells it."""
+        return self.auth.cloud.name
+
+    def cloud_of(self, tenant_id: str) -> str:
+        """Find the cloud a tenant lives in, by OpenID Connect discovery.
+
+        Discovery is unauthenticated and asks each public sign-in host once, so it costs
+        three requests and works for any tenant. It fills the tenants file's ``m365_cloud``
+        column.
+
+        Args:
+            tenant_id: The tenant's GUID.
+
+        Returns:
+            The cloud's name (``Commercial``, ``USGov``, ``USGovDoD`` or ``China``), or ``""``
+            when no sign-in host knows the tenant or none can be reached.
+        """
+        try:
+            return discover_tenant(tenant_id, transport=self._transport).cloud.name
+        except (AuthError, httpx.HTTPError, ValueError) as exc:
+            logger.debug("Could not look up the cloud of %s: %s", tenant_id, exc)
+            return ""
 
     def login(self, clients: Iterable[str] = ()) -> None:
         """Sign in at the partner tenant, once per client id the payload needs.

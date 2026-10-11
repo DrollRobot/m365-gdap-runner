@@ -317,9 +317,9 @@ def test_list_tenants_creates_the_tenants_file(
     assert _run("--list-tenants") == 0
     path = tmp_path / "config" / "tenants.csv"
     assert path.read_text(encoding="utf-8-sig").splitlines() == [
-        "m365_tenant_id,m365_tenant_name,m365_domain",
-        f"{TENANT_A},Alpha,",
-        f"{TENANT_B},beta corp,",
+        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud",
+        f"{TENANT_A},Alpha,,Commercial",
+        f"{TENANT_B},beta corp,,Commercial",
     ]
     assert f"Created tenants file {path} with 2 tenant(s)" in caplog.text
 
@@ -331,14 +331,14 @@ def test_run_appends_tenants_the_file_lacks_and_warns(
 ) -> None:
     path = _tenants_csv(
         tmp_path / "tenants.csv",
-        "m365_tenant_id,m365_tenant_name,m365_domain,pilot,notes",
-        f"{TENANT_A},Alpha,alpha.example,TRUE,keep me",
+        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,pilot,notes",
+        f"{TENANT_A},Alpha,alpha.example,Commercial,TRUE,keep me",
     )
     assert _run(EXAMPLE, "--tenant", "Alpha", "--tenants-file", str(path)) == 0
     assert path.read_text(encoding="utf-8-sig").splitlines() == [
-        "m365_tenant_id,m365_tenant_name,m365_domain,pilot,notes",
-        f"{TENANT_A},Alpha,alpha.example,TRUE,keep me",
-        f"{TENANT_B},beta corp,,,",
+        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,pilot,notes",
+        f"{TENANT_A},Alpha,alpha.example,Commercial,TRUE,keep me",
+        f"{TENANT_B},beta corp,,Commercial,,",
     ]
     assert f"Added 1 tenant(s) to {path}; they are in no group yet: beta corp" in caplog.text
 
@@ -350,10 +350,10 @@ def test_group_runs_only_the_marked_tenants(
 ) -> None:
     path = _tenants_csv(
         tmp_path / "tenants.csv",
-        "m365_tenant_id,m365_tenant_name,m365_domain,pilot",
-        f"{TENANT_A},Alpha,,FALSE",
-        f"{TENANT_B},beta corp,,TRUE",
-        f"{TENANT_C},Gamma,,FALSE",  # no GDAP relationship: harmless while unselected
+        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,pilot",
+        f"{TENANT_A},Alpha,,Commercial,FALSE",
+        f"{TENANT_B},beta corp,,Commercial,TRUE",
+        f"{TENANT_C},Gamma,,,FALSE",  # no GDAP relationship: harmless while unselected
     )
     assert _run(EXAMPLE, "--group", "pilot", "--tenants-file", str(path)) == 0
     assert [r["tenant_id"] for r in json.loads(capsys.readouterr().out)] == [TENANT_B]
@@ -365,9 +365,9 @@ def test_groups_and_tenants_add_up_and_exclude_applies(
 ) -> None:
     path = _tenants_csv(
         tmp_path / "tenants.csv",
-        "m365_tenant_id,m365_tenant_name,m365_domain,pilot,patching",
-        f"{TENANT_A},Alpha,,TRUE,FALSE",
-        f"{TENANT_B},beta corp,,FALSE,TRUE",
+        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,pilot,patching",
+        f"{TENANT_A},Alpha,,Commercial,TRUE,FALSE",
+        f"{TENANT_B},beta corp,,Commercial,FALSE,TRUE",
     )
     file_flag = ["--tenants-file", str(path)]
     assert _run(EXAMPLE, "--group", "pilot", "--group", "PATCHING", *file_flag) == 0
@@ -387,8 +387,8 @@ def test_tenants_file_setting_locates_the_file(
 ) -> None:
     path = _tenants_csv(
         tmp_path / "elsewhere" / "customers.csv",
-        "m365_tenant_id,m365_tenant_name,m365_domain,pilot",
-        f"{TENANT_A},Alpha,,TRUE",
+        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,pilot",
+        f"{TENANT_A},Alpha,,Commercial,TRUE",
     )
     monkeypatch.setenv(ENV_PREFIX + "TENANTS_FILE", str(path))
     assert _run(EXAMPLE, "--group", "pilot") == 0
@@ -403,9 +403,9 @@ def test_exit_2_when_a_group_member_has_no_gdap_relationship(
 ) -> None:
     path = _tenants_csv(
         tmp_path / "tenants.csv",
-        "m365_tenant_id,m365_tenant_name,m365_domain,pilot",
-        f"{TENANT_A},Alpha,,TRUE",
-        f"{TENANT_C},Gamma,,TRUE",
+        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,pilot",
+        f"{TENANT_A},Alpha,,Commercial,TRUE",
+        f"{TENANT_C},Gamma,,,TRUE",
     )
     seen: list[str] = []
 
@@ -424,11 +424,51 @@ def test_exit_2_when_the_groups_select_nothing(
 ) -> None:
     path = _tenants_csv(
         tmp_path / "tenants.csv",
-        "m365_tenant_id,m365_tenant_name,m365_domain,pilot",
-        f"{TENANT_A},Alpha,,FALSE",
+        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,pilot",
+        f"{TENANT_A},Alpha,,Commercial,FALSE",
     )
     assert _run(EXAMPLE, "--group", "pilot", "--tenants-file", str(path)) == 2
     assert "No tenant is marked TRUE in group(s) pilot." in caplog.text
+
+
+@pytest.mark.integration
+@pytest.mark.acceptance
+def test_group_skips_members_in_another_cloud(
+    fake_msal: FakeMsal,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger="m365_gdap_runner.tenants")
+    path = _tenants_csv(
+        tmp_path / "tenants.csv",
+        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,pilot",
+        f"{TENANT_A},Alpha,,Commercial,TRUE",
+        f"{TENANT_C},Gamma,,USGov,TRUE",  # another cloud: out of this sign-in's reach, no error
+    )
+    assert _run(EXAMPLE, "--group", "pilot", "--tenants-file", str(path)) == 0
+    assert [r["tenant_id"] for r in json.loads(capsys.readouterr().out)] == [TENANT_A]
+    assert "Skipped 1 tenant(s) outside the Commercial cloud: Gamma (USGov)" in caplog.text
+
+
+@pytest.mark.integration
+def test_run_fills_in_blank_clouds_by_discovery(
+    fake_msal: FakeMsal, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger=cli.__name__)
+    path = _tenants_csv(
+        tmp_path / "tenants.csv",
+        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,pilot",
+        f"{TENANT_A},Alpha,,,TRUE",
+        f"{TENANT_B},beta corp,,,FALSE",
+    )
+    assert _run(EXAMPLE, "--group", "pilot", "--tenants-file", str(path)) == 0
+    assert path.read_text(encoding="utf-8-sig").splitlines() == [
+        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,pilot",
+        f"{TENANT_A},Alpha,,Commercial,TRUE",
+        f"{TENANT_B},beta corp,,Commercial,FALSE",
+    ]
+    assert f"Filled in the cloud of 2 tenant(s) in {path}: Alpha, beta corp" in caplog.text
 
 
 @pytest.mark.integration
@@ -436,16 +476,26 @@ def test_exit_2_when_the_groups_select_nothing(
     ("lines", "message"),
     [
         (
-            ("m365_tenant_id,m365_tenant_name,m365_domain", f"{TENANT_A},Alpha,"),
+            ("m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud", f"{TENANT_A},Alpha,,"),
             "has no group column 'pilot'",
         ),
         (
-            ("m365_tenant_id,m365_tenant_name,m365_domain,pilot", f"{TENANT_A},Alpha,,maybe"),
+            (
+                "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,pilot",
+                f"{TENANT_A},Alpha,,,maybe",
+            ),
             "row 2: 'maybe' in column 'pilot' is not TRUE, FALSE or blank",
         ),
         (
+            (
+                "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,pilot",
+                f"{TENANT_A},Alpha,,Mars,TRUE",
+            ),
+            "row 2: 'Mars' in column 'm365_cloud' is not a cloud",
+        ),
+        (
             ("m365_tenant_id,pilot", f"{TENANT_A},TRUE"),
-            "lacks the column(s) m365_tenant_name, m365_domain",
+            "lacks the column(s) m365_tenant_name, m365_domain, m365_cloud",
         ),
     ],
 )

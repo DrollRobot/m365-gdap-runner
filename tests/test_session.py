@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import httpx
 import pytest
-from azure_auth import ConsentRequired
+from azure_auth import ConsentRequired, TenantNotFound
 from azure_auth.constants import (
     AZURE_POWERSHELL_CLIENT_ID,
     EXCHANGE_POWERSHELL_CLIENT_ID,
@@ -149,3 +149,27 @@ def test_cloud_setting_skips_the_lookup(
     monkeypatch.setattr("azure_auth.auth.context.discover_tenant", no_lookup)
     session = PartnerSession(make_settings(cloud="USGov"))
     assert session.auth.cloud.name == "USGov"
+    assert session.cloud_name == "USGov"
+
+
+def test_cloud_of_finds_a_tenant_by_discovery(fake_msal: FakeMsal) -> None:
+    session = PartnerSession(make_settings(), transport=TRANSPORT)
+    assert session.cloud_name == "Commercial"
+    assert session.cloud_of(TENANT_A) == "Commercial"
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        TenantNotFound("No tenant", tenant=TENANT_A),
+        httpx.ConnectError("no route to login.microsoftonline.com"),
+    ],
+)
+def test_cloud_of_is_blank_when_discovery_fails(
+    fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    def failing(tenant: str, **kwargs: object) -> object:
+        raise error
+
+    monkeypatch.setattr("m365_gdap_runner.session.discover_tenant", failing)
+    assert PartnerSession(make_settings()).cloud_of(TENANT_A) == ""

@@ -2,40 +2,47 @@
 
 Graph says which customer tenants exist (see ``session.py``). The tenants file says which of
 them belong to which group: a CSV edited in a spreadsheet, one row per customer, with the
-columns ``m365_tenant_id``, ``m365_tenant_name`` and ``m365_domain`` and one column per group
-holding TRUE or FALSE. ``--group NAME`` runs the tenants marked TRUE in column ``NAME``.
+columns ``m365_tenant_id``, ``m365_tenant_name``, ``m365_domain`` and ``m365_cloud`` and one
+column per group holding TRUE or FALSE. ``--group NAME`` runs the tenants marked TRUE in
+column ``NAME``.
 
 The file may be shared with tools that describe the same customers on other platforms, so
 the columns this package owns carry the ``m365_`` prefix, every other column is left alone
 unless a run names it as a group, and a row with no ``m365_tenant_id`` is a customer without
-an M365 tenant: never selected, never an error.
+an M365 tenant: never selected, never an error. The file tracks tenants in every Microsoft
+cloud; a run signs in to one, so a member in another cloud is skipped.
 
 Tenants are matched by ID only; the name and domain columns are for the person editing the
-file. A GDAP tenant with no row is appended with every other column blank
-(:meth:`TenantFile.add_missing`). A row whose tenant has no GDAP relationship does no harm
-until a group selects it; then :func:`group_members` raises, since the runner cannot reach
-that tenant.
+file. A GDAP tenant with no row is appended, with its cloud found by OpenID Connect discovery
+(:meth:`TenantFile.sync`). A row whose tenant has no GDAP relationship does no harm until a
+group selects it; then :func:`group_members` raises, since the runner cannot reach that tenant.
 """
 
 from __future__ import annotations
 
 import contextlib
 import csv
+import logging
 import os
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from azure_auth.clouds import CLOUDS, get_cloud
+
 from m365_gdap_runner.config import Settings
 from m365_gdap_runner.config.paths import config_dir
+
+logger = logging.getLogger(__name__)
 
 # The columns this package owns. A new file gets them in this order; other tools sharing the
 # file add their own, and any column outside these may serve as a group.
 ID_COLUMN = "m365_tenant_id"
 NAME_COLUMN = "m365_tenant_name"
 DOMAIN_COLUMN = "m365_domain"
-REQUIRED_COLUMNS = (ID_COLUMN, NAME_COLUMN, DOMAIN_COLUMN)
+CLOUD_COLUMN = "m365_cloud"
+REQUIRED_COLUMNS = (ID_COLUMN, NAME_COLUMN, DOMAIN_COLUMN, CLOUD_COLUMN)
 
 # File name in the config directory when the ``tenants_file`` setting is empty.
 TENANTS_FILE_NAME = "tenants.csv"
@@ -75,11 +82,31 @@ class TenantRow:
         tenant_id: The ``m365_tenant_id`` cell.
         display_name: The ``m365_tenant_name`` cell; may be empty.
         domain: The ``m365_domain`` cell; may be empty.
+        cloud: The ``m365_cloud`` cell as azure-auth spells the cloud's name, or empty.
     """
 
     tenant_id: str
     display_name: str
     domain: str
+    cloud: str
+
+
+@dataclass(frozen=True)
+class SyncReport:
+    """What :meth:`TenantFile.sync` changed.
+
+    Attributes:
+        added: Tenants that got a new row.
+        clouds_filled: Tenants whose existing row got its ``m365_cloud`` filled in.
+    """
+
+    added: list[Tenant]
+    clouds_filled: list[Tenant]
+
+    @property
+    def changed(self) -> bool:
+        """Whether the file differs from what was loaded."""
+        return bool(self.added or self.clouds_filled)
 
 
 def tenants_file_path(settings: Settings) -> Path:
@@ -101,8 +128,8 @@ class TenantFile:
     """The tenants CSV: one row per customer, one TRUE/FALSE column per group.
 
     Rows keep every cell as the text the file holds, so :meth:`save` writes back what was
-    read plus any appended rows. Only the group column a caller asks about is checked for
-    valid values; every other column may hold anything.
+    read plus any appended rows. Only the group column a caller asks about, and the cloud of
+    the rows marked in it, are checked; every other cell may hold anything.
 
     Attributes:
         path: Where the file is, or will be, on disk.
@@ -236,8 +263,8 @@ class TenantFile:
             The member rows.
 
         Raises:
-            TenantFileError: If there is no such column, or a cell in it is not TRUE, FALSE or
-                blank.
+            TenantFileError: If there is no such column, a cell in it is not TRUE, FALSE or
+                blank, or a marked row's ``m365_cloud`` names no known cloud.
         """
         column = self._group_column(group)
         chosen: list[TenantRow] = []
@@ -251,51 +278,81 @@ class TenantFile:
                     f"{self.path} row {number}: {cell!r} in column {column!r} is not TRUE, "
                     "FALSE or blank."
                 )
-            member = self._row(row)
+            member = self._row(row, number)
             if member.tenant_id:
                 chosen.append(member)
         return chosen
 
-    @staticmethod
-    def _row(row: dict[str, str]) -> TenantRow:
+    def _row(self, row: dict[str, str], number: int) -> TenantRow:
         """Pick the M365 columns out of a row.
 
         Args:
             row: Column name to cell text.
+            number: The row's number in the spreadsheet, for error messages.
 
         Returns:
-            The row's tenant ID, display name and domain, stripped.
+            The row's tenant ID, display name, domain and cloud, stripped; the cloud spelled
+            as azure-auth names it.
+
+        Raises:
+            TenantFileError: If ``m365_cloud`` is filled but names no known cloud.
         """
+        cell = row.get(CLOUD_COLUMN, "").strip()
+        cloud = ""
+        if cell:
+            try:
+                cloud = get_cloud(cell).name
+            except ValueError:
+                names = ", ".join(known.name for known in CLOUDS)
+                raise TenantFileError(
+                    f"{self.path} row {number}: {cell!r} in column {CLOUD_COLUMN!r} is not a "
+                    f"cloud. Use {names}, or blank."
+                ) from None
         return TenantRow(
             row.get(ID_COLUMN, "").strip(),
             row.get(NAME_COLUMN, "").strip(),
             row.get(DOMAIN_COLUMN, "").strip(),
+            cloud,
         )
 
-    def add_missing(self, tenants: Sequence[Tenant]) -> list[Tenant]:
-        """Append a row, with every other column blank, for each tenant the file does not know.
+    def sync(self, tenants: Sequence[Tenant], cloud_of: Callable[[str], str]) -> SyncReport:
+        """Append a row for each tenant the file lacks, and fill in clouds it does not know.
 
-        Nothing is written; call :meth:`save`.
+        An appended row gets the tenant's ID and name, its cloud from *cloud_of*, and every
+        other column blank. A known tenant whose ``m365_cloud`` is blank gets it from
+        *cloud_of* too, so a file another tool wrote, or that predates the column, fills in
+        over time. Nothing is written; call :meth:`save`.
 
         Args:
             tenants: The GDAP tenants.
+            cloud_of: Returns the name of the cloud a tenant ID lives in, or ``""`` when it
+                cannot be found. Called once per tenant that needs it.
 
         Returns:
-            The tenants appended, in input order.
+            What changed.
         """
-        known = {row.get(ID_COLUMN, "").strip().lower() for row in self.rows}
+        by_id: dict[str, dict[str, str]] = {}
+        for existing in self.rows:
+            by_id.setdefault(existing.get(ID_COLUMN, "").strip().lower(), existing)
         added: list[Tenant] = []
+        filled: list[Tenant] = []
         for tenant in tenants:
             key = tenant.tenant_id.lower()
-            if key in known:
-                continue
-            row = dict.fromkeys(self.columns, "")
-            row[ID_COLUMN] = tenant.tenant_id
-            row[NAME_COLUMN] = tenant.display_name
-            self.rows.append(row)
-            known.add(key)
-            added.append(tenant)
-        return added
+            row = by_id.get(key)
+            if row is None:
+                row = dict.fromkeys(self.columns, "")
+                row[ID_COLUMN] = tenant.tenant_id
+                row[NAME_COLUMN] = tenant.display_name
+                row[CLOUD_COLUMN] = cloud_of(tenant.tenant_id)
+                self.rows.append(row)
+                by_id[key] = row
+                added.append(tenant)
+            elif not row.get(CLOUD_COLUMN, "").strip():
+                cloud = cloud_of(tenant.tenant_id)
+                if cloud:
+                    row[CLOUD_COLUMN] = cloud
+                    filled.append(tenant)
+        return SyncReport(added, filled)
 
     def save(self) -> None:
         """Write the file, replacing it in one step so a failure leaves the old one intact.
@@ -383,7 +440,7 @@ def select(
 
 
 def group_members(
-    tenants: Sequence[Tenant], tenant_file: TenantFile, groups: Sequence[str]
+    tenants: Sequence[Tenant], tenant_file: TenantFile, groups: Sequence[str], *, cloud: str
 ) -> list[Tenant]:
     """Resolve the members of *groups* to GDAP tenants.
 
@@ -391,19 +448,27 @@ def group_members(
         tenants: All enumerated tenants.
         tenant_file: The tenants file.
         groups: Group names; a tenant marked in any of them is selected.
+        cloud: Name of the cloud this run signs in to. A member whose ``m365_cloud`` names
+            another cloud is left out, and said so in the log, since a run reaches one cloud.
+            A blank cloud is taken to be this one.
 
     Returns:
         The selected tenants, each once, in *tenants* order.
 
     Raises:
-        TenantFileError: If a group has no column, or a cell in it is not TRUE, FALSE or blank.
+        TenantFileError: If a group has no column, a cell in it is not TRUE, FALSE or blank,
+            or a member's cloud is not a known one.
         TenantSelectionError: If a member has no GDAP relationship with the partner tenant.
     """
     by_id = {t.tenant_id.lower(): t for t in tenants}
     wanted: set[str] = set()
+    elsewhere: dict[str, TenantRow] = {}
     for group in groups:
         for row in tenant_file.members(group):
             key = row.tenant_id.lower()
+            if row.cloud and row.cloud.lower() != cloud.lower():
+                elsewhere.setdefault(key, row)
+                continue
             if key not in by_id:
                 name = row.display_name or row.tenant_id
                 raise TenantSelectionError(
@@ -411,4 +476,9 @@ def group_members(
                     "relationship with the partner tenant."
                 )
             wanted.add(key)
+    if elsewhere:
+        listed = ", ".join(
+            f"{row.display_name or row.tenant_id} ({row.cloud})" for row in elsewhere.values()
+        )
+        logger.info("Skipped %d tenant(s) outside the %s cloud: %s", len(elsewhere), cloud, listed)
     return [t for t in tenants if t.tenant_id.lower() in wanted]
