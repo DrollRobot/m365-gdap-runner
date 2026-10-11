@@ -170,6 +170,13 @@ class Settings:
             "empty looks it up"
         ),
     )
+    tenants_file: str = option(
+        default_value="",
+        help=(
+            "CSV of customer tenants with one TRUE/FALSE column per group, used by --group; "
+            "empty uses tenants.csv in the config directory"
+        ),
+    )
 
 
 def is_secret(f: Field[Any]) -> bool:

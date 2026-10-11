@@ -37,12 +37,14 @@ def run(ctx: TenantContext) -> list[dict[str, str]]:
 
 ```bash
 m365-gdap-runner-config init                         # partner tenant and sign-in name
-m365-gdap-runner users.py --format csv --output users.csv
+m365-gdap-runner --list-tenants                      # creates tenants.csv; add TRUE/FALSE group columns
+m365-gdap-runner users.py --group pilot --format csv --output users.csv
 ```
 
-`ctx` also offers `exchange`, `ipps` and `azure` clients when declared in `CLIENTS`, and
-`ctx.auth`, the azure-auth context, for anything else. See [docs/index.md](docs/index.md)
-and `examples/`.
+Tenants are chosen with `--group` (a column of the tenants CSV), `--tenant` or `--all`, less
+`--exclude`. `ctx` also offers `exchange`, `ipps` and `azure` clients when declared in
+`CLIENTS`, and `ctx.auth`, the azure-auth context, for anything else. See
+[docs/index.md](docs/index.md) and `examples/`.
 
 ## Development
 

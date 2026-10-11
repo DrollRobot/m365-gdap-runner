@@ -22,7 +22,9 @@ A payload is a module with ``run(ctx)``, the Graph ``SCOPES`` it needs, and whic
         from m365_gdap_runner import standalone
         print(json.dumps(run(standalone(SCOPES, CLIENTS)), indent=2))
 
-Run it across tenants with ``m365-gdap-runner my_payload.py``.
+Run it with ``m365-gdap-runner my_payload.py --group pilot``, where ``pilot`` is a TRUE/FALSE
+column of the tenants file (see ``tenants.py``); ``--tenant`` and ``--all`` are the other
+ways to choose tenants.
 """
 
 from __future__ import annotations

@@ -21,6 +21,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Settings `partner_tenant_id`, `username`, `client_id`, `cache` (`memory`, or `disk` for
   an encrypted file) and `cloud`, with matching `--partner-tenant-id`, `--username`,
   `--client-id`, `--cache` and `--cloud` flags.
+- Tenant selection from a tenants file: a CSV with `m365_tenant_id`, `m365_tenant_name`,
+  `m365_domain` and one TRUE/FALSE column per group; other tools may keep their own columns
+  in the same file. `--group NAME` runs the tenants marked in that column
+  (repeatable, combines with `--tenant`), `--all` runs every GDAP tenant, and a run that
+  names neither `--group`, `--tenant` nor `--all` is refused. Every run appends the GDAP
+  tenants the file lacks and warns which; `--list-tenants` creates or refreshes the file
+  without running anything. Setting `tenants_file` and flag `--tenants-file` locate the file
+  (default `tenants.csv` in the config directory).
 - Example payloads `examples/licensed_users.py` (Graph) and `examples/audit_disabled.py`
   (Exchange Online).
 

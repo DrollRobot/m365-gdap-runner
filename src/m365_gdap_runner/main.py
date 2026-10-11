@@ -3,15 +3,19 @@
 Signs in once per client the payload uses, lists GDAP customer tenants, and runs
 one payload against the selected tenants::
 
-    uv run m365-gdap-runner examples/licensed_users.py --tenant Contoso --format csv
+    uv run m365-gdap-runner examples/licensed_users.py --group pilot --format csv
+
+Tenants are chosen with ``--group`` (a TRUE/FALSE column of the tenants file, see
+``tenants.py``), ``--tenant`` or ``--all``, less ``--exclude``; a run that names none is
+refused. Every run appends GDAP tenants the file lacks, and ``--list-tenants`` does only that.
 
 Configuration comes from the config system (see ``src/m365_gdap_runner/config/``);
-``--partner-tenant-id``, ``--username``, ``--client-id``, ``--cache`` and ``--cloud``
-override it. Progress and the summary go to stderr; stdout carries only output
-(``--output -``).
+``--partner-tenant-id``, ``--username``, ``--client-id``, ``--cache``, ``--cloud`` and
+``--tenants-file`` override it. Progress and the summary go to stderr; stdout carries only
+output (``--output -``).
 
 Exit codes: 0 all tenants ok; 1 any tenant not ok; 2 usage, configuration,
-payload, sign-in, enumeration, or tenant-selection error; 130 interrupted.
+payload, sign-in, enumeration, tenants-file, or tenant-selection error; 130 interrupted.
 """
 
 from __future__ import annotations
@@ -29,7 +33,15 @@ from m365_gdap_runner.loader import PayloadInvalid, PayloadNotFound, load_payloa
 from m365_gdap_runner.output import FORMATS, STDOUT, OutputFormatError, write_results
 from m365_gdap_runner.runner import RunInterrupted, TenantLogFilter, run_payload, summarize
 from m365_gdap_runner.session import CACHE_KINDS, PartnerSession
-from m365_gdap_runner.tenants import Tenant, TenantSelectionError, select
+from m365_gdap_runner.tenants import (
+    Tenant,
+    TenantFile,
+    TenantFileError,
+    TenantSelectionError,
+    group_members,
+    select,
+    tenants_file_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +56,7 @@ SETUP_ERRORS = (
     PayloadNotFound,
     PayloadInvalid,
     AuthError,
+    TenantFileError,
     TenantSelectionError,
     ResourceError,
     httpx.HTTPError,
@@ -104,6 +117,8 @@ def add_settings_arguments(parser: argparse.ArgumentParser) -> None:
 def settings_from_args(args: argparse.Namespace) -> Settings:
     """Resolve settings with the flags from :func:`add_settings_arguments` as overrides.
 
+    ``--tenants-file`` belongs to the runner command only, so it is read when present.
+
     Args:
         args: Parsed arguments.
 
@@ -120,6 +135,9 @@ def settings_from_args(args: argparse.Namespace) -> Settings:
             overrides[name] = value
     if args.cache is not None:
         overrides["cache"] = args.cache
+    tenants_file = getattr(args, "tenants_file", None)
+    if tenants_file is not None:
+        overrides["tenants_file"] = tenants_file
     return load_settings(profile=args.profile, overrides=overrides)
 
 
@@ -137,18 +155,38 @@ def build_parser() -> argparse.ArgumentParser:
         "payload", nargs="?", metavar="PAYLOAD", help="Payload .py file or installed payload name."
     )
     parser.add_argument(
+        "--group",
+        action="append",
+        default=None,
+        metavar="NAME",
+        help=(
+            "Run the tenants marked TRUE in this column of the tenants file "
+            "(repeatable; groups add up)."
+        ),
+    )
+    parser.add_argument(
         "--tenant",
         action="append",
         default=None,
         metavar="NAME_OR_ID",
-        help="Run only this tenant (repeatable).",
+        help="Run this tenant, by display name or ID (repeatable).",
     )
+    parser.add_argument("--all", action="store_true", help="Run every GDAP tenant.")
     parser.add_argument(
         "--exclude",
         action="append",
         default=None,
         metavar="NAME_OR_ID",
         help="Skip this tenant (repeatable).",
+    )
+    parser.add_argument(
+        "--tenants-file",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Tenants CSV (default: the tenants_file setting, else tenants.csv in the config "
+            "directory)."
+        ),
     )
     parser.add_argument(
         "--output", default=STDOUT, metavar="PATH", help="Output file, or - for stdout (default)."
@@ -199,8 +237,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     """
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.payload is None and not args.list_tenants:
-        parser.error("PAYLOAD is required unless --list-tenants is given.")
+    if not args.list_tenants:
+        if args.payload is None:
+            parser.error("PAYLOAD is required unless --list-tenants is given.")
+        picked = args.tenant or args.group
+        if args.all and picked:
+            parser.error("--all cannot be combined with --tenant or --group.")
+        if not (args.all or picked):
+            parser.error("Choose tenants with --group, --tenant or --all.")
     if args.jobs < 1:
         parser.error("--jobs must be at least 1.")
     return args
@@ -235,6 +279,76 @@ def _print_tenants(tenants: Sequence[Tenant]) -> None:
         print(f"{tenant.tenant_id}\t{tenant.display_name}")
 
 
+def _sync_tenant_file(settings: Settings, tenants: Sequence[Tenant]) -> TenantFile:
+    """Load the tenants file, appending a row for every GDAP tenant it lacks.
+
+    A missing file is created. A file that cannot be written (a spreadsheet may hold it
+    open) is reported and left as it was; the run goes on with the rows in memory.
+
+    Args:
+        settings: Resolved settings, for the file's location.
+        tenants: The GDAP tenants.
+
+    Returns:
+        The file, with every GDAP tenant in it.
+
+    Raises:
+        TenantFileError: If the file exists but cannot be read or lacks a required column.
+    """
+    path = tenants_file_path(settings)
+    existed = path.exists()
+    tenant_file = TenantFile.load(path) if existed else TenantFile.empty(path)
+    added = tenant_file.add_missing(tenants)
+    if existed and not added:
+        logger.debug("Tenants file %s is up to date", path)
+        return tenant_file
+    try:
+        tenant_file.save()
+    except OSError as exc:
+        logger.warning("Could not write tenants file %s: %s", path, exc)
+        return tenant_file
+    if not existed:
+        logger.info(
+            "Created tenants file %s with %d tenant(s); add a TRUE/FALSE column per group",
+            path,
+            len(added),
+        )
+    else:
+        names = ", ".join(tenant.display_name for tenant in added)
+        logger.warning(
+            "Added %d tenant(s) to %s; they are in no group yet: %s", len(added), path, names
+        )
+    return tenant_file
+
+
+def _select_tenants(
+    args: argparse.Namespace, tenants: Sequence[Tenant], tenant_file: TenantFile
+) -> list[Tenant]:
+    """Apply ``--all``, ``--group``, ``--tenant`` and ``--exclude``.
+
+    Args:
+        args: Arguments from :func:`parse_args`, which guarantees one of ``--all``,
+            ``--group`` or ``--tenant`` was given.
+        tenants: The GDAP tenants.
+        tenant_file: The tenants file, for ``--group``.
+
+    Returns:
+        The tenants to run, in enumeration order.
+
+    Raises:
+        TenantFileError: If a group has no column, or a cell in it is not TRUE, FALSE or blank.
+        TenantSelectionError: If a value names no usable tenant, or the groups select none.
+    """
+    if args.all:
+        return select(tenants, exclude=args.exclude)
+    include = list(args.tenant or ())
+    include += [t.tenant_id for t in group_members(tenants, tenant_file, args.group or ())]
+    if not include:
+        groups = ", ".join(args.group or ())
+        raise TenantSelectionError(f"No tenant is marked TRUE in group(s) {groups}.")
+    return select(tenants, include=include, exclude=args.exclude)
+
+
 def run(args: argparse.Namespace, *, transport: httpx.BaseTransport | None = None) -> int:
     """Execute a parsed command line.
 
@@ -254,10 +368,11 @@ def run(args: argparse.Namespace, *, transport: httpx.BaseTransport | None = Non
         session = PartnerSession(settings, transport=transport)
         session.login(payload.clients if payload else ())
         tenants = session.list_tenants()
+        tenant_file = _sync_tenant_file(settings, tenants)
         if payload is None:
             _print_tenants(tenants)
             return EXIT_OK
-        selected = select(tenants, include=args.tenant, exclude=args.exclude)
+        selected = _select_tenants(args, tenants, tenant_file)
     except SETUP_ERRORS as exc:
         logger.error("%s", exc)
         return EXIT_USAGE

@@ -1,8 +1,8 @@
 """Example payload: licensed users in each tenant.
 
-Copy this file as the starting point for new payloads. Run it across tenants::
+Copy this file as the starting point for new payloads. Run it across a group of tenants::
 
-    uv run m365-gdap-runner examples/licensed_users.py --format csv --output users.csv
+    uv run m365-gdap-runner examples/licensed_users.py --group pilot --format csv --output users.csv
 
 or directly against one tenant::
 
