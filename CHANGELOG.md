@@ -31,8 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tenants the file lacks and warns which; `--list-tenants` creates or refreshes the file
   without running anything. Setting `tenants_file` and flag `--tenants-file` locate the file
   (default `tenants.csv` in the config directory).
-- Example payloads `examples/licensed_users.py` (Graph) and `examples/audit_disabled.py`
-  (Exchange Online).
+- Example payloads `examples/licensed_users.py` (Graph), `examples/audit_disabled.py`
+  (Exchange Online), and `examples/mailbox_audit_gaps.py` (mailboxes whose audit actions
+  lag Microsoft's defaults, read through Exchange's REST endpoint).
 
 ### Changed
 

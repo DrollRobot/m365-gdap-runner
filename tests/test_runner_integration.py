@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -29,6 +31,7 @@ pytestmark = pytest.mark.integration
 EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
 LICENSED_USERS = EXAMPLES / "licensed_users.py"
 AUDIT_DISABLED = EXAMPLES / "audit_disabled.py"
+MAILBOX_AUDIT_GAPS = EXAMPLES / "mailbox_audit_gaps.py"
 
 
 @pytest.fixture(autouse=True)
@@ -100,3 +103,82 @@ def test_exchange_example_signs_in_to_exchange_and_runs_the_cmdlet(fake_msal: Fa
         EXCHANGE_POWERSHELL_CLIENT_ID,
         ("https://outlook.office365.com/.default",),
     )
+
+
+def _mailbox(upn: str, kind: str, defaults: list[str], **actions: Any) -> dict[str, Any]:
+    """Build one mailbox as the Audit read returns it; actions default to the tenant's own."""
+    sets = {"Admin": ["Update", "Move"], "Delegate": ["SendAs"], "Owner": ["MailboxLogin"]}
+    return {
+        "UserPrincipalName": upn,
+        "RecipientTypeDetails": kind,
+        "DefaultAuditSet": defaults,
+        **{f"Audit{logon_type}": actions.get(logon_type, sets[logon_type]) for logon_type in sets},
+    }
+
+
+def _audit_services(request: httpx.Request) -> httpx.Response:
+    """Fake Exchange for the audit example: tenant A is clean, tenant B has every finding."""
+    tenant = bearer_tenant(request)
+    gaps = tenant == TENANT_B
+    if request.url.path == f"/adminapi/beta/{tenant}/Mailbox":
+        mailboxes = [_mailbox(f"enrolled@{tenant}", "UserMailbox", ["Admin", "Delegate", "Owner"])]
+        if gaps:
+            mailboxes += [
+                _mailbox("Zed@b", "SharedMailbox", ["Admin", "Delegate"], Owner=[]),
+                _mailbox("cee@b", "UserMailbox", [], Admin=["Update"], Owner="MailboxLogin"),
+            ]
+        return httpx.Response(200, json={"value": mailboxes})
+    if request.url.path != f"/adminapi/beta/{tenant}/InvokeCommand":
+        return fake_services(request)
+    cmdlet = json.loads(request.content)["CmdletInput"]["CmdletName"]
+    answers: dict[str, list[dict[str, Any]]] = {
+        "Get-AcceptedDomain": [
+            {"DomainName": "contoso.example", "InitialDomain": False},
+            {"DomainName": f"{tenant}.onmicrosoft.com", "InitialDomain": True},
+        ],
+        "Get-OrganizationConfig": [{"AuditDisabled": gaps}],
+        "Get-AdminAuditLogConfig": [{"UnifiedAuditLogIngestionEnabled": not gaps}],
+        "Get-MailboxAuditBypassAssociation": [
+            {"Identity": "svc-backup", "AuditBypassEnabled": gaps},
+            {"Identity": "svc-other", "AuditBypassEnabled": False},
+        ],
+    }
+    return httpx.Response(200, json={"value": answers[cmdlet]})
+
+
+def test_mailbox_audit_example_reads_mailboxes_through_the_rest_endpoint(
+    fake_msal: FakeMsal,
+) -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return _audit_services(request)
+
+    payload = load_payload(str(MAILBOX_AUDIT_GAPS))
+    session = PartnerSession(make_settings(), transport=httpx.MockTransport(handler))
+    session.login(payload.clients)
+    results = run_payload(session, payload, session.list_tenants(), output_format="csv")
+
+    assert [r.status for r in results] == ["ok", "ok"]
+    assert results[0].result == []
+    domain = f"{TENANT_B}.onmicrosoft.com"
+    columns = ("finding", "identity", "recipientTypeDetails", "missingActions")
+    assert results[1].result == [
+        dict(zip(columns, row, strict=True))
+        for row in [
+            ("audit_disabled", domain, "", ""),
+            ("unified_audit_log_off", domain, "", ""),
+            ("audit_gap", "cee@b", "UserMailbox", "Move"),
+            ("audit_gap", "Zed@b", "SharedMailbox", "MailboxLogin"),
+            ("audit_bypass", "svc-backup", "", ""),
+        ]
+    ]
+    # Get-EXOMailbox -PropertySets Audit -RecipientTypeDetails ... -Properties ...
+    (read,) = [r for r in seen if r.url.path == f"/adminapi/beta/{TENANT_B}/Mailbox"]
+    assert read.method == "GET"
+    assert dict(read.url.params) == {
+        "PropertySet": "Audit",
+        "RecipientTypeDetails": "UserMailbox,SharedMailbox,RoomMailbox,EquipmentMailbox",
+        "$select": "DefaultAuditSet,UserPrincipalName,RecipientTypeDetails",
+    }
