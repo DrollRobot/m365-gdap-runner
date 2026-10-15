@@ -192,6 +192,5 @@ def fake_msal(monkeypatch: pytest.MonkeyPatch) -> FakeMsal:
     fake = FakeMsal()
     discovery = FakeDiscovery()
     monkeypatch.setattr("azure_auth.auth.context.msal", fake)
-    monkeypatch.setattr("azure_auth.auth.context.discover_tenant", discovery)
-    monkeypatch.setattr("m365_gdap_runner.session.discover_tenant", discovery)
+    monkeypatch.setattr("azure_auth.Tenant.lookup", discovery)
     return fake

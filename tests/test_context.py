@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import azure_auth
 import pytest
 from azure_auth import AuthContext, InteractionRequired
+from azure_auth.clouds import COMMERCIAL
 from azure_auth.constants import EXCHANGE_POWERSHELL_CLIENT_ID, GRAPH_CLI_CLIENT_ID
 from azure_auth.sync import AzureClient, ExchangeClient, GraphClient, IppsClient
 
@@ -18,7 +20,7 @@ ALPHA = Tenant(TENANT_A, "Alpha")
 
 def _auth() -> AuthContext:
     # A GUID with its cloud needs no lookup, so no fake discovery is required here.
-    return AuthContext(TENANT_A, username=USER, cloud="Commercial")
+    return AuthContext(azure_auth.Tenant(TENANT_A, COMMERCIAL), username=USER)
 
 
 def test_declared_clients_are_built_with_the_right_types() -> None:

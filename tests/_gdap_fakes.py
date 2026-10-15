@@ -19,8 +19,9 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+import azure_auth
 import httpx
-from azure_auth.clouds import COMMERCIAL, Cloud, TenantInfo
+from azure_auth.clouds import COMMERCIAL, Cloud
 
 from m365_gdap_runner.config import Settings
 from m365_gdap_runner.context import TenantContext
@@ -187,18 +188,21 @@ class FakeMsal:
 
 @dataclass
 class FakeDiscovery:
-    """Replacement for azure-auth's tenant lookup: every tenant is in ``cloud``."""
+    """Replacement for ``azure_auth.Tenant.lookup``: every tenant is in the cloud asked for.
+
+    A lookup that names no cloud finds the tenant in ``cloud``.
+    """
 
     cloud: Cloud = COMMERCIAL
     tenants: list[str] = field(default_factory=list)
 
-    def __call__(self, tenant: str, **kwargs: Any) -> TenantInfo:
-        self.tenants.append(tenant)
+    def __call__(self, name: str, cloud: Cloud | None = None, **kwargs: Any) -> azure_auth.Tenant:
+        self.tenants.append(name)
         try:
-            guid = str(uuid.UUID(tenant))
+            guid, domain = str(uuid.UUID(name)), None
         except ValueError:
-            guid = str(uuid.uuid5(uuid.NAMESPACE_DNS, tenant.lower()))
-        return TenantInfo(guid, self.cloud)
+            guid, domain = str(uuid.uuid5(uuid.NAMESPACE_DNS, name.lower())), name.lower()
+        return azure_auth.Tenant(guid, cloud or self.cloud, domain=domain)
 
 
 # --- services ----------------------------------------------------------------------------

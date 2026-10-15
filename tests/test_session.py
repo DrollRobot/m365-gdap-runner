@@ -81,7 +81,6 @@ def test_list_tenants_dedupes_sorts_and_names_nameless_by_id(fake_msal: FakeMsal
         body = customers_body(
             (TENANT_B, "beta corp"), (TENANT_A, "Alpha"), (TENANT_B.upper(), "beta corp")
         )
-        body["value"].append({"id": "no-tenant"})
         body["value"].append({"tenantId": TENANT_C})
         return httpx.Response(200, json=body)
 
@@ -107,7 +106,7 @@ def test_context_for_is_a_sibling_whose_probe_checks_the_customer(fake_msal: Fak
 
     with session.context_for(Tenant(TENANT_A, "Alpha"), scopes=["User.Read.All"]) as alpha:
         assert alpha.auth.is_sibling
-        assert alpha.auth.tenant_id == TENANT_A
+        assert alpha.auth.tenant.id == TENANT_A
         alpha.probe()
         assert bearer_tenant(alpha.graph.request("GET", "/users").request) == TENANT_A
 
@@ -126,7 +125,7 @@ def test_context_for_is_a_sibling_whose_probe_checks_the_customer(fake_msal: Fak
 def test_partner_tenant_id_is_the_guid(fake_msal: FakeMsal) -> None:
     session = PartnerSession(make_settings(partner_tenant_id="partner.example"))
     assert session.partner_tenant_id != "partner.example"
-    assert session.auth.tenant_name == "partner.example"
+    assert session.auth.tenant.domain == "partner.example"
 
 
 @pytest.mark.parametrize(
@@ -143,13 +142,21 @@ def test_bad_cache_or_cloud_is_a_config_error(
 def test_cloud_setting_skips_the_lookup(
     fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def no_lookup(tenant: str) -> object:
-        raise AssertionError(f"looked up {tenant}")
+    def no_lookup(name: str, *args: object, **kwargs: object) -> object:
+        raise AssertionError(f"looked up {name}")
 
-    monkeypatch.setattr("azure_auth.auth.context.discover_tenant", no_lookup)
+    monkeypatch.setattr("azure_auth.Tenant.lookup", no_lookup)
     session = PartnerSession(make_settings(cloud="USGov"))
-    assert session.auth.cloud.name == "USGov"
+    assert session.auth.tenant.cloud.name == "USGov"
+    assert session.partner_tenant_id == PARTNER_TENANT
     assert session.cloud_name == "USGov"
+
+
+def test_cloud_setting_with_a_domain_looks_it_up_in_that_cloud(fake_msal: FakeMsal) -> None:
+    session = PartnerSession(make_settings(partner_tenant_id="partner.example", cloud="USGov"))
+    assert session.cloud_name == "USGov"
+    assert session.auth.tenant.domain == "partner.example"
+    assert session.partner_tenant_id != "partner.example"
 
 
 def test_cloud_of_finds_a_tenant_by_discovery(fake_msal: FakeMsal) -> None:
@@ -161,15 +168,16 @@ def test_cloud_of_finds_a_tenant_by_discovery(fake_msal: FakeMsal) -> None:
 @pytest.mark.parametrize(
     "error",
     [
-        TenantNotFound("No tenant", tenant=TENANT_A),
+        TenantNotFound("No tenant", name=TENANT_A),
         httpx.ConnectError("no route to login.microsoftonline.com"),
     ],
 )
 def test_cloud_of_is_blank_when_discovery_fails(
     fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, error: Exception
 ) -> None:
-    def failing(tenant: str, **kwargs: object) -> object:
+    def failing(name: str, *args: object, **kwargs: object) -> object:
         raise error
 
-    monkeypatch.setattr("m365_gdap_runner.session.discover_tenant", failing)
-    assert PartnerSession(make_settings()).cloud_of(TENANT_A) == ""
+    session = PartnerSession(make_settings())
+    monkeypatch.setattr("azure_auth.Tenant.lookup", failing)
+    assert session.cloud_of(TENANT_A) == ""

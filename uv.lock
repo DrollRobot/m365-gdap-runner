@@ -93,8 +93,8 @@ wheels = [
 
 [[package]]
 name = "azure-auth"
-version = "0.3.0"
-source = { git = "https://github.com/DrollRobot/azure-auth.git?tag=v0.3.0#3f2f18bdb9fa26695d03acbbf118e4025021e21c" }
+version = "0.4.0"
+source = { git = "https://github.com/DrollRobot/azure-auth.git?tag=v0.4.0#aee4dafab6a18f5616a2aa11bf70f15614cf3276" }
 dependencies = [
     { name = "azure-core" },
     { name = "cryptography" },
@@ -805,7 +805,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "azure-auth", git = "https://github.com/DrollRobot/azure-auth.git?tag=v0.3.0" },
+    { name = "azure-auth", git = "https://github.com/DrollRobot/azure-auth.git?tag=v0.4.0" },
     { name = "azure-identity", marker = "extra == 'keyvault'", specifier = ">=1.25,<2" },
     { name = "azure-keyvault-secrets", marker = "extra == 'keyvault'", specifier = ">=4.11,<5" },
     { name = "httpx", specifier = ">=0.28.1,<1" },

@@ -48,7 +48,7 @@ def test_returns_context_for_named_tenant_and_leaves_other_args(fake_msal: FakeM
     ) as ctx:
         users = ctx.graph.get_all("/users")
     assert ctx.tenant == Tenant(TENANT_B, "beta corp")
-    assert ctx.auth.tenant_id == TENANT_B
+    assert ctx.auth.tenant.id == TENANT_B
     assert users[0]["userPrincipalName"] == f"admin@{TENANT_B}.example"
     assert fake_msal.interactive_calls == 1
 

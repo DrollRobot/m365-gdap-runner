@@ -38,7 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Authentication, token caching, tenant lookup, and the Graph, Exchange Online, Security &
   Compliance and Azure Resource Manager clients come from
-  [azure-auth](https://github.com/DrollRobot/azure-auth), pinned to v0.3.0. This package
+  [azure-auth](https://github.com/DrollRobot/azure-auth), pinned to v0.4.0. This package
   no longer carries an MSAL session or a Graph client of its own.
 
 [Unreleased]: https://github.com/DrollRobot/m365_gdap_runner/commits/HEAD

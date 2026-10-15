@@ -17,9 +17,10 @@ import logging
 from collections.abc import Iterable, Sequence
 from typing import Literal, cast
 
+import azure_auth
 import httpx
-from azure_auth import AuthContext, AuthError, discover_tenant
-from azure_auth.clouds import get_cloud
+from azure_auth import AuthContext, AuthError
+from azure_auth.clouds import Cloud, get_cloud
 from azure_auth.sync import GraphClient
 
 from m365_gdap_runner.config import ConfigError, Settings
@@ -32,11 +33,29 @@ logger = logging.getLogger(__name__)
 # added here: consent in the partner tenant says nothing about the customer tenants.
 PARTNER_SCOPES = ("DelegatedAdminRelationship.Read.All",)
 
-# Partner-tenant Graph collection listing GDAP customers. azure-auth will grow a method that
-# returns these with their display names; until then the runner reads it directly.
-CUSTOMERS_PATH = "/tenantRelationships/delegatedAdminCustomers"
-
 CACHE_KINDS = ("memory", "disk")
+
+
+def _partner_tenant(name: str, cloud: Cloud) -> azure_auth.Tenant:
+    """Build the partner tenant in a configured cloud, looking it up only when needed.
+
+    A GUID with its cloud is all azure-auth needs, so no request is made. A domain name is
+    still looked up, for its GUID, in that cloud only.
+
+    Args:
+        name: The ``partner_tenant_id`` setting: a GUID or a domain name.
+        cloud: The ``cloud`` setting.
+
+    Returns:
+        The tenant, for :class:`~azure_auth.AuthContext`.
+
+    Raises:
+        azure_auth.AuthError: If a domain name cannot be looked up in that cloud.
+    """
+    try:
+        return azure_auth.Tenant(name, cloud)
+    except ValueError:
+        return azure_auth.Tenant.lookup(name, cloud)
 
 
 class PartnerSession:
@@ -62,30 +81,30 @@ class PartnerSession:
             raise ConfigError(
                 f"cache must be one of {', '.join(CACHE_KINDS)}, not {settings.cache!r}."
             )
-        cloud = None
+        tenant: str | azure_auth.Tenant = settings.partner_tenant_id
         if settings.cloud:
             try:
                 cloud = get_cloud(settings.cloud)
             except ValueError as exc:
                 raise ConfigError(str(exc)) from exc
+            tenant = _partner_tenant(settings.partner_tenant_id, cloud)
         self._transport = transport
         self.auth = AuthContext(
-            settings.partner_tenant_id,
+            tenant,
             username=settings.username,
             client_id=settings.client_id or None,
             cache=cast(Literal["memory", "disk"], settings.cache),
-            cloud=cloud,
         )
 
     @property
     def partner_tenant_id(self) -> str:
         """The partner tenant's GUID."""
-        return self.auth.tenant_id
+        return self.auth.tenant.id
 
     @property
     def cloud_name(self) -> str:
         """Name of the cloud this session signs in to, as azure-auth spells it."""
-        return self.auth.cloud.name
+        return self.auth.tenant.cloud.name
 
     def cloud_of(self, tenant_id: str) -> str:
         """Find the cloud a tenant lives in, by OpenID Connect discovery.
@@ -102,7 +121,7 @@ class PartnerSession:
             when no sign-in host knows the tenant or none can be reached.
         """
         try:
-            return discover_tenant(tenant_id, transport=self._transport).cloud.name
+            return azure_auth.Tenant.lookup(tenant_id, transport=self._transport).cloud.name
         except (AuthError, httpx.HTTPError, ValueError) as exc:
             logger.debug("Could not look up the cloud of %s: %s", tenant_id, exc)
             return ""
@@ -142,11 +161,9 @@ class PartnerSession:
         with GraphClient(
             self.auth, scopes=list(PARTNER_SCOPES), transport=self._transport
         ) as graph:
-            customers = graph.get_all(CUSTOMERS_PATH)
+            customers = graph.list_customers()
         tenants: dict[str, Tenant] = {}
         for customer in customers:
-            if not isinstance(customer, dict) or not customer.get("tenantId"):
-                continue
             tenant_id = str(customer["tenantId"])
             display_name = str(customer.get("displayName") or tenant_id)
             tenants.setdefault(tenant_id.lower(), Tenant(tenant_id, display_name))
