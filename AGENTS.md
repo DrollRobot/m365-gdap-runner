@@ -6,8 +6,6 @@ A utility for running scripts across multiple M365 tenants with GDAP permissions
 ## General rules
 - Environment values are are stored in the config system. Package config schema
   is defined in src/name/config/schema.py.
-- Secrets are stored only in keyvault or keyring. Never in source, never in
-  plain-text on disk.
 
 ## Code Formatting and Style
 - Follow pep8 style guidelines.

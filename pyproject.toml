@@ -18,15 +18,6 @@ dependencies = [
     "tomlkit>=0.13,<1",
 ]
 
-[project.optional-dependencies]
-keyring = [
-    "keyring>=25.0,<26",
-]
-keyvault = [
-    "azure-identity>=1.25,<2",
-    "azure-keyvault-secrets>=4.11,<5",
-]
-
 [dependency-groups]
 docs = [
     "mkdocs>=1.6,<2",
@@ -128,7 +119,6 @@ paths = ["src"]
 min_confidence = 60
 # Names used in ways vulture cannot see.
 ignore_names = [
-    "_CredentialBackend",  # config/secrets.py: named only in a quoted cast()
     "exchange",  # context.py: TenantContext clients, read by payloads
     "ipps",
     "azure",

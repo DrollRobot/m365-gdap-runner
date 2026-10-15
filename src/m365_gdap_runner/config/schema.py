@@ -46,24 +46,10 @@ ENV_PREFIX = APP_NAME.upper() + "_"
 # Name of the config CLI's console script, used in error messages.
 CLI_NAME = APP_NAME.replace("_", "-") + "-config"
 
-# Credential-backend policy for every secret field in the schema. One of:
-#
-# - "none":    this package stores no secrets. Secret fields resolve from
-#              environment variables only; the config CLI grows no secret
-#              commands and the reserved backend keys become illegal in
-#              config.toml.
-# - a backend name (e.g. "keyring", "keyvault"): the default backend. Used
-#              without prompting; a user may still override it per profile
-#              with 'credential_backend' in config.toml (via the config CLI).
-# - "prompt":  no default. The config CLI's init asks the user to choose.
-#
-# Validated at use time by secrets.schema_backend_policy(); an unknown value
-# fails loudly there. Settings below declares no secret fields (sign-in is
-# interactive; the token cache is handled by azure-auth), so the secret
-# machinery is never consulted and this policy has no effect at runtime. It
-# stays at the template default because the template's config tests exercise
-# secret storage with their own test schema.
-CREDENTIAL_BACKEND = "prompt"
+# Credential-backend policy: "none", this package stores no secrets. The
+# secret-storage machinery is removed, and Settings below declares no secret
+# fields (sign-in is interactive; the token cache is handled by azure-auth).
+CREDENTIAL_BACKEND = "none"
 
 
 class ConfigError(Exception):
