@@ -190,10 +190,10 @@ def test_load_reports_an_unreadable_path(tmp_path: Path) -> None:
 def test_members_returns_marked_rows_in_file_order(csv_path: Path) -> None:
     tenant_file = TenantFile.load(csv_path)
     assert tenant_file.members("patching") == [
-        TenantRow(TENANT_A, "Alpha", "alpha.example", "Commercial"),
-        TenantRow(TENANT_B, "beta corp", "beta.example", ""),
+        TenantRow(TENANT_A, "Alpha", "Commercial"),
+        TenantRow(TENANT_B, "beta corp", ""),
     ]
-    assert tenant_file.members("pilot") == [TenantRow(TENANT_B, "beta corp", "beta.example", "")]
+    assert tenant_file.members("pilot") == [TenantRow(TENANT_B, "beta corp", "")]
 
 
 def test_members_skips_a_marked_row_with_no_m365_tenant(tmp_path: Path) -> None:

@@ -28,7 +28,7 @@ GAMMA = Tenant(TENANT_C, "Gamma")
 def _result(
     tenant: Tenant, status: Status = "ok", result: object = None, error: str | None = None
 ) -> TenantResult:
-    return TenantResult(tenant, status, result, error, 0.5)
+    return TenantResult(tenant, status, result, error)
 
 
 def test_check_result_accepts_json_values() -> None:

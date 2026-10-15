@@ -87,7 +87,6 @@ def test_results_cover_ok_auth_failed_and_error_in_order() -> None:
     assert results[0].error is None
     assert results[1].error == "invalid_grant: AADSTS65001 consent_required"
     assert results[2].error == "RuntimeError('boom')"
-    assert all(r.duration_s >= 0 for r in results)
 
 
 def test_context_is_built_with_the_payloads_scopes_and_clients_and_closed() -> None:

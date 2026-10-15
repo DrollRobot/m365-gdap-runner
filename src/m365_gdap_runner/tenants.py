@@ -81,13 +81,11 @@ class TenantRow:
     Attributes:
         tenant_id: The ``m365_tenant_id`` cell.
         display_name: The ``m365_tenant_name`` cell; may be empty.
-        domain: The ``m365_domain`` cell; may be empty.
         cloud: The ``m365_cloud`` cell as azure-auth spells the cloud's name, or empty.
     """
 
     tenant_id: str
     display_name: str
-    domain: str
     cloud: str
 
 
@@ -291,7 +289,7 @@ class TenantFile:
             number: The row's number in the spreadsheet, for error messages.
 
         Returns:
-            The row's tenant ID, display name, domain and cloud, stripped; the cloud spelled
+            The row's tenant ID, display name and cloud, stripped; the cloud spelled
             as azure-auth names it.
 
         Raises:
@@ -311,7 +309,6 @@ class TenantFile:
         return TenantRow(
             row.get(ID_COLUMN, "").strip(),
             row.get(NAME_COLUMN, "").strip(),
-            row.get(DOMAIN_COLUMN, "").strip(),
             cloud,
         )
 

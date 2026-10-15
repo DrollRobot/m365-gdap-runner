@@ -85,14 +85,12 @@ class TenantResult:
         status: ``ok``, ``auth_failed``, ``error``, or ``skipped``.
         result: The payload's return value when ``ok``, else None.
         error: Failure description when not ``ok`` or ``skipped``, else None.
-        duration_s: Wall time spent on this tenant, in seconds.
     """
 
     tenant: Tenant
     status: Status
     result: object = None
     error: str | None = None
-    duration_s: float = 0.0
 
 
 class RunInterrupted(Exception):
@@ -336,7 +334,7 @@ def _run_one(
             logger.info("%s in %.1fs: %s", status, duration, error)
         else:
             logger.info("%s in %.1fs", status, duration)
-        return TenantResult(tenant, status, result, error, duration)
+        return TenantResult(tenant, status, result, error)
     finally:
         _current_tenant.reset(context_token)
 
