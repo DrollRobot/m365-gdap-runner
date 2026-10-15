@@ -15,10 +15,11 @@ Two objects, so the generic tests never depend on secret storage:
   tests that genuinely exercise secrets.
 
 Also hosts :data:`requires_secret_storage`, the skip marker for tests that
-need the machinery present, and :func:`block_secrets_module`, which simulates
+need the machinery present; :func:`block_secrets_module`, which simulates
 a project that deleted it (``config/secrets.py``), so the tests proving the
 rest of the config system survives that removal can run without actually
-deleting the file.
+deleting the file; and :func:`pin_prompt_policy`, which keeps the tests
+independent of the project's own ``CREDENTIAL_BACKEND``.
 """
 
 from __future__ import annotations
@@ -33,9 +34,10 @@ import pytest
 # Version of this test helper. It ships to projects generated from this
 # template (cleanup.py keeps it: no script or hook shares its name), so bump
 # on every change to let scripts/compare_to_template.py flag stale copies.
-__version__ = "2.0.0"
+__version__ = "2.1.0"
 
 _SECRETS_MODULE = "m365_gdap_runner.config.secrets"
+_SCHEMA_MODULE = "m365_gdap_runner.config.schema"
 
 # Skip marker for tests that need the secret-storage machinery itself: the
 # backend dispatcher, the reserved backend keys, or the CREDENTIAL_BACKEND
@@ -100,3 +102,20 @@ def block_secrets_module(monkeypatch: pytest.MonkeyPatch) -> None:
     if hasattr(config_package, "secrets"):
         monkeypatch.delattr(config_package, "secrets")
     monkeypatch.setattr(sys, "meta_path", [_BlockFinder(), *sys.meta_path])
+
+
+def pin_prompt_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the schema's ``CREDENTIAL_BACKEND`` policy to ``"prompt"``.
+
+    ``CREDENTIAL_BACKEND`` is the project's own constant, and every legal value
+    changes what the config system does: a backend name sends secret lookups
+    to that real store, and ``"none"`` drops the reserved backend keys and the
+    secret commands. The config tests call this from an autouse fixture so
+    they test the code, not the project's choice. ``"prompt"`` (no default
+    backend) is the shipped value. Tests of another policy set it themselves,
+    inside the test body, and still win.
+
+    Args:
+        monkeypatch: The test's monkeypatch fixture.
+    """
+    monkeypatch.setattr(f"{_SCHEMA_MODULE}.CREDENTIAL_BACKEND", "prompt")

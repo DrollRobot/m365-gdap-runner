@@ -12,6 +12,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import fields
 from pathlib import Path
 
@@ -26,6 +27,7 @@ from compare_to_template import (
     _PRIVATE_REPO_DEPS_END,
     _PRIVATE_REPO_DEPS_START,
     MANIFEST,
+    SECRET_STORAGE_EDITED,
     SETUP_CONFIG_REL,
     TEMPLATE_KEBAB,
     TEMPLATE_SNAKE,
@@ -70,6 +72,7 @@ from compare_to_template import (
     strip_package_purpose,
     strip_template_header,
     version_tuple,
+    versioned_entries,
 )
 
 NAMES = ProjectNames(snake="my_proj", kebab="my-proj", github_user="octocat")
@@ -89,6 +92,17 @@ def write(root: Path, rel: str, text: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8", newline="")
     return path
+
+
+def recording_confirm(prompts: list[str], *, answer: bool) -> Callable[[str], bool]:
+    """Build a ``cli.confirm`` stand-in that records each prompt and returns ``answer``."""
+
+    def confirm(prompt: str) -> bool:
+        """Record the prompt and give the canned answer."""
+        prompts.append(prompt)
+        return answer
+
+    return confirm
 
 
 def make_flags(
@@ -309,8 +323,11 @@ def test_replay_python_version_leaves_other_files_alone() -> None:
 def test_replay_cleanup_pyproject_drops_template_only_lines() -> None:
     text = (
         'addopts = [\n    "--cov=scripts",\n]\nmypy_path = ["scripts", "scripts/template_setup"]\n'
+        'paths = ["src", "scripts"]\n'
     )
-    assert replay_cleanup_pyproject(text) == 'addopts = [\n]\nmypy_path = ["scripts"]\n'
+    assert replay_cleanup_pyproject(text) == (
+        'addopts = [\n]\nmypy_path = ["scripts"]\npaths = ["src"]\n'
+    )
 
 
 @pytest.mark.unit
@@ -448,20 +465,28 @@ def test_normalize_project_text_leaves_other_files_alone() -> None:
 @pytest.mark.unit
 def test_effective_strict_demotes_mkdocs_edited_files_when_removed() -> None:
     entry = BaselineFile("CONTRIBUTING.md")
-    assert effective_strict(entry, has_mkdocs=True) is True
-    assert effective_strict(entry, has_mkdocs=False) is False
+    assert effective_strict(entry, has_mkdocs=True, has_secret_storage=True) is True
+    assert effective_strict(entry, has_mkdocs=False, has_secret_storage=True) is False
+
+
+@pytest.mark.unit
+def test_effective_strict_demotes_the_config_docstring_when_secrets_go() -> None:
+    """remove_secret_storage.py rewrites it, so the template side diverges."""
+    (entry,) = [e for e in MANIFEST if e.path in SECRET_STORAGE_EDITED]
+    assert effective_strict(entry, has_mkdocs=True, has_secret_storage=True) is True
+    assert effective_strict(entry, has_mkdocs=True, has_secret_storage=False) is False
 
 
 @pytest.mark.unit
 def test_effective_strict_keeps_other_files_strict() -> None:
     entry = BaselineFile("CLAUDE.md")
-    assert effective_strict(entry, has_mkdocs=False) is True
+    assert effective_strict(entry, has_mkdocs=False, has_secret_storage=True) is True
 
 
 @pytest.mark.unit
 def test_effective_strict_never_promotes_lenient_files() -> None:
     entry = BaselineFile("pyproject.toml", strict=False)
-    assert effective_strict(entry, has_mkdocs=True) is False
+    assert effective_strict(entry, has_mkdocs=True, has_secret_storage=True) is False
 
 
 # --- version notes and self-check ------------------------------------------------
@@ -758,6 +783,22 @@ def test_offer_missing_installs_keeps_missing_when_declined(
 
 
 @pytest.mark.unit
+def test_offer_missing_installs_asks_on_one_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ctx = make_ctx(tmp_path)
+    write(ctx.template_root, "notes.md", "content\n")
+    results = [compare_one(BaselineFile("notes.md"), ctx)]
+    prompts: list[str] = []
+    monkeypatch.setattr(cli, "confirm", recording_confirm(prompts, answer=False))
+    offer_missing_installs(results, ctx, allow_update=True)
+    assert len(prompts) == 1
+    assert "notes.md: missing" in prompts[0]
+    # Only the section header is printed; the file gets no line of its own.
+    assert "notes.md" not in capsys.readouterr().out
+
+
+@pytest.mark.unit
 def test_offer_missing_installs_skips_versioned_entries(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -842,21 +883,18 @@ def test_check_versioned_file_updates_the_renamed_project_copy(
 
 @pytest.mark.unit
 def test_check_versioned_file_reports_the_missing_project_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # A genuinely missing file is named by its project-side path, so the user
-    # can go look for it. The name rides along in the copy-it prompt.
+    # can go look for it -- on the prompt line itself, with nothing printed around it.
     ctx = make_ctx(tmp_path)
     write(ctx.template_root, _RENAMED_VERSIONED_REL, '__version__ = "1.0.0"\n')
     prompts: list[str] = []
-
-    def decline(msg: str) -> bool:
-        prompts.append(msg)
-        return False
-
-    monkeypatch.setattr(cli, "confirm", decline)
+    monkeypatch.setattr(cli, "confirm", recording_confirm(prompts, answer=False))
     assert not check_versioned_file(_renamed_entry(), ctx, required=True, allow_update=True)
-    assert f"{_RENAMED_PROJECT_REL}: missing" in "".join(prompts)
+    assert len(prompts) == 1
+    assert f"{_RENAMED_PROJECT_REL}: missing" in prompts[0]
+    assert capsys.readouterr().out == ""
 
 
 @pytest.mark.unit
@@ -871,6 +909,61 @@ def test_check_versioned_file_leaves_optional_missing_file_alone(
 
     monkeypatch.setattr(cli, "confirm", unexpected)
     assert not check_versioned_file(_renamed_entry(), ctx, required=False, allow_update=True)
+
+
+# A versioned file at an unrenamed path, for the one-line output tests below.
+_HELPER_REL = "scripts/helper.py"
+
+
+@pytest.mark.unit
+def test_check_versioned_file_asks_about_an_outdated_copy_on_one_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ctx = make_ctx(tmp_path)
+    write(ctx.template_root, _HELPER_REL, '__version__ = "1.2.0"\nnew = True\n')
+    write(ctx.project_root, _HELPER_REL, '__version__ = "1.1.0"\n')
+    prompts: list[str] = []
+    monkeypatch.setattr(cli, "confirm", recording_confirm(prompts, answer=False))
+    entry = BaselineFile(_HELPER_REL, versioned=True)
+    assert not check_versioned_file(entry, ctx, required=True, allow_update=True)
+    assert len(prompts) == 1
+    for part in (_HELPER_REL, "outdated", "project 1.1.0", "template 1.2.0", "Update"):
+        assert part in prompts[0]
+    # Declining leaves the copy alone and prints no follow-up line.
+    assert capsys.readouterr().out == ""
+    assert (ctx.project_root / _HELPER_REL).read_bytes() == b'__version__ = "1.1.0"\n'
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("project_body", "allow_update", "expected"),
+    [
+        ('__version__ = "1.3.0"\n', True, "NEWER"),
+        ('__version__ = "1.1.0"\n', False, "--no-update"),
+    ],
+)
+def test_check_versioned_file_reports_without_prompting_on_one_line(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    project_body: str,
+    allow_update: bool,
+    expected: str,
+) -> None:
+    ctx = make_ctx(tmp_path)
+    write(ctx.template_root, _HELPER_REL, '__version__ = "1.2.0"\n')
+    write(ctx.project_root, _HELPER_REL, project_body)
+
+    def unexpected(_msg: str) -> bool:
+        raise AssertionError("confirm() should not be called when no update is on offer")
+
+    monkeypatch.setattr(cli, "confirm", unexpected)
+    entry = BaselineFile(_HELPER_REL, versioned=True)
+    assert not check_versioned_file(entry, ctx, required=True, allow_update=allow_update)
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) == 1
+    assert _HELPER_REL in lines[0]
+    assert expected in lines[0]
 
 
 # --- self check ----------------------------------------------------------------------
@@ -1499,3 +1592,85 @@ def test_resolve_code_ignores_a_blank_override() -> None:
     # is present or not depending on the environment.
     expected = ["code"] if shutil.which("code") else None
     assert resolve_code("   ") == expected
+
+
+# --- version bumps since the last release --------------------------------------------
+
+
+def _git_stdout(root: Path, *args: str) -> bytes | None:
+    """Run git in a directory and return its standard output.
+
+    Args:
+        root: Directory to run git in.
+        *args: Arguments passed to git.
+
+    Returns:
+        The raw standard output, or ``None`` when git is not on PATH or exits
+        non-zero.
+    """
+    git = shutil.which("git")
+    if git is None:
+        return None
+    result = subprocess.run(  # noqa: S603  (git path resolved via shutil.which)
+        [git, *args], cwd=root, capture_output=True, check=False
+    )
+    return result.stdout if result.returncode == 0 else None
+
+
+def _missing_bump(old_text: str | None, new_text: str | None) -> bool:
+    """Whether a versioned file changed while its ``__version__`` stayed the same.
+
+    Args:
+        old_text: The file's contents at the last release, or ``None`` when it
+            did not exist there.
+        new_text: The file's current contents, or ``None`` when it no longer
+            exists.
+
+    Returns:
+        ``True`` only when both copies exist, differ with line endings
+        normalized, and declare the same version.
+    """
+    if old_text is None or new_text is None:
+        return False
+    if normalize_eol(old_text) == normalize_eol(new_text):
+        return False
+    return script_version(old_text) == script_version(new_text)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("old_text", "new_text", "expected"),
+    [
+        ('__version__ = "1.0.0"\nx = 1\n', '__version__ = "1.0.0"\nx = 2\n', True),
+        ('__version__ = "1.0.0"\nx = 1\n', '__version__ = "1.0.1"\nx = 2\n', False),
+        ('__version__ = "1.0.0"\nx = 1\n', '__version__ = "1.0.0"\r\nx = 1\r\n', False),
+        (None, '__version__ = "1.0.0"\n', False),
+        ('__version__ = "1.0.0"\n', None, False),
+    ],
+    ids=["changed-unbumped", "changed-bumped", "line-endings-only", "added", "removed"],
+)
+def test_missing_bump(old_text: str | None, new_text: str | None, expected: bool) -> None:
+    assert _missing_bump(old_text, new_text) is expected
+
+
+@pytest.mark.integration
+@pytest.mark.regression
+def test_versioned_files_changed_since_last_release_are_bumped() -> None:
+    # Projects generated from the last release hold that release's copies. A
+    # change shipped at the same __version__ reaches them as "missing bump?"
+    # instead of an update.
+    root = Path(__file__).resolve().parent.parent
+    tag = _git_stdout(root, "describe", "--tags", "--abbrev=0")
+    if tag is None:
+        pytest.skip("no git, or no release tag reachable from HEAD (shallow clone?)")
+    ref = tag.decode("utf-8").strip()
+
+    stale: list[str] = []
+    for entry in versioned_entries():
+        old = _git_stdout(root, "show", f"{ref}:{entry.path}")
+        old_text = old.decode("utf-8") if old is not None else None
+        path = root / entry.path
+        new_text = path.read_text(encoding="utf-8") if path.is_file() else None
+        if new_text is not None and _missing_bump(old_text, new_text):
+            stale.append(f"  {entry.path} (still {script_version(new_text)})")
+    assert not stale, f"Changed since {ref} without a __version__ bump:\n" + "\n".join(stale)

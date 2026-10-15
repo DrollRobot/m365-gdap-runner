@@ -23,15 +23,22 @@ from tests._config_test_object import (
     ConfigTestObject,
     SecretTestObject,
     block_secrets_module,
+    pin_prompt_policy,
     requires_secret_storage,
 )
 
 # Version of this test module. It ships to projects generated from this
 # template (cleanup.py keeps it: no script or hook shares its name), so bump
 # on every change to let scripts/compare_to_template.py flag stale copies.
-__version__ = "2.2.0"
+__version__ = "2.3.0"
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.fixture(autouse=True)
+def _prompt_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test the validation rules, not the project's CREDENTIAL_BACKEND choice."""
+    pin_prompt_policy(monkeypatch)
 
 
 def _write(tmp_path: Path, text: str) -> Path:

@@ -37,9 +37,6 @@ uv run mkdocs build --strict
 
 # live preview at http://127.0.0.1:8000
 uv run mkdocs serve
-
-# deploy to GitHub Pages
-uv run mkdocs gh-deploy --force
 ```
 
 ### Type annotations

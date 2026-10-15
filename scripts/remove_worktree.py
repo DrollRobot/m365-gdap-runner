@@ -75,7 +75,7 @@ import _cli as cli
 # (not symlinked) config file in the worktree - .env / .env.* or a linked
 # .vscode file - differs from the main repo, so force-removal never silently
 # discards those untracked/gitignored edits.
-__version__ = "1.4.0"
+__version__ = "1.4.1"
 
 
 def slug_arg(value: str) -> str:
@@ -178,10 +178,12 @@ def copied_config_candidates(wt_path: Path) -> list[str]:
 
     new_worktree.py symlinks each ``.env`` / ``.env.*`` file and the local
     ``.vscode/launch.json`` / ``.vscode/settings.json`` into the worktree, but
-    *copies* them when symlinks are unavailable (Windows without Developer Mode).
-    A symlink shares the main repo's single copy, so edits made through it are
-    already saved; only real copies can hold unsaved edits, so symlinks (and
-    dangling links) are excluded here.
+    falls back to a hard link, then a *copy*, where symlinks are unavailable
+    (Windows without Developer Mode). A symlink shares the main repo's single
+    copy, so edits made through it are already saved; only real copies can hold
+    unsaved edits, so symlinks (and dangling links) are excluded here. A hard
+    link stays a candidate: while still paired it compares equal, and once an
+    editor's save-and-rename parts it from the main file it is simply a copy.
 
     Args:
         wt_path: The worktree being removed.

@@ -7,6 +7,7 @@ folder to sys.path, mirroring how the scripts import their shared _cli module.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -14,7 +15,13 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
-from new_worktree import find_source_workspace, parse_args, slug_arg
+from new_worktree import (
+    find_source_workspace,
+    link_or_copy,
+    local_dir_links,
+    parse_args,
+    slug_arg,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -100,3 +107,110 @@ def test_find_source_workspace_skips_the_target_file(tmp_path: Path) -> None:
 def test_find_source_workspace_none_when_empty(tmp_path: Path) -> None:
     """No workspace anywhere means the caller generates a minimal one."""
     assert find_source_workspace([tmp_path], "target.code-workspace") is None
+
+
+# --- link_or_copy --------------------------------------------------------------------
+
+
+def _can_symlink(tmp_path: Path) -> bool:
+    """Whether this environment can create symlinks (Windows needs Developer Mode)."""
+    probe = tmp_path / "probe-link"
+    try:
+        probe.symlink_to(tmp_path / "probe-target")
+    except OSError:
+        return False
+    probe.unlink()
+    return True
+
+
+def _link_fixture(tmp_path: Path) -> tuple[Path, Path]:
+    """Create a source file in a fake repo and return it with its worktree destination."""
+    src = tmp_path / "repo" / ".env"
+    src.parent.mkdir()
+    src.write_text("A=1\n", encoding="utf-8")
+    dst = tmp_path / "wt" / ".env"
+    dst.parent.mkdir()
+    return src, dst
+
+
+def _refuse(*_args: object, **_kwargs: object) -> None:
+    """Stand in for a link call the platform refuses."""
+    raise OSError("not permitted")
+
+
+def test_link_or_copy_prefers_a_symlink(tmp_path: Path) -> None:
+    """A symlink is created wherever the platform allows one."""
+    if not _can_symlink(tmp_path):
+        pytest.skip("symlinks unavailable in this environment")
+    src, dst = _link_fixture(tmp_path)
+    link_or_copy(src, dst, ".env")
+    assert dst.is_symlink()
+    assert dst.read_text(encoding="utf-8") == "A=1\n"
+
+
+def test_link_or_copy_hard_links_without_symlinks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Without symlinks the file is hard-linked, so both paths are one file."""
+    monkeypatch.setattr(Path, "symlink_to", _refuse)
+    src, dst = _link_fixture(tmp_path)
+    link_or_copy(src, dst, ".env")
+    assert not dst.is_symlink()
+    assert os.path.samefile(src, dst)
+    captured = capsys.readouterr()
+    assert "hard-linked .env" in captured.out + captured.err
+
+
+def test_link_or_copy_copies_without_any_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """With neither kind of link available the file is copied."""
+    monkeypatch.setattr(Path, "symlink_to", _refuse)
+    monkeypatch.setattr(os, "link", _refuse)
+    src, dst = _link_fixture(tmp_path)
+    link_or_copy(src, dst, ".env")
+    assert not dst.is_symlink()
+    assert not os.path.samefile(src, dst)
+    assert dst.read_text(encoding="utf-8") == "A=1\n"
+    captured = capsys.readouterr()
+    assert "copied .env" in captured.out + captured.err
+
+
+# --- local_dir_links -----------------------------------------------------------------
+
+
+def test_local_dir_links_missing_dir_is_empty(tmp_path: Path) -> None:
+    """A repo without .local/ has nothing to link."""
+    assert local_dir_links(tmp_path / "repo", tmp_path / "wt") == []
+
+
+def test_local_dir_links_pairs_every_file_recursively(tmp_path: Path) -> None:
+    """Each file under .local/, at any depth, maps to the same path in the worktree."""
+    repo = tmp_path / "repo"
+    wt = tmp_path / "wt"
+    (repo / ".local" / "notes").mkdir(parents=True)
+    (repo / ".local" / "next_commit.md").write_text("", encoding="utf-8")
+    (repo / ".local" / "notes" / "plan.md").write_text("x\n", encoding="utf-8")
+    assert local_dir_links(repo, wt) == [
+        (
+            repo / ".local" / "next_commit.md",
+            wt / ".local" / "next_commit.md",
+            ".local/next_commit.md",
+        ),
+        (
+            repo / ".local" / "notes" / "plan.md",
+            wt / ".local" / "notes" / "plan.md",
+            ".local/notes/plan.md",
+        ),
+    ]
+
+
+def test_local_dir_links_skips_files_already_in_the_worktree(tmp_path: Path) -> None:
+    """A file the worktree already has is left alone, never clobbered."""
+    repo = tmp_path / "repo"
+    wt = tmp_path / "wt"
+    (repo / ".local").mkdir(parents=True)
+    (wt / ".local").mkdir(parents=True)
+    (repo / ".local" / "PR.md").write_text("old\n", encoding="utf-8")
+    (wt / ".local" / "PR.md").write_text("mine\n", encoding="utf-8")
+    assert local_dir_links(repo, wt) == []

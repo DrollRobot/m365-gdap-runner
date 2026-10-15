@@ -97,7 +97,7 @@ else:
 # Version of this helper script itself. Bump on every change so copies in other
 # repos can be compared: patch = bugfix, minor = new flag/behavior, major =
 # breaking CLI change.
-__version__ = "1.24.1"
+__version__ = "1.26.0"
 
 # The template's identity tokens. Built from pieces so that a child project's
 # rename_project.py / set_github_user.py runs (which string-replace these
@@ -299,6 +299,11 @@ MANIFEST: tuple[BaselineFile, ...] = (
     # Same deal for the hook-environment gate: it ships to every project (no
     # matching script, so cleanup.py keeps it) and carries a __version__.
     BaselineFile("tests/test_secrets_guards_under_hook_env.py", versioned=True),
+    # The detect-secrets hook wrapper ships to every project (it backs the
+    # detect-secrets pre-commit hook) along with its tests; both carry a
+    # __version__.
+    BaselineFile("tests/detect_secrets_hook.py", versioned=True),
+    BaselineFile("tests/test_detect_secrets_hook.py", versioned=True),
 )
 
 # Tracked template paths deliberately not compared. Prefixes cover the
@@ -324,6 +329,11 @@ EXCLUDED_GLOBS = (
 # removed mkdocs they are compared leniently instead, because the template
 # side still carries the mkdocs sections.
 MKDOCS_EDITED = ("CONTRIBUTING.md", "AGENTS.RELEASING.md")
+
+# The same deal for remove_secret_storage.py, which rewrites the config
+# package docstring: it describes the machinery it just deleted, so the
+# template side keeps wording the project no longer has.
+SECRET_STORAGE_EDITED = (f"src/{TEMPLATE_SNAKE}/config/__init__.py",)
 
 # Workflow files that carry the commented-out private-repo-deps GitHub
 # Actions steps (see scripts/template_setup/remove_private_repo_deps.py).
@@ -447,8 +457,9 @@ class CompareContext:
             pyproject.toml lines are then dropped from the template side too).
         flags: The project's resolved config-driven feature flags. Used both
             for gating (:func:`is_applicable`, :func:`effective_required`) and
-            -- via ``flags.mkdocs`` -- to demote the :data:`MKDOCS_EDITED`
-            files to lenient comparison when mkdocs is gone.
+            -- via ``flags.mkdocs`` and ``flags.secret_storage`` -- to demote
+            the :data:`MKDOCS_EDITED` and :data:`SECRET_STORAGE_EDITED` files
+            to lenient comparison when those features are gone.
     """
 
     template_root: Path
@@ -700,7 +711,8 @@ def replay_cleanup_pyproject(text: str) -> str:
     text = text.replace(
         'mypy_path = ["scripts", "scripts/template_setup"]', 'mypy_path = ["scripts"]'
     )
-    return text.replace('files = ["src", "tests", "scripts"]', 'files = ["src", "tests"]')
+    text = text.replace('files = ["src", "tests", "scripts"]', 'files = ["src", "tests"]')
+    return text.replace('paths = ["src", "scripts"]', 'paths = ["src"]')
 
 
 def replay_private_repo_deps(rel: str, text: str) -> str:
@@ -846,18 +858,22 @@ def normalize_project_text(rel: str, text: str) -> str:
     return strip_package_purpose(rel, text)
 
 
-def effective_strict(entry: BaselineFile, *, has_mkdocs: bool) -> bool:
+def effective_strict(entry: BaselineFile, *, has_mkdocs: bool, has_secret_storage: bool) -> bool:
     """Compute whether an entry is compared strictly for this project.
 
     Args:
         entry: The manifest entry.
         has_mkdocs: Whether the project still has mkdocs.
+        has_secret_storage: Whether the project still has the secret-storage
+            machinery.
 
     Returns:
-        ``False`` for the files remove_mkdocs.py edits when mkdocs was
-        removed; otherwise the entry's own strictness.
+        ``False`` for the files a removal script edits in place once that
+        feature is gone; otherwise the entry's own strictness.
     """
     if not has_mkdocs and entry.path in MKDOCS_EDITED:
+        return False
+    if not has_secret_storage and entry.path in SECRET_STORAGE_EDITED:
         return False
     return entry.strict
 
@@ -1172,7 +1188,9 @@ def compare_one(entry: BaselineFile, ctx: CompareContext) -> Comparison:
 
     template_raw = template_path.read_bytes()
     project_raw = project_path.read_bytes()
-    strict = effective_strict(entry, has_mkdocs=ctx.flags.mkdocs)
+    strict = effective_strict(
+        entry, has_mkdocs=ctx.flags.mkdocs, has_secret_storage=ctx.flags.secret_storage
+    )
 
     template_text = decode_text(template_raw)
     project_text = decode_text(project_raw)

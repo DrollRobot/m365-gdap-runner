@@ -1,4 +1,4 @@
-"""Tests for the config CLI (init / show / set / unset / profiles / secrets).
+"""Tests for the config CLI (init / open / show / set / unset / profiles / secrets).
 
 Commands run in-process via ``cli.main([...])`` with the config directory
 pointed at ``tmp_path`` and the schema swapped for a fixed test object, so
@@ -16,16 +16,17 @@ dispatcher imports, so the CLI reaches it through the real lookup in
 ``secrets.py``. Nothing here imports a concrete backend or its third-party
 dependency, so this file keeps working in a project that deleted one.
 
-The template schema's CREDENTIAL_BACKEND policy is "prompt" (no default
-backend), so tests that store secrets configure ``credential_backend``
-explicitly (in the config file, or through init's backend prompt); the fake
-registered as ``fake`` stands in for a real store. Policy-specific tests
-monkeypatch the schema constant.
+An autouse fixture pins the schema's CREDENTIAL_BACKEND policy to "prompt"
+(no default backend), whatever the project picked, so tests that store secrets
+configure ``credential_backend`` explicitly (in the config file, or through
+init's backend prompt); the fake registered as ``fake`` stands in for a real
+store. Policy-specific tests monkeypatch the schema constant themselves.
 """
 
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 import types
 from pathlib import Path
@@ -41,13 +42,14 @@ from tests._config_test_object import (
     ConfigTestObject,
     SecretTestObject,
     block_secrets_module,
+    pin_prompt_policy,
     requires_secret_storage,
 )
 
 # Version of this test module. It ships to projects generated from this
 # template, so bump on every change to let scripts/compare_to_template.py
 # flag stale copies.
-__version__ = "2.3.0"
+__version__ = "2.5.0"
 
 pytestmark = pytest.mark.unit
 
@@ -71,12 +73,18 @@ def _test_object_schema(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("m365_gdap_runner.config.cli.Settings", ConfigTestObject)
 
 
+@pytest.fixture(autouse=True)
+def _prompt_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test the CLI, not the project's CREDENTIAL_BACKEND choice."""
+    pin_prompt_policy(monkeypatch)
+
+
 @pytest.fixture
 def secret_schema(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Swap in the test object that declares a secret field.
+    """Install a schema with a secret field.
 
     Requested by every test that exercises a secret. It runs after the
-    autouse fixture above (autouse fixtures are set up first within a scope),
+    autouse fixtures above (autouse fixtures are set up first within a scope),
     so the secret-bearing object wins for those tests only.
     """
     monkeypatch.setattr("m365_gdap_runner.config.cli.Settings", SecretTestObject)
@@ -151,6 +159,71 @@ def _config_text(config_dir: Path) -> str:
 def test_path_prints_config_location(config_dir: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert cli.main(["path"]) == 0
     assert str(config_dir / "config.toml") in capsys.readouterr().out
+
+
+# --- open ----------------------------------------------------------------------------
+
+
+def _fake_run(calls: list[list[str]], returncode: int = 0) -> Any:
+    """Stand-in for ``subprocess.run`` that records argv instead of launching."""
+
+    def run(argv: list[str], check: bool) -> subprocess.CompletedProcess[str]:
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, returncode)
+
+    return run
+
+
+def test_open_missing_file_points_at_init(capsys: pytest.CaptureFixture[str]) -> None:
+    assert cli.main(["open"]) == 1
+    err = capsys.readouterr().err
+    assert "No config file" in err
+    assert "init" in err
+
+
+def test_open_on_windows_uses_startfile(monkeypatch: pytest.MonkeyPatch, config_dir: Path) -> None:
+    path = config_dir / "config.toml"
+    path.write_text('name = "n"\n', encoding="utf-8")
+    opened: list[Path] = []
+    monkeypatch.setattr("sys.platform", "win32")
+    monkeypatch.setattr("os.startfile", opened.append, raising=False)
+    assert cli.main(["open"]) == 0
+    assert opened == [path]
+
+
+@pytest.mark.parametrize(("platform", "opener"), [("darwin", "open"), ("linux", "xdg-open")])
+def test_open_on_posix_runs_the_platform_opener(
+    monkeypatch: pytest.MonkeyPatch, config_dir: Path, platform: str, opener: str
+) -> None:
+    path = config_dir / "config.toml"
+    path.write_text('name = "n"\n', encoding="utf-8")
+    calls: list[list[str]] = []
+    monkeypatch.setattr("sys.platform", platform)
+    monkeypatch.setattr("shutil.which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr("subprocess.run", _fake_run(calls))
+    assert cli.main(["open"]) == 0
+    assert calls == [[f"/usr/bin/{opener}", str(path)]]
+
+
+def test_open_without_opener_installed_is_actionable(
+    monkeypatch: pytest.MonkeyPatch, config_dir: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (config_dir / "config.toml").write_text('name = "n"\n', encoding="utf-8")
+    monkeypatch.setattr("sys.platform", "linux")
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    assert cli.main(["open"]) == 1
+    assert "'xdg-open' not found" in capsys.readouterr().err
+
+
+def test_open_opener_failure_is_reported(
+    monkeypatch: pytest.MonkeyPatch, config_dir: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (config_dir / "config.toml").write_text('name = "n"\n', encoding="utf-8")
+    monkeypatch.setattr("sys.platform", "linux")
+    monkeypatch.setattr("shutil.which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr("subprocess.run", _fake_run([], returncode=4))
+    assert cli.main(["open"]) == 1
+    assert "exited with status 4" in capsys.readouterr().err
 
 
 # --- init ----------------------------------------------------------------------------
@@ -267,7 +340,87 @@ def test_init_refuses_configured_target(
 ) -> None:
     (config_dir / "config.toml").write_text('name = "n"\n', encoding="utf-8")
     assert cli.main(["init"]) == 1
-    assert "already configured" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "already configured" in err
+    assert "init --force" in err
+
+
+@pytest.mark.integration
+def test_init_force_replaces_whole_file(
+    monkeypatch: pytest.MonkeyPatch, config_dir: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (config_dir / "config.toml").write_text(
+        '# old comment\nname = "old"\ncount = 9\ndefault_profile = "p"\n\n'
+        '[profiles.p]\nname = "pn"\n',
+        encoding="utf-8",
+    )
+    _feed_input(monkeypatch, ["n", "", "", "", ""])
+    assert cli.main(["init", "--force"]) == 0
+    text = _config_text(config_dir)
+    assert tomlkit.parse(text).unwrap() == {"name": "n"}
+    assert "# old comment" not in text
+    assert "starting over" in capsys.readouterr().out
+
+
+@pytest.mark.integration
+def test_init_force_with_profile_still_replaces_whole_file(
+    monkeypatch: pytest.MonkeyPatch, config_dir: Path
+) -> None:
+    (config_dir / "config.toml").write_text(
+        'name = "top"\n\n[profiles.p]\nname = "old"\n\n[profiles.q]\nname = "q"\n',
+        encoding="utf-8",
+    )
+    _feed_input(monkeypatch, ["n", "", "", "", ""])
+    assert cli.main(["init", "--profile", "p", "--force"]) == 0
+    assert tomlkit.parse(_config_text(config_dir)).unwrap() == {"profiles": {"p": {"name": "n"}}}
+
+
+@pytest.mark.integration
+def test_init_force_recovers_malformed_file(
+    monkeypatch: pytest.MonkeyPatch, config_dir: Path
+) -> None:
+    (config_dir / "config.toml").write_text("name = [unclosed\n", encoding="utf-8")
+    _feed_input(monkeypatch, ["n", "", "", "", ""])
+    assert cli.main(["init", "--force"]) == 0
+    assert tomlkit.parse(_config_text(config_dir))["name"] == "n"
+
+
+def test_init_force_aborted_keeps_old_file(
+    monkeypatch: pytest.MonkeyPatch, config_dir: Path
+) -> None:
+    original = 'name = "old"\n'
+    (config_dir / "config.toml").write_text(original, encoding="utf-8")
+
+    def abort(prompt: str = "") -> str:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("builtins.input", abort)
+    with pytest.raises(KeyboardInterrupt):
+        cli.main(["init", "--force"])
+    assert _config_text(config_dir) == original
+
+
+@requires_secret_storage
+@pytest.mark.integration
+@pytest.mark.usefixtures("secret_schema")
+def test_init_force_restarts_secret_setup_and_leaves_stored_values(
+    monkeypatch: pytest.MonkeyPatch,
+    config_dir: Path,
+    fake_backend: dict[tuple[str, str], str],
+) -> None:
+    (config_dir / "config.toml").write_text(
+        'name = "old"\ncredential_backend = "fake"\ntoken_secret_name = "old-name"\n',
+        encoding="utf-8",
+    )
+    fake_backend[(APP_NAME, "old-name")] = "old-tok"
+    # The backend choice is prompted again: nothing from the old file survives.
+    _feed_input(monkeypatch, ["n", "", "", "", "", "fake", ""])
+    _feed_getpass(monkeypatch, ["tok"])
+    assert cli.main(["init", "--force"]) == 0
+    document = tomlkit.parse(_config_text(config_dir))
+    assert document["credential_backend"] == "fake"
+    assert document["token_secret_name"] == "token"  # noqa: S105  (a name, not a secret)
+    assert fake_backend == {(APP_NAME, "old-name"): "old-tok", (APP_NAME, "token"): "tok"}
 
 
 # --- set / unset ---------------------------------------------------------------------

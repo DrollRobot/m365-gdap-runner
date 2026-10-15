@@ -31,10 +31,14 @@ repos:
   # detect-secrets
   - repo: local
     hooks:
+      # The wrapper fixes path matching on Windows, where the plain hook keeps
+      # baseline entries for files with no secrets left and CI then fails.
+      # Serial: parallel batches each rewrite the baseline and the last one wins.
       - id: detect-secrets
         name: Detect secrets
-        entry: uv run detect-secrets-hook --baseline .secrets.baseline
+        entry: uv run python tests/detect_secrets_hook.py --baseline .secrets.baseline
         language: system
+        require_serial: true
 
       # The hook above only checks that findings are *in* the baseline; this
       # gate requires every entry to be an audited false positive, so a
@@ -49,7 +53,7 @@ repos:
 
   # Ruff: lint + format
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.16.8
+    rev: v0.17.0
     hooks:
       - id: ruff
         args: [--fix]
@@ -99,6 +103,15 @@ repos:
       - id: uv-audit
         name: uv audit
         entry: uv audit
+        language: system
+        stages: [pre-push]
+        pass_filenames: false
+        always_run: true
+
+      # dead code checking
+      - id: vulture
+        name: vulture
+        entry: uv run vulture
         language: system
         stages: [pre-push]
         pass_filenames: false

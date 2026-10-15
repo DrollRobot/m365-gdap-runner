@@ -7,6 +7,7 @@ folder to sys.path, mirroring how the scripts import their shared _cli module.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -242,6 +243,15 @@ def test_diverged_identical_copy_is_clean(tmp_path: Path) -> None:
     main_repo, wt_path = _make_repos(tmp_path)
     (main_repo / ".env").write_text("A=1\n", encoding="utf-8")
     (wt_path / ".env").write_text("A=1\n", encoding="utf-8")
+    assert diverged_copies(main_repo, wt_path, [".env"]) == []
+
+
+def test_diverged_hard_link_is_clean(tmp_path: Path) -> None:
+    """A hard link still paired with the main repo's file is a candidate that compares equal."""
+    main_repo, wt_path = _make_repos(tmp_path)
+    (main_repo / ".env").write_text("A=1\n", encoding="utf-8")
+    os.link(main_repo / ".env", wt_path / ".env")
+    assert copied_config_candidates(wt_path) == [".env"]
     assert diverged_copies(main_repo, wt_path, [".env"]) == []
 
 

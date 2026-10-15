@@ -4,9 +4,9 @@ Intended for running multiple agents in parallel: each gets its own checkout
 on its own branch, forked from current upstream. A VS Code workspace is
 generated (copied from the repo's existing one where possible), forced to
 point only at its own worktree, and kept out of git via the shared
-.git/info/exclude. An empty '.local/' scratch directory is created for files
-that belong to this worktree alone; the repo's '*.local*' .gitignore rule keeps
-it untracked.
+.git/info/exclude. A '.local/' scratch directory is created and filled with
+links to the repo's own '.local/' files (like .env and .vscode); the repo's
+'*.local*' .gitignore rule keeps it untracked.
 
 Before creating the worktree it syncs the base branch: if your local base is
 ahead of origin it offers to push (so the new worktree, forked from
@@ -51,11 +51,11 @@ import _cli as cli
 # Version of this helper script itself. Bump on every change so copies in other
 # repos can be compared: patch = bugfix, minor = new flag/behavior, major =
 # breaking CLI change.
-__version__ = "1.5.0"
+__version__ = "1.6.0"
 
-# Scratch directory created in every worktree, for files that stay local to it.
-# The repo's '*.local*' .gitignore rule keeps its contents out of git. Git does
-# not check out empty directories, so each worktree needs its own created here.
+# Scratch directory created in every worktree. The repo's '*.local*' .gitignore
+# rule keeps its contents out of git, so git never checks it out: each worktree
+# gets its own created here, with the main repo's files linked in at bootstrap.
 LOCAL_DIR = ".local"
 
 
@@ -137,10 +137,16 @@ def find_source_workspace(search_dirs: list[Path], exclude_name: str) -> Path | 
 
 
 def link_or_copy(src: Path, dst: Path, label: str) -> None:
-    """Symlink ``dst`` to ``src``, copying instead where symlinks are unavailable.
+    """Link ``dst`` to ``src``, copying instead where no kind of link is available.
 
-    Creating symlinks on Windows requires Developer Mode or elevation, so a
-    plain copy is the fallback.
+    A symlink is tried first. On Windows that needs Developer Mode or elevation,
+    so a hard link is tried next: creating one needs no privilege, but it only
+    works for files on the same volume. A plain copy is the last resort.
+
+    A hard link shares the file's contents, so edits through either path are
+    seen by both. The two paths part ways if an editor saves by writing a new
+    file and renaming it over the old one; remove_worktree.py then treats the
+    worktree's file as a copy, so such edits are never discarded silently.
 
     Args:
         src: Existing file to link to.
@@ -150,9 +156,41 @@ def link_or_copy(src: Path, dst: Path, label: str) -> None:
     cli.echo(f"link {dst} -> {src}")
     try:
         dst.symlink_to(src)
+        return
+    except OSError:
+        pass
+    try:
+        os.link(src, dst)
+        cli.warn(f"  Symlink unavailable; hard-linked {label} instead.")
     except OSError:
         shutil.copyfile(src, dst)
-        cli.warn(f"  Symlink unavailable; copied {label} instead.")
+        cli.warn(f"  Links unavailable; copied {label} instead.")
+
+
+def local_dir_links(repo_root: Path, wt_path: Path) -> list[tuple[Path, Path, str]]:
+    """Pair every file under the repo's ``.local/`` with its place in the worktree.
+
+    Walks ``LOCAL_DIR`` recursively so notes in subfolders come along too. Files
+    already present in the worktree are skipped, never clobbered.
+
+    Args:
+        repo_root: The main repo, whose ``.local/`` files are the sources.
+        wt_path: The new worktree.
+
+    Returns:
+        ``(src, dst, label)`` triples in a stable order, ready for
+        :func:`link_or_copy`; empty when the repo has no ``.local/``.
+    """
+    local_src = repo_root / LOCAL_DIR
+    if not local_src.is_dir():
+        return []
+    links: list[tuple[Path, Path, str]] = []
+    for src in sorted(path for path in local_src.rglob("*") if path.is_file()):
+        rel = src.relative_to(repo_root)
+        dst = wt_path / rel
+        if not dst.exists():
+            links.append((src, dst, rel.as_posix()))
+    return links
 
 
 def push_base(base: str) -> None:
@@ -387,6 +425,10 @@ def main() -> None:
             if name.endswith(".example"):
                 continue
             links.append((env_file, wt_path / name, name))
+
+        # Link every file under .local/ too, so each worktree starts with the
+        # repo's notes and drafts. Files the worktree creates later stay its own.
+        links += local_dir_links(repo_root, wt_path)
 
         cli.section("Step: link config files")
         if links:

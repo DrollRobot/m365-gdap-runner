@@ -56,7 +56,7 @@ from m365_gdap_runner.config.schema import (
 # Version of this module. It ships to projects generated from this template,
 # so bump on every change to let scripts/compare_to_template.py flag stale
 # copies: patch = bugfix, minor = new behavior, major = breaking change.
-__version__ = "2.2.0"
+__version__ = "2.2.1"
 
 # Environment variable selecting the active profile.
 PROFILE_ENV = ENV_PREFIX + "PROFILE"
@@ -241,6 +241,8 @@ def _resolve(
                 f"No credential_backend is configured; choose one with "
                 f"'{CLI_NAME} set credential_backend <name>' (available: {available})."
             )
+        if profile_name is None and config.get("profiles"):
+            raise ConfigError(_no_profile_message(path, sorted(config["profiles"])))
         raise ConfigError(
             _missing_message(
                 missing, missing_secrets, document is not None, path, profile_name, backend_hint
@@ -433,6 +435,27 @@ def _check_type(name: str, value: Any, tp: Any, where: str) -> Any:
             f"{name!r} in {where} must be {tp!r}, got {type(value).__name__} ({value!r})."
         )
     return value
+
+
+def _no_profile_message(path: Path, profile_names: list[str]) -> str:
+    """Build the error message for a file with profiles when none is selected.
+
+    Reporting missing values misleads here: the values usually sit in a
+    profile, and the real fault is that no profile was picked.
+
+    Args:
+        path: Config file path.
+        profile_names: The profiles the file defines, sorted.
+
+    Returns:
+        A single-string message listing the profiles and every way to select one.
+    """
+    return (
+        f"No profile selected. Profiles defined in {path}: {', '.join(profile_names)}. "
+        "Select one with --profile NAME or "
+        f"the {PROFILE_ENV} environment variable, or set a default with "
+        f"'{CLI_NAME} use NAME'."
+    )
 
 
 def _missing_message(
