@@ -42,6 +42,7 @@ LICENSED_USERS = EXAMPLES / "licensed_users.py"
 AUDIT_DISABLED = EXAMPLES / "audit_disabled.py"
 MAILBOX_AUDIT_GAPS = EXAMPLES / "mailbox_audit_gaps.py"
 UNIFIED_AUDIT_LOG = EXAMPLES / "unified_audit_log.py"
+DISABLE_CONNECTWISE = EXAMPLES / "disable_connectwise_backup_sign_in.py"
 
 
 def _example(path: Path) -> Payload:
@@ -391,3 +392,114 @@ def test_unified_audit_log_writes_no_workbook_when_no_tenant_ran(
     unified_audit_log.report([])
     assert not (tmp_path / "reports").exists()
     assert capsys.readouterr().out == "No tenants ran; no workbook written.\n"
+
+
+# --- disable_connectwise_backup_sign_in.py -----------------------------------------------
+
+CONNECTWISE_APP_ID = "cw000000-0000-0000-0000-000000000001"
+
+
+def _connectwise_app(object_id: str, *, enabled: bool) -> dict[str, Any]:
+    """Build the app's service principal as the filtered read returns it."""
+    return {
+        "id": object_id,
+        "appId": CONNECTWISE_APP_ID,
+        "displayName": "ConnectWise Cloud Backup",
+        "accountEnabled": enabled,
+    }
+
+
+def _connectwise_services(
+    apps: dict[str, list[dict[str, Any]]], patches: list[httpx.Request]
+) -> httpx.MockTransport:
+    """Fake Graph holding *apps* per tenant, recording every PATCH it is sent."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1.0/servicePrincipals":
+            assert request.url.params["$filter"] == "displayName eq 'ConnectWise Cloud Backup'"
+            return httpx.Response(200, json={"value": apps.get(bearer_tenant(request), [])})
+        if request.method == "PATCH":
+            patches.append(request)
+            return httpx.Response(204)
+        return fake_services(request)
+
+    return httpx.MockTransport(handler)
+
+
+@pytest.fixture
+def connectwise(monkeypatch: pytest.MonkeyPatch) -> Any:
+    """The example, run through ``main()`` with ``--all``, as its own parser would."""
+    monkeypatch.setenv(ENV_PREFIX + "PARTNER_TENANT_ID", PARTNER_TENANT)
+    monkeypatch.setenv(ENV_PREFIX + "USERNAME", USER)
+    monkeypatch.setattr(cli, "configure_logging", lambda verbosity: None)
+    return load_script(DISABLE_CONNECTWISE)
+
+
+def _run_all(module: Any, transport: httpx.MockTransport) -> int:
+    parser = argparse.ArgumentParser()
+    cli.add_arguments(parser)
+    return cli.main(module, parser.parse_args(["--all"]), transport=transport)
+
+
+def test_connectwise_dry_run_changes_nothing_and_says_what_would_change(
+    fake_msal: FakeMsal,
+    monkeypatch: pytest.MonkeyPatch,
+    connectwise: Any,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(connectwise, "DRY_RUN", True)
+    patches: list[httpx.Request] = []
+    apps = {TENANT_A: [_connectwise_app("sp-a", enabled=True)]}
+
+    assert _run_all(connectwise, _connectwise_services(apps, patches)) == 0
+
+    assert patches == []
+    assert capsys.readouterr().out == (
+        "Dry run: nothing was changed.\n"
+        f"Alpha      would disable (appId {CONNECTWISE_APP_ID})\n"
+        "beta corp  not found\n"
+    )
+    # The dry run checks consent for the write scope the real run needs.
+    assert fake_msal.silent_calls(TENANT_A)[0] == (
+        GRAPH_CLI_CLIENT_ID,
+        ("https://graph.microsoft.com/Application.ReadWrite.All",),
+    )
+
+
+def test_connectwise_disables_sign_in_where_it_is_still_enabled(
+    fake_msal: FakeMsal, connectwise: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    patches: list[httpx.Request] = []
+    apps = {
+        TENANT_A: [_connectwise_app("sp-a", enabled=True)],
+        TENANT_B: [_connectwise_app("sp-b", enabled=False)],
+    }
+
+    assert _run_all(connectwise, _connectwise_services(apps, patches)) == 0
+
+    (patch,) = patches
+    assert patch.url.path == "/v1.0/servicePrincipals/sp-a"
+    assert bearer_tenant(patch) == TENANT_A
+    assert json.loads(patch.content) == {"accountEnabled": False}
+    assert capsys.readouterr().out == (
+        f"Alpha      disabled (appId {CONNECTWISE_APP_ID})\n"
+        f"beta corp  already disabled (appId {CONNECTWISE_APP_ID})\n"
+    )
+
+
+def test_connectwise_report_lists_the_tenants_that_failed(
+    connectwise: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    connectwise.report(
+        [
+            TenantResult(
+                Tenant(TENANT_A, "Alpha"),
+                "ok",
+                [{"appId": CONNECTWISE_APP_ID, "id": "sp-a", "action": "disabled"}],
+            ),
+            TenantResult(Tenant(TENANT_B, "beta corp"), "auth_failed", error="AADSTS65001"),
+        ]
+    )
+    assert capsys.readouterr().out == (
+        f"Alpha      disabled (appId {CONNECTWISE_APP_ID})\nbeta corp  auth_failed: AADSTS65001\n"
+    )

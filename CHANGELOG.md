@@ -45,8 +45,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `examples/audit_disabled.py` (Exchange Online; no `report()`, its log is the report),
   `examples/mailbox_audit_gaps.py` (mailboxes whose audit actions lag Microsoft's defaults,
   read through Exchange's REST endpoint; an Excel workbook per tenant and a summary
-  workbook, in the folder its own `--out` flag names), and `examples/unified_audit_log.py`
-  (whether the unified audit log is on in each tenant; one Excel workbook for the run).
+  workbook, in the folder its own `--out` flag names), `examples/unified_audit_log.py`
+  (whether the unified audit log is on in each tenant; one Excel workbook for the run), and
+  `examples/disable_connectwise_backup_sign_in.py` (Graph; disables user sign-in on the
+  ConnectWise Cloud Backup enterprise app, with a `--dry-run` flag that changes nothing).
 - Supports Python 3.11 and newer. CI tests every supported version, 3.11 through 3.14, on
   Ubuntu, macOS and Windows.
 
