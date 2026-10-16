@@ -46,6 +46,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `examples/mailbox_audit_gaps.py` (mailboxes whose audit actions lag Microsoft's defaults,
   read through Exchange's REST endpoint; an Excel workbook per tenant and a summary
   workbook, in the folder its own `--out` flag names).
+- Supports Python 3.11 and newer. CI tests every supported version, 3.11 through 3.14, on
+  Ubuntu, macOS and Windows.
 
 ### Changed
 

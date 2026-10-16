@@ -10,7 +10,7 @@ name = "m365-gdap-runner"
 version = "0.1.0"
 description = "Run Python scripts across GDAP customer tenants from a single partner sign-in."
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.11"
 dependencies = [
     "azure-auth",
     "httpx>=0.28.1,<1",
@@ -88,7 +88,7 @@ markers = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py314"
+target-version = "py311"
 
 [tool.ruff.lint]
 # E/W = pycodestyle, D = pydocstyle, F = pyflakes, I = isort, B = bugbear,
@@ -104,7 +104,7 @@ extend-ignore = ["ANN401"]  # Any in **kwargs is a legitimate pass-through annot
 convention = "google"
 
 [tool.mypy]
-python_version = "3.14"
+python_version = "3.11"
 strict = true
 files = ["src", "tests", "scripts", "examples"]
 mypy_path = ["scripts", "scripts/template_setup"]

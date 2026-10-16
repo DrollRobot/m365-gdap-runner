@@ -23,7 +23,7 @@ name = "m365-gdap-runner"
 github_user = "DrollRobot"
 
 # Python version (MAJOR.MINOR or MAJOR.MINOR.PATCH).
-python_version = "3.14"
+python_version = "3.11"
 
 # Initial version written to pyproject.toml. Use 0.1.0, not the template's
 # own accumulated release number -- a new project hasn't released anything.

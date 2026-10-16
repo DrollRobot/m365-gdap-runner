@@ -2,7 +2,7 @@
 
 <!-- FIXME: point these badges at your own repo, and drop the ones you don't use -->
 [![CI](https://github.com/DrollRobot/m365_gdap_runner/actions/workflows/ci.yml/badge.svg)](https://github.com/DrollRobot/m365_gdap_runner/actions/workflows/ci.yml)
-[![Python](https://img.shields.io/badge/python-3.14%2B-blue)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
 <!-- FIXME: match the badge and the link below to the license you chose -->
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -27,7 +27,7 @@ library from its `__main__` block. Its header tells uv what it needs:
 
 ```python
 # /// script
-# requires-python = ">=3.14"
+# requires-python = ">=3.11"
 # dependencies = [
 #   "m365-gdap-runner @ git+https://github.com/DrollRobot/m365-gdap-runner.git@v0.1.0",
 # ]
