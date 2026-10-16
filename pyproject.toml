@@ -8,7 +8,7 @@ package-data = { m365_gdap_runner = ["py.typed"] }
 [project]
 name = "m365-gdap-runner"
 version = "0.1.0"
-description = "Run one Python payload across GDAP customer tenants from a single partner sign-in."
+description = "Run Python scripts across GDAP customer tenants from a single partner sign-in."
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
@@ -54,7 +54,7 @@ constraint-dependencies = [
 azure-auth = { git = "https://github.com/DrollRobot/azure-auth.git", tag = "v0.4.0" }
 
 [project.scripts]
-m365-gdap-runner = "m365_gdap_runner.main:main"
+m365-gdap-runner = "m365_gdap_runner.cli:list_tenants"
 m365-gdap-runner-config = "m365_gdap_runner.config.cli:main"
 
 [tool.pytest.ini_options]

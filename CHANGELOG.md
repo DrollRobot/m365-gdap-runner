@@ -9,12 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `m365-gdap-runner` CLI: one partner sign-in per client the payload uses, GDAP tenant
-  listing, and a payload's `run(ctx)` executed per tenant with consent checks, error
-  isolation, `--jobs` parallelism, and JSON/CSV output.
-- Payload contract: `run(ctx)`, the Graph `SCOPES` it needs, and `CLIENTS` naming which of
-  `ctx.graph`, `ctx.exchange`, `ctx.ipps` and `ctx.azure` it uses (default `graph`). File
-  and entry-point loading, and `standalone()` for running a payload against one tenant.
+- A library for scripts that run across GDAP tenants. A script calls `main(__name__)` from
+  its `__main__` block, and `uv run script.py` then signs in once per client it uses, lists
+  GDAP tenants, and runs its `run(ctx)` per tenant with consent checks, error isolation,
+  `--jobs` parallelism, and JSON/CSV output. `add_arguments()` adds the library's flags to a
+  script's own parser, for scripts with flags of their own.
+- Script contract: `run(ctx)`, the Graph `SCOPES` it needs, and `CLIENTS` naming which of
+  `ctx.graph`, `ctx.exchange`, `ctx.ipps` and `ctx.azure` it uses (default `graph`).
 - `TenantContext`: the tenant, its azure-auth context (`ctx.auth`, usable with any
   azure-auth or Azure SDK client), and one ready-made client per declared kind, each
   checked in the customer tenant before `run()` starts.
@@ -28,12 +29,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tenants marked in that column
   (repeatable, combines with `--tenant`), `--all` runs every GDAP tenant, and a run that
   names neither `--group`, `--tenant` nor `--all` is refused. Every run appends the GDAP
-  tenants the file lacks and warns which; `--list-tenants` creates or refreshes the file
-  without running anything. Setting `tenants_file` and flag `--tenants-file` locate the file
+  tenants the file lacks and warns which; the `m365-gdap-runner` command creates or refreshes
+  the file and lists the tenants. Setting `tenants_file` and flag `--tenants-file` locate the file
   (default `tenants.csv` in the config directory).
-- Example payloads `examples/licensed_users.py` (Graph), `examples/audit_disabled.py`
+- Example scripts `examples/licensed_users.py` (Graph), `examples/audit_disabled.py`
   (Exchange Online), and `examples/mailbox_audit_gaps.py` (mailboxes whose audit actions
-  lag Microsoft's defaults, read through Exchange's REST endpoint).
+  lag Microsoft's defaults, read through Exchange's REST endpoint), each with the header
+  `uv run` builds its environment from.
 
 ### Changed
 

@@ -1,4 +1,4 @@
-"""Integration tests: runner with the real session, azure-auth clients, loader and examples."""
+"""Integration tests: runner with the real session, azure-auth clients and the examples."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from azure_auth.constants import EXCHANGE_POWERSHELL_CLIENT_ID, GRAPH_CLI_CLIENT
 
 from m365_gdap_runner.config.paths import CONFIG_DIR_ENV
 from m365_gdap_runner.config.schema import ENV_PREFIX
-from m365_gdap_runner.loader import load_payload
+from m365_gdap_runner.loader import Payload, payload_from_module
 from m365_gdap_runner.runner import run_payload
 from m365_gdap_runner.session import PartnerSession
 from tests._gdap_fakes import (
@@ -23,6 +23,7 @@ from tests._gdap_fakes import (
     FakeMsal,
     bearer_tenant,
     fake_services,
+    load_script,
     make_settings,
 )
 
@@ -32,6 +33,10 @@ EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
 LICENSED_USERS = EXAMPLES / "licensed_users.py"
 AUDIT_DISABLED = EXAMPLES / "audit_disabled.py"
 MAILBOX_AUDIT_GAPS = EXAMPLES / "mailbox_audit_gaps.py"
+
+
+def _example(path: Path) -> Payload:
+    return payload_from_module(load_script(path), path.stem)
 
 
 @pytest.fixture(autouse=True)
@@ -51,7 +56,7 @@ def test_graph_example_runs_through_session_and_azure_auth(fake_msal: FakeMsal) 
         seen.append(request)
         return fake_services(request)
 
-    payload = load_payload(str(LICENSED_USERS))
+    payload = _example(LICENSED_USERS)
     session = PartnerSession(make_settings(), transport=httpx.MockTransport(handler))
     session.login(payload.clients)
     tenants = session.list_tenants()
@@ -81,7 +86,7 @@ def test_graph_example_runs_through_session_and_azure_auth(fake_msal: FakeMsal) 
 
 
 def test_exchange_example_signs_in_to_exchange_and_runs_the_cmdlet(fake_msal: FakeMsal) -> None:
-    payload = load_payload(str(AUDIT_DISABLED))
+    payload = _example(AUDIT_DISABLED)
     assert (payload.clients, payload.scopes) == (("exchange",), ())
 
     session = PartnerSession(make_settings(), transport=httpx.MockTransport(fake_services))
@@ -155,7 +160,7 @@ def test_mailbox_audit_example_reads_mailboxes_through_the_rest_endpoint(
         seen.append(request)
         return _audit_services(request)
 
-    payload = load_payload(str(MAILBOX_AUDIT_GAPS))
+    payload = _example(MAILBOX_AUDIT_GAPS)
     session = PartnerSession(make_settings(), transport=httpx.MockTransport(handler))
     session.login(payload.clients)
     results = run_payload(session, payload, session.list_tenants(), output_format="csv")

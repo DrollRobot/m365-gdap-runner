@@ -1,12 +1,18 @@
-"""Example payload: is mailbox auditing switched off tenant-wide?
+# /// script
+# requires-python = ">=3.14"
+# dependencies = [
+#   "m365-gdap-runner @ git+https://github.com/DrollRobot/m365-gdap-runner.git@v0.1.0",
+# ]
+# ///
+"""Example script: is mailbox auditing switched off tenant-wide?
 
-Shows a payload that uses Exchange Online instead of Graph. Run it across tenants::
+Shows a script that uses Exchange Online instead of Graph. Run it across tenants::
 
-    uv run m365-gdap-runner examples/audit_disabled.py --format csv --output audit.csv
+    uv run audit_disabled.py --all --format csv --output audit.csv
 
-or directly against one tenant::
+or against one tenant::
 
-    uv run python examples/audit_disabled.py --tenant Contoso
+    uv run audit_disabled.py --tenant Contoso
 """
 
 from __future__ import annotations
@@ -22,7 +28,7 @@ def run(ctx: TenantContext) -> dict[str, object]:
     """Return the tenant's organisation-wide audit switch.
 
     Args:
-        ctx: The tenant context supplied by the runner or ``standalone()``.
+        ctx: The tenant context supplied by the runner.
 
     Returns:
         One row with ``name`` (the organisation's name in Exchange) and
@@ -37,9 +43,6 @@ def run(ctx: TenantContext) -> dict[str, object]:
 
 
 if __name__ == "__main__":
-    import json
+    from m365_gdap_runner import main
 
-    from m365_gdap_runner import standalone
-
-    with standalone(clients=CLIENTS) as ctx:
-        print(json.dumps(run(ctx), indent=2))
+    raise SystemExit(main(__name__))

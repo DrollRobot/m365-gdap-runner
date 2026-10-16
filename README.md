@@ -6,10 +6,10 @@
 <!-- FIXME: match the badge and the link below to the license you chose -->
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-Run one Python payload across every customer tenant you reach through GDAP, from a single
-partner sign-in. The runner owns the loop: sign-in, tenant listing, consent checks, error
+Run a Python script across every customer tenant you reach through GDAP, from a single
+partner sign-in. The library owns the loop: sign-in, tenant listing, consent checks, error
 isolation, parallelism and merged JSON/CSV output. Authentication and the service clients
-come from [azure-auth](https://github.com/DrollRobot/azure-auth); payloads contain neither.
+come from [azure-auth](https://github.com/DrollRobot/azure-auth); scripts contain neither.
 
 ## Installation
 
@@ -20,10 +20,16 @@ uv add git+https://github.com/DrollRobot/m365_gdap_runner.git
 
 ## Usage
 
-A payload declares which clients it uses and, for Graph, which scopes, then implements
-`run(ctx)`:
+A script declares which clients it uses and, for Graph, which scopes, implements `run(ctx)`,
+and hands itself to the library from its `__main__` block. Its header tells uv what it needs:
 
 ```python
+# /// script
+# requires-python = ">=3.14"
+# dependencies = [
+#   "m365-gdap-runner @ git+https://github.com/DrollRobot/m365-gdap-runner.git@v0.1.0",
+# ]
+# ///
 from m365_gdap_runner import TenantContext
 
 CLIENTS = ["graph"]
@@ -33,16 +39,23 @@ SCOPES = ["User.Read.All"]
 def run(ctx: TenantContext) -> list[dict[str, str]]:
     users = ctx.graph.get_all("/users", params={"$select": "userPrincipalName"})
     return [{"userPrincipalName": u["userPrincipalName"]} for u in users]
+
+
+if __name__ == "__main__":
+    from m365_gdap_runner import main
+
+    raise SystemExit(main(__name__))
 ```
 
 ```bash
-m365-gdap-runner-config init                         # partner tenant and sign-in name
-m365-gdap-runner --list-tenants                      # creates tenants.csv; add TRUE/FALSE group columns
-m365-gdap-runner users.py --group pilot --format csv --output users.csv
+m365-gdap-runner-config init           # partner tenant and sign-in name
+m365-gdap-runner                       # creates tenants.csv; add TRUE/FALSE group columns
+uv run users.py --group pilot --format csv --output users.csv
 ```
 
 Tenants are chosen with `--group` (a column of the tenants CSV), `--tenant` or `--all`, less
-`--exclude`. `ctx` also offers `exchange`, `ipps` and `azure` clients when declared in
+`--exclude`. A script with flags of its own adds the library's to its parser with
+`add_arguments()`. `ctx` also offers `exchange`, `ipps` and `azure` clients when declared in
 `CLIENTS`, and `ctx.auth`, the azure-auth context, for anything else. See
 [docs/index.md](docs/index.md) and `examples/`.
 

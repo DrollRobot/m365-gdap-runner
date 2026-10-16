@@ -12,11 +12,15 @@ azure-auth's Exchange client can read the tenant GUID out of it the way it does 
 from __future__ import annotations
 
 import base64
+import importlib.util
 import json
+import sys
 import threading
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 import azure_auth
@@ -52,6 +56,19 @@ def make_settings(**overrides: Any) -> Settings:
     values: dict[str, Any] = {"partner_tenant_id": PARTNER_TENANT, "username": USER}
     values.update(overrides)
     return Settings(**values)
+
+
+def load_script(path: Path) -> ModuleType:
+    """Import a script file as its own module, the way running it would, minus ``__main__``."""
+    name = f"_test_script_{uuid.uuid4().hex}"
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    # Registered first, as for any import: dataclasses look their module up while being built.
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 # --- tokens ------------------------------------------------------------------------------

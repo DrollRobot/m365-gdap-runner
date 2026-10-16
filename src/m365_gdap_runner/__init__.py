@@ -1,11 +1,12 @@
-"""Run one Python payload across GDAP customer tenants from a single partner sign-in.
+"""Run a Python script across GDAP customer tenants from a single partner sign-in.
 
-Authentication is azure-auth's job. This package signs in once per client the payload
-uses, lists the customer tenants, and calls the payload's ``run(ctx)`` for each one
-with error isolation, optional parallelism, and merged JSON or CSV output.
+Authentication is azure-auth's job. This library signs in once per client the script uses,
+lists the customer tenants, and calls the script's ``run(ctx)`` for each one with error
+isolation, optional parallelism, and merged JSON or CSV output.
 
-A payload is a module with ``run(ctx)``, the Graph ``SCOPES`` it needs, and which
-``CLIENTS`` it uses (``graph`` by default; also ``exchange``, ``ipps``, ``azure``)::
+A script is a ``.py`` file with ``run(ctx)``, the Graph ``SCOPES`` it needs, and which
+``CLIENTS`` it uses (``graph`` by default; also ``exchange``, ``ipps``, ``azure``). Its
+``__main__`` block hands it to :func:`main`::
 
     from m365_gdap_runner import TenantContext
 
@@ -18,20 +19,21 @@ A payload is a module with ``run(ctx)``, the Graph ``SCOPES`` it needs, and whic
         return {"users": len(users), "audit_disabled": config["AuditDisabled"]}
 
     if __name__ == "__main__":
-        import json
-        from m365_gdap_runner import standalone
-        print(json.dumps(run(standalone(SCOPES, CLIENTS)), indent=2))
+        from m365_gdap_runner import main
 
-Run it with ``m365-gdap-runner my_payload.py --group pilot``, where ``pilot`` is a TRUE/FALSE
-column of the tenants file (see ``tenants.py``); ``--tenant`` and ``--all`` are the other
-ways to choose tenants.
+        raise SystemExit(main(__name__))
+
+Run it with ``uv run my_script.py --group pilot``, where ``pilot`` is a TRUE/FALSE column of
+the tenants file (see ``tenants.py``); ``--tenant`` and ``--all`` are the other ways to choose
+tenants. A script with flags of its own adds the library's to its parser with
+:func:`add_arguments` and passes the parsed result to :func:`main`.
 """
 
 from __future__ import annotations
 
+from m365_gdap_runner.cli import add_arguments, main
 from m365_gdap_runner.context import CLIENT_KINDS, ClientNotDeclared, TenantContext
 from m365_gdap_runner.session import PartnerSession
-from m365_gdap_runner.standalone import standalone
 from m365_gdap_runner.tenants import Tenant
 
 # __all__ controls what `from m365_gdap_runner import *` exports and what static
@@ -42,5 +44,6 @@ __all__ = [
     "PartnerSession",
     "Tenant",
     "TenantContext",
-    "standalone",
+    "add_arguments",
+    "main",
 ]

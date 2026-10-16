@@ -37,7 +37,7 @@ class ClientNotDeclared(RuntimeError):
             kind: The client kind that was asked for.
         """
         super().__init__(
-            f"ctx.{kind} is not available: {kind!r} is not in this payload's CLIENTS, so it "
+            f"ctx.{kind} is not available: {kind!r} is not in this script's CLIENTS, so it "
             "was never signed in to or checked. Add it to CLIENTS."
         )
         self.kind = kind

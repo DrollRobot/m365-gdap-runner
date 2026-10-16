@@ -1,23 +1,33 @@
-"""Example payload: licensed users in each tenant.
+# /// script
+# requires-python = ">=3.14"
+# dependencies = [
+#   "m365-gdap-runner @ git+https://github.com/DrollRobot/m365-gdap-runner.git@v0.1.0",
+# ]
+# ///
+"""Example script: licensed users in each tenant.
 
-Copy this file as the starting point for new payloads. Run it across a group of tenants::
+Copy this file as the starting point for new scripts. The header above tells uv what the
+script needs, so ``uv run`` builds its environment; run it across a group of tenants::
 
-    uv run m365-gdap-runner examples/licensed_users.py --group pilot --format csv --output users.csv
+    uv run licensed_users.py --group pilot --format csv --output users.csv
 
-or directly against one tenant::
+or against one tenant::
 
-    uv run python examples/licensed_users.py --tenant Contoso
+    uv run licensed_users.py --tenant Contoso
+
+In this repository, ``uv run python examples/licensed_users.py ...`` runs it against the
+working copy instead of the release the header names.
 """
 
 from __future__ import annotations
 
 from m365_gdap_runner import TenantContext
 
-# Which of ctx.graph, ctx.exchange, ctx.ipps and ctx.azure this payload uses. The runner
+# Which of ctx.graph, ctx.exchange, ctx.ipps and ctx.azure this script uses. The runner
 # signs in once per client at the partner tenant and checks each in every customer tenant.
 CLIENTS = ["graph"]
 
-# Delegated Graph scopes this payload needs in every customer tenant.
+# Delegated Graph scopes this script needs in every customer tenant.
 SCOPES = ["User.Read.All"]
 
 
@@ -25,7 +35,7 @@ def run(ctx: TenantContext) -> list[dict[str, str]]:
     """Return every licensed user in the tenant.
 
     Args:
-        ctx: The tenant context supplied by the runner or ``standalone()``.
+        ctx: The tenant context supplied by the runner.
 
     Returns:
         One row per licensed user with ``userPrincipalName``, ``displayName``,
@@ -57,9 +67,6 @@ def run(ctx: TenantContext) -> list[dict[str, str]]:
 
 
 if __name__ == "__main__":
-    import json
+    from m365_gdap_runner import main
 
-    from m365_gdap_runner import standalone
-
-    with standalone(SCOPES, CLIENTS) as ctx:
-        print(json.dumps(run(ctx), indent=2))
+    raise SystemExit(main(__name__))

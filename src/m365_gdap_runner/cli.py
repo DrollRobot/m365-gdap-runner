@@ -1,13 +1,21 @@
-"""Command-line entry point: ``m365-gdap-runner``.
+"""Running a script across tenants, and the ``m365-gdap-runner`` command.
 
-Signs in once per client the payload uses, lists GDAP customer tenants, and runs
-one payload against the selected tenants::
+A script runs itself: its ``__main__`` block hands the module to :func:`main`, which reads
+the command line, signs in once per client the script uses, lists GDAP customer tenants, and
+calls the script's ``run(ctx)`` for each selected tenant::
 
-    uv run m365-gdap-runner examples/licensed_users.py --group pilot --format csv
+    if __name__ == "__main__":
+        from m365_gdap_runner import main
+
+        raise SystemExit(main(__name__))
+
+then ``uv run audit.py --group pilot``. A script with flags of its own builds the parser,
+adds the library's flags with :func:`add_arguments`, and passes what it parsed to ``main()``.
 
 Tenants are chosen with ``--group`` (a TRUE/FALSE column of the tenants file, see
 ``tenants.py``), ``--tenant`` or ``--all``, less ``--exclude``; a run that names none is
-refused. Every run appends GDAP tenants the file lacks, and ``--list-tenants`` does only that.
+refused. Every run appends GDAP tenants the file lacks. The ``m365-gdap-runner`` command
+(:func:`list_tenants`) does only that, and prints the list.
 
 Configuration comes from the config system (see ``src/m365_gdap_runner/config/``);
 ``--partner-tenant-id``, ``--username``, ``--client-id``, ``--cache``, ``--cloud`` and
@@ -15,7 +23,7 @@ Configuration comes from the config system (see ``src/m365_gdap_runner/config/``
 output (``--output -``).
 
 Exit codes: 0 all tenants ok; 1 any tenant not ok; 2 usage, configuration,
-payload, sign-in, enumeration, tenants-file, or tenant-selection error; 130 interrupted.
+script, sign-in, enumeration, tenants-file, or tenant-selection error; 130 interrupted.
 """
 
 from __future__ import annotations
@@ -24,12 +32,14 @@ import argparse
 import logging
 import sys
 from collections.abc import Sequence
+from pathlib import Path
+from types import ModuleType
 
 import httpx
 from azure_auth import AuthError, ResourceError
 
 from m365_gdap_runner.config import ConfigError, Settings, load_settings
-from m365_gdap_runner.loader import PayloadInvalid, PayloadNotFound, load_payload
+from m365_gdap_runner.loader import PayloadInvalid, payload_from_module
 from m365_gdap_runner.output import FORMATS, STDOUT, OutputFormatError, write_results
 from m365_gdap_runner.runner import RunInterrupted, TenantLogFilter, run_payload, summarize
 from m365_gdap_runner.session import CACHE_KINDS, PartnerSession
@@ -50,10 +60,9 @@ EXIT_TENANT_FAILED = 1
 EXIT_USAGE = 2
 EXIT_INTERRUPTED = 130
 
-# Errors that end a run before any payload executes.
+# Errors that end a run before any tenant is processed.
 SETUP_ERRORS = (
     ConfigError,
-    PayloadNotFound,
     PayloadInvalid,
     AuthError,
     TenantFileError,
@@ -87,37 +96,130 @@ _SETTING_FLAGS = (
         "NAME",
         "Cloud of the partner tenant: Commercial, USGov, USGovDoD or China (default: look it up).",
     ),
+    (
+        "tenants_file",
+        "PATH",
+        "Tenants CSV (default: the tenants_file setting, else tenants.csv in the config "
+        "directory).",
+    ),
 )
 
 
-def add_settings_arguments(parser: argparse.ArgumentParser) -> None:
-    """Add the flags that override settings (shared with :func:`standalone`).
+def _positive_int(value: str) -> int:
+    """Parse a whole number of at least 1, for ``--jobs``.
+
+    Args:
+        value: The flag's text.
+
+    Returns:
+        The number.
+
+    Raises:
+        argparse.ArgumentTypeError: If the text is not a whole number of at least 1.
+    """
+    try:
+        number = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{value!r} is not a whole number") from None
+    if number < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return number
+
+
+def _add_settings_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add the flags that override settings, and ``-v``.
 
     Args:
         parser: Parser to extend.
     """
-    parser.add_argument(
+    group = parser.add_argument_group("m365-gdap-runner settings")
+    group.add_argument(
         "--profile",
         default=None,
         help="Config profile to use (default: default_profile from config.toml).",
     )
     for name, metavar, help_text in _SETTING_FLAGS:
-        parser.add_argument(
+        group.add_argument(
             "--" + name.replace("_", "-"), default=None, metavar=metavar, help=help_text
         )
-    parser.add_argument(
+    group.add_argument(
         "--cache",
         choices=CACHE_KINDS,
         default=None,
         help="Token cache: memory (default) or disk, an encrypted file that lets later runs "
         "skip the browser sign-in.",
     )
+    group.add_argument(
+        "-v",
+        "--verbose",
+        action="count",
+        default=0,
+        help="-v: debug logs from this tool and the script; -vv: also from libraries.",
+    )
+
+
+def add_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add every flag :func:`main` reads to a script's own parser.
+
+    Call it once, after adding the script's own flags; ``-h`` then lists both. Flag names
+    the script uses for itself must not clash with these.
+
+    Args:
+        parser: The script's parser.
+    """
+    tenants = parser.add_argument_group("m365-gdap-runner tenants")
+    tenants.add_argument(
+        "--group",
+        action="append",
+        default=None,
+        metavar="NAME",
+        help=(
+            "Run the tenants marked TRUE in this column of the tenants file "
+            "(repeatable; groups add up)."
+        ),
+    )
+    tenants.add_argument(
+        "--tenant",
+        action="append",
+        default=None,
+        metavar="NAME_OR_ID",
+        help="Run this tenant, by display name or ID (repeatable).",
+    )
+    tenants.add_argument("--all", action="store_true", help="Run every GDAP tenant.")
+    tenants.add_argument(
+        "--exclude",
+        action="append",
+        default=None,
+        metavar="NAME_OR_ID",
+        help="Skip this tenant (repeatable).",
+    )
+    run = parser.add_argument_group("m365-gdap-runner run")
+    run.add_argument(
+        "--output", default=STDOUT, metavar="PATH", help="Output file, or - for stdout (default)."
+    )
+    run.add_argument(
+        "--format", choices=FORMATS, default="json", help="Output format (default: json)."
+    )
+    run.add_argument(
+        "--continue-on-error",
+        action="store_true",
+        help="Keep running other tenants after an error in run().",
+    )
+    run.add_argument(
+        "--jobs",
+        type=_positive_int,
+        default=1,
+        metavar="N",
+        help=(
+            "Tenants to run concurrently (default: 1). 5-8 suits read-only reports; "
+            "keep 1 for scripts that write unless they are idempotent."
+        ),
+    )
+    _add_settings_arguments(parser)
 
 
 def settings_from_args(args: argparse.Namespace) -> Settings:
-    """Resolve settings with the flags from :func:`add_settings_arguments` as overrides.
-
-    ``--tenants-file`` belongs to the runner command only, so it is read when present.
+    """Resolve settings with the flags from :func:`add_arguments` as overrides.
 
     Args:
         args: Parsed arguments.
@@ -135,119 +237,24 @@ def settings_from_args(args: argparse.Namespace) -> Settings:
             overrides[name] = value
     if args.cache is not None:
         overrides["cache"] = args.cache
-    tenants_file = getattr(args, "tenants_file", None)
-    if tenants_file is not None:
-        overrides["tenants_file"] = tenants_file
     return load_settings(profile=args.profile, overrides=overrides)
 
 
-def build_parser() -> argparse.ArgumentParser:
-    """Build the command-line parser.
-
-    Returns:
-        The parser.
-    """
-    parser = argparse.ArgumentParser(
-        prog="m365-gdap-runner",
-        description="Run a payload's run(ctx) against GDAP customer tenants from one sign-in.",
-    )
-    parser.add_argument(
-        "payload", nargs="?", metavar="PAYLOAD", help="Payload .py file or installed payload name."
-    )
-    parser.add_argument(
-        "--group",
-        action="append",
-        default=None,
-        metavar="NAME",
-        help=(
-            "Run the tenants marked TRUE in this column of the tenants file "
-            "(repeatable; groups add up)."
-        ),
-    )
-    parser.add_argument(
-        "--tenant",
-        action="append",
-        default=None,
-        metavar="NAME_OR_ID",
-        help="Run this tenant, by display name or ID (repeatable).",
-    )
-    parser.add_argument("--all", action="store_true", help="Run every GDAP tenant.")
-    parser.add_argument(
-        "--exclude",
-        action="append",
-        default=None,
-        metavar="NAME_OR_ID",
-        help="Skip this tenant (repeatable).",
-    )
-    parser.add_argument(
-        "--tenants-file",
-        default=None,
-        metavar="PATH",
-        help=(
-            "Tenants CSV (default: the tenants_file setting, else tenants.csv in the config "
-            "directory)."
-        ),
-    )
-    parser.add_argument(
-        "--output", default=STDOUT, metavar="PATH", help="Output file, or - for stdout (default)."
-    )
-    parser.add_argument(
-        "--format", choices=FORMATS, default="json", help="Output format (default: json)."
-    )
-    parser.add_argument(
-        "--continue-on-error",
-        action="store_true",
-        help="Keep running other tenants after a payload error.",
-    )
-    parser.add_argument(
-        "--jobs",
-        type=int,
-        default=1,
-        metavar="N",
-        help=(
-            "Tenants to run concurrently (default: 1). 5-8 suits read-only reports; "
-            "keep 1 for payloads that write unless they are idempotent."
-        ),
-    )
-    add_settings_arguments(parser)
-    parser.add_argument(
-        "--list-tenants", action="store_true", help="Sign in, list GDAP tenants, and exit."
-    )
-    parser.add_argument(
-        "-v",
-        "--verbose",
-        action="count",
-        default=0,
-        help="-v: debug logs from this tool and payloads; -vv: also from libraries.",
-    )
-    return parser
-
-
-def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    """Parse and validate command-line arguments.
+def _selection_error(args: argparse.Namespace) -> str | None:
+    """Check that the flags choose tenants, and do so one way.
 
     Args:
-        argv: Arguments without the program name; None reads ``sys.argv``.
+        args: Parsed arguments.
 
     Returns:
-        The parsed arguments.
-
-    Raises:
-        SystemExit: With code 2 on invalid usage (argparse behavior).
+        What is wrong, or None when the selection is usable.
     """
-    parser = build_parser()
-    args = parser.parse_args(argv)
-    if not args.list_tenants:
-        if args.payload is None:
-            parser.error("PAYLOAD is required unless --list-tenants is given.")
-        picked = args.tenant or args.group
-        if args.all and picked:
-            parser.error("--all cannot be combined with --tenant or --group.")
-        if not (args.all or picked):
-            parser.error("Choose tenants with --group, --tenant or --all.")
-    if args.jobs < 1:
-        parser.error("--jobs must be at least 1.")
-    return args
+    picked = args.tenant or args.group
+    if args.all and picked:
+        return "--all cannot be combined with --tenant or --group."
+    if not (args.all or picked):
+        return "Choose tenants with --group, --tenant or --all."
+    return None
 
 
 def configure_logging(verbosity: int) -> None:
@@ -340,7 +347,7 @@ def _select_tenants(
     """Apply ``--all``, ``--group``, ``--tenant`` and ``--exclude``.
 
     Args:
-        args: Arguments from :func:`parse_args`, which guarantees one of ``--all``,
+        args: Parsed arguments that passed :func:`_selection_error`, so one of ``--all``,
             ``--group`` or ``--tenant`` was given.
         tenants: The GDAP tenants.
         tenant_file: The tenants file, for ``--group``.
@@ -365,29 +372,60 @@ def _select_tenants(
     return select(tenants, include=include, exclude=args.exclude)
 
 
-def run(args: argparse.Namespace, *, transport: httpx.BaseTransport | None = None) -> int:
-    """Execute a parsed command line.
-
-    The payload is loaded before sign-in, so payload errors never cost a
-    browser prompt.
+def _script_name(module: ModuleType) -> str:
+    """Name a script for logs and error messages: its file name without ``.py``.
 
     Args:
-        args: Arguments from :func:`parse_args`.
+        module: The script's module.
+
+    Returns:
+        The file's stem, or the module's name when it has no file.
+    """
+    file = getattr(module, "__file__", None)
+    return Path(file).stem if file else module.__name__
+
+
+def _parser(module: ModuleType) -> argparse.ArgumentParser:
+    """Build the parser :func:`main` uses for a script that brings none.
+
+    Args:
+        module: The script's module; the first line of its docstring describes it.
+
+    Returns:
+        A parser with every flag from :func:`add_arguments`.
+    """
+    doc = (module.__doc__ or "").strip()
+    parser = argparse.ArgumentParser(description=doc.splitlines()[0] if doc else None)
+    add_arguments(parser)
+    return parser
+
+
+def _run(
+    module: ModuleType, args: argparse.Namespace, *, transport: httpx.BaseTransport | None
+) -> int:
+    """Validate the script, sign in, pick tenants, run them, and write the output.
+
+    The script is checked before sign-in, so a mistake in it never costs a browser prompt.
+
+    Args:
+        module: The script's module.
+        args: Parsed arguments.
         transport: Optional httpx transport for every client (tests).
 
     Returns:
         The process exit code.
     """
+    problem = _selection_error(args)
+    if problem:
+        logger.error("%s", problem)
+        return EXIT_USAGE
     try:
+        payload = payload_from_module(module, _script_name(module))
         settings = settings_from_args(args)
-        payload = None if args.list_tenants else load_payload(args.payload)
         session = PartnerSession(settings, transport=transport)
-        session.login(payload.clients if payload else ())
+        session.login(payload.clients)
         tenants = session.list_tenants()
         tenant_file = _sync_tenant_file(settings, session, tenants)
-        if payload is None:
-            _print_tenants(tenants)
-            return EXIT_OK
         selected = _select_tenants(args, tenants, tenant_file, session.cloud_name)
     except SETUP_ERRORS as exc:
         logger.error("%s", exc)
@@ -419,25 +457,77 @@ def run(args: argparse.Namespace, *, transport: httpx.BaseTransport | None = Non
     return EXIT_OK if all(r.status == "ok" for r in results) else EXIT_TENANT_FAILED
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    """Console-script entry point.
+def main(
+    module: str | ModuleType,
+    args: argparse.Namespace | None = None,
+    *,
+    transport: httpx.BaseTransport | None = None,
+) -> int:
+    """Run a script's ``run(ctx)`` against the tenants its command line selects.
+
+    Call it from the script's ``__main__`` block as ``raise SystemExit(main(__name__))``.
 
     Args:
-        argv: Arguments without the program name; None reads ``sys.argv``.
+        module: The script: its module, or its name in ``sys.modules`` (``__name__``).
+        args: What the script's own parser returned, when it has flags of its own and added
+            the library's with :func:`add_arguments`. None parses ``sys.argv`` with the
+            library's flags only.
+        transport: Optional httpx transport for every client (tests).
 
     Returns:
         The process exit code.
     """
-    args = parse_args(argv)
+    if isinstance(module, str):
+        module = sys.modules[module]
+    if args is None:
+        args = _parser(module).parse_args()
     configure_logging(args.verbose)
     try:
-        return run(args)
+        return _run(module, args, transport=transport)
     except KeyboardInterrupt:
         print("Interrupted.", file=sys.stderr)
         return EXIT_INTERRUPTED
 
 
+def list_tenants(
+    argv: Sequence[str] | None = None, *, transport: httpx.BaseTransport | None = None
+) -> int:
+    """The ``m365-gdap-runner`` command: sign in, update the tenants file, list the tenants.
+
+    The file gets a row for every GDAP tenant it lacks, as on every run; run this once to
+    create it, then add the group columns.
+
+    Args:
+        argv: Arguments without the program name; None reads ``sys.argv``.
+        transport: Optional httpx transport for every client (tests).
+
+    Returns:
+        The process exit code.
+    """
+    parser = argparse.ArgumentParser(
+        prog="m365-gdap-runner",
+        description="Sign in, add the GDAP tenants the tenants file lacks, and list them.",
+    )
+    _add_settings_arguments(parser)
+    args = parser.parse_args(argv)
+    configure_logging(args.verbose)
+    try:
+        settings = settings_from_args(args)
+        session = PartnerSession(settings, transport=transport)
+        session.login()
+        tenants = session.list_tenants()
+        _sync_tenant_file(settings, session, tenants)
+    except SETUP_ERRORS as exc:
+        logger.error("%s", exc)
+        return EXIT_USAGE
+    except KeyboardInterrupt:
+        print("Interrupted.", file=sys.stderr)
+        return EXIT_INTERRUPTED
+    _print_tenants(tenants)
+    return EXIT_OK
+
+
 # This block runs only when the file is executed directly, not when it is
 # imported as a module.
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(list_tenants())

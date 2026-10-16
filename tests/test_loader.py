@@ -1,21 +1,13 @@
-"""Unit tests for payload loading and validation in loader.py."""
+"""Unit tests for checking a script against the contract in loader.py."""
 
 from __future__ import annotations
 
-import importlib.metadata
 import textwrap
-import uuid
-from pathlib import Path
-from typing import Any
+from types import ModuleType
 
 import pytest
 
-from m365_gdap_runner.loader import (
-    ENTRY_POINT_GROUP,
-    PayloadInvalid,
-    PayloadNotFound,
-    load_payload,
-)
+from m365_gdap_runner.loader import PayloadInvalid, payload_from_module
 
 pytestmark = pytest.mark.unit
 
@@ -27,30 +19,25 @@ VALID = """
 """
 
 
-def _write(tmp_path: Path, body: str, name: str = "payload.py") -> Path:
-    path = tmp_path / name
-    path.write_text(textwrap.dedent(body), encoding="utf-8")
-    return path
+def _module(body: str) -> ModuleType:
+    module = ModuleType("script")
+    exec(textwrap.dedent(body), module.__dict__)  # noqa: S102 (the test's own source)
+    return module
 
 
-def _fake_entry_points(
-    monkeypatch: pytest.MonkeyPatch, *points: importlib.metadata.EntryPoint
-) -> None:
-    def entry_points(**params: Any) -> importlib.metadata.EntryPoints:
-        return importlib.metadata.EntryPoints(points).select(**params)
-
-    monkeypatch.setattr(importlib.metadata, "entry_points", entry_points)
+def _payload(body: str) -> object:
+    return payload_from_module(_module(body), "script")
 
 
-def test_load_from_path(tmp_path: Path) -> None:
-    payload = load_payload(str(_write(tmp_path, VALID)))
-    assert payload.name == "payload"
+def test_valid_script() -> None:
+    payload = payload_from_module(_module(VALID), "audit")
+    assert payload.name == "audit"
     assert payload.scopes == ("User.Read.All",)
     assert payload.clients == ("graph",)
     assert callable(payload.run)
 
 
-def test_clients_are_normalized_and_deduplicated(tmp_path: Path) -> None:
+def test_clients_are_normalized_and_deduplicated() -> None:
     body = """
         CLIENTS = ["Exchange", "graph", " exchange ", "ipps"]
         SCOPES = ["User.Read.All"]
@@ -58,71 +45,29 @@ def test_clients_are_normalized_and_deduplicated(tmp_path: Path) -> None:
         def run(ctx):
             return None
     """
-    assert load_payload(str(_write(tmp_path, body))).clients == ("exchange", "graph", "ipps")
+    assert payload_from_module(_module(body), "script").clients == ("exchange", "graph", "ipps")
 
 
-def test_payload_without_graph_needs_no_scopes(tmp_path: Path) -> None:
+def test_script_without_graph_needs_no_scopes() -> None:
     body = """
         CLIENTS = ["exchange"]
 
         def run(ctx):
             return None
     """
-    payload = load_payload(str(_write(tmp_path, body)))
+    payload = payload_from_module(_module(body), "script")
     assert (payload.clients, payload.scopes) == (("exchange",), ())
 
 
-def test_two_files_with_the_same_name_load_independently(tmp_path: Path) -> None:
-    (tmp_path / "one").mkdir()
-    (tmp_path / "two").mkdir()
-    first = _write(tmp_path / "one", VALID)
-    second = _write(tmp_path / "two", VALID.replace("User.Read.All", "Group.Read.All"))
-    assert load_payload(str(first)).scopes == ("User.Read.All",)
-    assert load_payload(str(second)).scopes == ("Group.Read.All",)
-
-
-def test_load_from_entry_point(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    module_name = f"gdap_test_payload_{uuid.uuid4().hex}"
-    _write(tmp_path, VALID, f"{module_name}.py")
-    monkeypatch.syspath_prepend(str(tmp_path))
-    _fake_entry_points(
-        monkeypatch,
-        importlib.metadata.EntryPoint(name="licensed", value=module_name, group=ENTRY_POINT_GROUP),
-    )
-    payload = load_payload("licensed")
-    assert payload.name == "licensed"
-    assert payload.scopes == ("User.Read.All",)
-
-
-def test_unknown_entry_point_is_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
-    _fake_entry_points(monkeypatch)
-    with pytest.raises(PayloadNotFound, match=r"neither a \.py file nor a payload"):
-        load_payload("licensed")
-
-
-def test_entry_point_must_reference_a_module(monkeypatch: pytest.MonkeyPatch) -> None:
-    _fake_entry_points(
-        monkeypatch,
-        importlib.metadata.EntryPoint(name="bad", value="json:dumps", group=ENTRY_POINT_GROUP),
-    )
-    with pytest.raises(PayloadInvalid, match="must reference a module"):
-        load_payload("bad")
-
-
-def test_missing_file_is_not_found(tmp_path: Path) -> None:
-    with pytest.raises(PayloadNotFound, match="not found"):
-        load_payload(str(tmp_path / "missing.py"))
-
-
-def test_run_with_optional_parameters_is_accepted(tmp_path: Path) -> None:
+def test_run_with_optional_parameters_is_accepted() -> None:
     body = 'SCOPES = ("User.Read.All",)\n\ndef run(ctx, verbose=False):\n    return None\n'
-    assert load_payload(str(_write(tmp_path, body))).scopes == ("User.Read.All",)
+    assert payload_from_module(_module(body), "script").scopes == ("User.Read.All",)
 
 
 @pytest.mark.parametrize(
     ("body", "message"),
     [
-        ('SCOPES = ["User.Read.All"]\n', "callable run"),
+        ('SCOPES = ["User.Read.All"]\n', "Script 'script' must define a callable run"),
         ('SCOPES = ["User.Read.All"]\nrun = 1\n', "callable run"),
         ('SCOPES = ["User.Read.All"]\ndef run():\n    pass\n', "one positional argument"),
         ('SCOPES = ["User.Read.All"]\ndef run(ctx, other):\n    pass\n', "one positional argument"),
@@ -151,9 +96,8 @@ def test_run_with_optional_parameters_is_accepted(tmp_path: Path) -> None:
             "'graph' is not in CLIENTS",
         ),
         ('CLIENTS = ["graph", "exchange"]\ndef run(ctx):\n    pass\n', "must define SCOPES"),
-        ('raise RuntimeError("boom")\n', "Importing payload .* failed: RuntimeError"),
     ],
 )
-def test_invalid_payloads_are_rejected(tmp_path: Path, body: str, message: str) -> None:
+def test_invalid_scripts_are_rejected(body: str, message: str) -> None:
     with pytest.raises(PayloadInvalid, match=message):
-        load_payload(str(_write(tmp_path, body)))
+        _payload(body)

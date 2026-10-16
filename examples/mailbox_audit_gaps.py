@@ -1,15 +1,21 @@
-"""Example payload: mailboxes whose audit action sets lag Microsoft's defaults.
+# /// script
+# requires-python = ">=3.14"
+# dependencies = [
+#   "m365-gdap-runner @ git+https://github.com/DrollRobot/m365-gdap-runner.git@v0.1.0",
+# ]
+# ///
+"""Example script: mailboxes whose audit action sets lag Microsoft's defaults.
 
 A port of a PowerShell report. The script connected, collected, analysed, exported an
-``.xlsx`` and read it back; here the runner connects and writes, so the payload is only the
+``.xlsx`` and read it back; here the runner connects and writes, so the script is only the
 middle two steps and returns findings as flat rows. A tenant with nothing wrong returns no
 rows, which is what makes the merged CSV a report of gaps only::
 
-    uv run m365-gdap-runner examples/mailbox_audit_gaps.py --group pilot --format csv
+    uv run mailbox_audit_gaps.py --group pilot --format csv
 
-or directly against one tenant::
+or against one tenant::
 
-    uv run python examples/mailbox_audit_gaps.py --tenant Contoso
+    uv run mailbox_audit_gaps.py --tenant Contoso
 
 The reference action set per logon type (Admin, Delegate, Owner) is derived from the
 mailboxes still enrolled in Microsoft's managed defaults, then every mailbox that left a
@@ -21,7 +27,7 @@ Exchange's REST endpoint (``ctx.exchange.mailboxes()``): only the audit properti
 three the report names, which is much faster than ``Get-Mailbox`` on a large tenant.
 
 One thing differs from the PowerShell version: ``Get-AdminAuditLogConfig`` always reaches
-Exchange here, because this payload declares no Security & Compliance client, so
+Exchange here, because this script declares no Security & Compliance client, so
 ``UnifiedAuditLogIngestionEnabled`` can be trusted.
 
 Note:
@@ -65,7 +71,7 @@ def run(ctx: TenantContext) -> list[dict[str, str]]:
     """Return every audit finding in the tenant.
 
     Args:
-        ctx: The tenant context supplied by the runner or ``standalone()``.
+        ctx: The tenant context supplied by the runner.
 
     Returns:
         One row per finding with ``finding``, ``identity``, ``recipientTypeDetails`` and
@@ -208,9 +214,6 @@ def _row(
 
 
 if __name__ == "__main__":
-    import json
+    from m365_gdap_runner import main
 
-    from m365_gdap_runner import standalone
-
-    with standalone(clients=CLIENTS) as ctx:
-        print(json.dumps(run(ctx), indent=2))
+    raise SystemExit(main(__name__))
