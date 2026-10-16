@@ -42,10 +42,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--gdap-only` leaves those tenants `auth_failed` instead.
 - Example scripts, each with the header `uv run` builds its environment from:
   `examples/licensed_users.py` (Graph; its `report()` prints every tenant's users as JSON),
-  `examples/audit_disabled.py` (Exchange Online; no `report()`, its log is the report), and
+  `examples/audit_disabled.py` (Exchange Online; no `report()`, its log is the report),
   `examples/mailbox_audit_gaps.py` (mailboxes whose audit actions lag Microsoft's defaults,
   read through Exchange's REST endpoint; an Excel workbook per tenant and a summary
-  workbook, in the folder its own `--out` flag names).
+  workbook, in the folder its own `--out` flag names), and `examples/unified_audit_log.py`
+  (whether the unified audit log is on in each tenant; one Excel workbook for the run).
 - Supports Python 3.11 and newer. CI tests every supported version, 3.11 through 3.14, on
   Ubuntu, macOS and Windows.
 

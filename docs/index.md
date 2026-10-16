@@ -159,6 +159,6 @@ is `auth_failed`, with the reason, and no browser opens for it.
 `ctx.auth` is the azure-auth context for the tenant. Hand it to any azure-auth client, or to
 an Azure SDK client as `credential=`, for resources the four properties do not cover.
 
-See `examples/` for a Graph script and two Exchange Online scripts. In this repository,
+See `examples/` for a Graph script and three Exchange Online scripts. In this repository,
 `uv run python examples/licensed_users.py ...` runs one against the working copy instead of
 the release its header names.

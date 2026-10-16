@@ -41,6 +41,7 @@ EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
 LICENSED_USERS = EXAMPLES / "licensed_users.py"
 AUDIT_DISABLED = EXAMPLES / "audit_disabled.py"
 MAILBOX_AUDIT_GAPS = EXAMPLES / "mailbox_audit_gaps.py"
+UNIFIED_AUDIT_LOG = EXAMPLES / "unified_audit_log.py"
 
 
 def _example(path: Path) -> Payload:
@@ -300,3 +301,93 @@ def test_mailbox_audit_summary_lists_the_tenants_that_failed(
     (table,) = sheet.tables.values()
     assert table.tableStyleInfo is not None
     assert table.tableStyleInfo.name == "TableStyleMedium8"
+
+
+# --- unified_audit_log.py --------------------------------------------------------------
+
+
+def _ual_services(request: httpx.Request) -> httpx.Response:
+    """Fake Exchange for the unified audit log example: on in tenant A, off in tenant B."""
+    tenant = bearer_tenant(request)
+    if request.url.path != f"/adminapi/beta/{tenant}/InvokeCommand":
+        return fake_services(request)
+    cmdlet = json.loads(request.content)["CmdletInput"]["CmdletName"]
+    assert cmdlet == "Get-AdminAuditLogConfig"
+    config = {"UnifiedAuditLogIngestionEnabled": tenant == TENANT_A}
+    return httpx.Response(200, json={"value": [config]})
+
+
+@pytest.fixture
+def unified_audit_log(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
+    """The example, writing its workbook to a temp dir, as ``--out`` makes it."""
+    module = load_script(UNIFIED_AUDIT_LOG)
+    monkeypatch.setattr(module, "OUT_DIR", tmp_path / "reports")
+    return module
+
+
+def test_unified_audit_log_example_writes_one_workbook_for_every_tenant(
+    fake_msal: FakeMsal,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    unified_audit_log: Any,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO)
+    monkeypatch.setenv(ENV_PREFIX + "PARTNER_TENANT_ID", PARTNER_TENANT)
+    monkeypatch.setenv(ENV_PREFIX + "USERNAME", USER)
+    monkeypatch.setattr(cli, "configure_logging", lambda verbosity: None)
+
+    parser = argparse.ArgumentParser()
+    cli.add_arguments(parser)
+    args = parser.parse_args(["--all"])
+    assert cli.main(unified_audit_log, args, transport=httpx.MockTransport(_ual_services)) == 0
+
+    (path,) = (tmp_path / "reports").iterdir()
+    assert path.name == f"UnifiedAuditLog_{datetime.date.today().isoformat()}.xlsx"
+    assert capsys.readouterr().out == f"Wrote {path}\n"
+    assert _sheets(path) == {
+        "Tenants": [
+            ("Tenant", "TenantId", "Status", "UnifiedAuditLogIngestionEnabled", "Error"),
+            ("Alpha", TENANT_A, "ok", True, None),
+            ("beta corp", TENANT_B, "ok", False, None),
+        ]
+    }
+    assert [
+        (r.levelname, r.getMessage())
+        for r in caplog.records
+        if r.filename == UNIFIED_AUDIT_LOG.name
+    ] == [
+        ("INFO", "Unified audit log is on"),
+        ("WARNING", "Unified audit log is off (UnifiedAuditLogIngestionEnabled is False)"),
+    ]
+
+
+def test_unified_audit_log_workbook_lists_the_tenants_that_failed(
+    tmp_path: Path, unified_audit_log: Any
+) -> None:
+    unified_audit_log.report(
+        [
+            TenantResult(Tenant(TENANT_A, "Alpha"), "ok", False),
+            TenantResult(Tenant(TENANT_B, "beta corp"), "auth_failed", error="AADSTS65001"),
+        ]
+    )
+    (path,) = (tmp_path / "reports").iterdir()
+    sheet = load_workbook(path)["Tenants"]
+    assert list(sheet.iter_rows(min_row=2, values_only=True)) == [
+        ("Alpha", TENANT_A, "ok", False, None),
+        ("beta corp", TENANT_B, "auth_failed", None, "AADSTS65001"),
+    ]
+    assert sheet.freeze_panes == "A2"
+    (table,) = sheet.tables.values()
+    assert table.ref == "A1:E3"
+    assert table.tableStyleInfo is not None
+    assert table.tableStyleInfo.name == "TableStyleMedium8"
+
+
+def test_unified_audit_log_writes_no_workbook_when_no_tenant_ran(
+    tmp_path: Path, unified_audit_log: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    unified_audit_log.report([])
+    assert not (tmp_path / "reports").exists()
+    assert capsys.readouterr().out == "No tenants ran; no workbook written.\n"
