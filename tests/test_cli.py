@@ -25,12 +25,15 @@ from m365_gdap_runner.runner import TenantResult
 from m365_gdap_runner.tenants import TenantFile
 from tests._gdap_fakes import (
     CONSENT_REQUIRED,
+    GAMMA_ADMIN,
+    NOT_IN_TENANT,
     PARTNER_TENANT,
     TENANT_A,
     TENANT_B,
     TENANT_C,
     USER,
     FakeMsal,
+    bearer_tenant,
     fake_services,
     load_script,
 )
@@ -276,7 +279,7 @@ def test_report_gets_every_tenant_in_order_failures_included(
     fake_msal: FakeMsal, recorder: ModuleType, capsys: pytest.CaptureFixture[str]
 ) -> None:
     fake_msal.tenant_errors[TENANT_B] = CONSENT_REQUIRED
-    assert _main(recorder, "--all") == 1
+    assert _main(recorder, "--all", "--gdap-only") == 1
     (alpha, beta) = _reported(recorder)
     assert (alpha.tenant.tenant_id, alpha.status, alpha.result) == (
         TENANT_A,
@@ -470,9 +473,9 @@ def test_list_tenants_creates_the_tenants_file_and_prints_the_tenants(
     assert capsys.readouterr().out.splitlines() == [f"{TENANT_A}\tAlpha", f"{TENANT_B}\tbeta corp"]
     path = tmp_path / "config" / "tenants.csv"
     assert path.read_text(encoding="utf-8-sig").splitlines() == [
-        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud",
-        f"{TENANT_A},Alpha,,Commercial",
-        f"{TENANT_B},beta corp,,Commercial",
+        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username",
+        f"{TENANT_A},Alpha,,Commercial,",
+        f"{TENANT_B},beta corp,,Commercial,",
     ]
     assert f"Created tenants file {path} with 2 tenant(s)" in caplog.text
     assert fake_msal.interactive_calls == 1
@@ -581,28 +584,114 @@ def test_tenants_file_setting_locates_the_file(
     assert not (tmp_path / "config" / "tenants.csv").exists()
 
 
+def _gamma_csv(tmp_path: Path, cloud: str = "Commercial") -> Path:
+    """A tenants file whose pilot group holds Alpha and Gamma, which has no GDAP relationship."""
+    return _tenants_csv(
+        tmp_path / "tenants.csv",
+        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,pilot",
+        f"{TENANT_A},Alpha,,Commercial,,TRUE",
+        f"{TENANT_C},Gamma,,{cloud},{GAMMA_ADMIN},TRUE",
+    )
+
+
 @pytest.mark.integration
 @pytest.mark.acceptance
-def test_exit_2_when_a_group_member_has_no_gdap_relationship(
-    fake_msal: FakeMsal, tmp_path: Path, caplog: pytest.LogCaptureFixture
+def test_a_group_member_without_gdap_gets_a_sign_in_of_its_own(
+    fake_msal: FakeMsal, tmp_path: Path, recorder: ModuleType, caplog: pytest.LogCaptureFixture
 ) -> None:
-    path = _tenants_csv(
-        tmp_path / "tenants.csv",
-        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,pilot",
-        f"{TENANT_A},Alpha,,Commercial,TRUE",
-        f"{TENANT_C},Gamma,,,TRUE",
-    )
-    seen: list[str] = []
+    caplog.set_level(logging.INFO, logger="m365_gdap_runner.session")
+    fake_msal.tenant_errors[TENANT_C] = NOT_IN_TENANT  # the partner account is not in Gamma
+    seen: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        seen.append(request.url.path)
+        seen.append(request)
         return fake_services(request)
 
-    assert (
-        _main(LICENSED_USERS, "--group", "pilot", "--tenants-file", str(path), handler=handler) == 2
-    )
-    assert f"'Gamma' ({TENANT_C}) is in group 'pilot' but has no GDAP relationship" in caplog.text
-    assert "/v1.0/users" not in seen
+    path = _gamma_csv(tmp_path)
+    assert _main(recorder, "--group", "pilot", "--tenants-file", str(path), handler=handler) == 0
+    assert [(r.tenant.tenant_id, r.status) for r in _reported(recorder)] == [
+        (TENANT_A, "ok"),
+        (TENANT_C, "ok"),
+    ]
+    # One browser sign-in for the partner, one for Gamma as its own account; none for Alpha.
+    assert fake_msal.interactive_tenants() == [PARTNER_TENANT, TENANT_C]
+    assert f"Signing in to Gamma directly as {GAMMA_ADMIN}" in caplog.text
+    assert "AADSTS50020" in caplog.text
+    users = [bearer_tenant(r) for r in seen if r.url.path == "/v1.0/users"]
+    assert sorted(users) == [TENANT_A, TENANT_C]
+
+
+@pytest.mark.integration
+@pytest.mark.acceptance
+def test_a_tenant_in_another_cloud_is_signed_in_to_there(
+    fake_msal: FakeMsal, tmp_path: Path, recorder: ModuleType
+) -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return fake_services(request)
+
+    path = _gamma_csv(tmp_path, cloud="USGov")
+    assert _main(recorder, "--tenant", "Gamma", "--tenants-file", str(path), handler=handler) == 0
+    (gamma,) = _reported(recorder)
+    assert (gamma.tenant.tenant_id, gamma.tenant.cloud, gamma.status) == (TENANT_C, "USGov", "ok")
+    # Straight to the US Government sign-in: the commercial partner sign-in was never tried.
+    assert fake_msal.silent_calls(TENANT_C) == []
+    assert fake_msal.authority(TENANT_C) == f"https://login.microsoftonline.us/{TENANT_C}"
+    (users,) = [r for r in seen if r.url.path == "/v1.0/users"]
+    assert users.url.host == "graph.microsoft.us"
+
+
+@pytest.mark.integration
+@pytest.mark.acceptance
+def test_a_gdap_tenant_missing_consent_gets_a_sign_in_of_its_own(
+    fake_msal: FakeMsal, recorder: ModuleType
+) -> None:
+    fake_msal.tenant_errors[TENANT_B] = CONSENT_REQUIRED
+    assert _main(recorder, "--all") == 0
+    assert [r.status for r in _reported(recorder)] == ["ok", "ok"]
+    # The browser opens at beta corp itself, as the partner account, where consent is given.
+    assert fake_msal.interactive_tenants() == [PARTNER_TENANT, TENANT_B]
+
+
+@pytest.mark.integration
+@pytest.mark.acceptance
+@pytest.mark.parametrize(
+    ("cloud", "reason"),
+    [("Commercial", "AADSTS50020"), ("USGov", "Gamma is in the USGov cloud")],
+)
+def test_gdap_only_leaves_unreachable_tenants_failed(
+    fake_msal: FakeMsal, tmp_path: Path, recorder: ModuleType, cloud: str, reason: str
+) -> None:
+    fake_msal.tenant_errors[TENANT_C] = NOT_IN_TENANT
+    path = _gamma_csv(tmp_path, cloud=cloud)
+    assert _main(recorder, "--group", "pilot", "--gdap-only", "--tenants-file", str(path)) == 1
+    alpha, gamma = _reported(recorder)
+    assert (alpha.status, gamma.status) == ("ok", "auth_failed")
+    assert gamma.error is not None
+    assert reason in gamma.error
+    assert fake_msal.interactive_tenants() == [PARTNER_TENANT]
+
+
+@pytest.mark.integration
+def test_a_failed_direct_sign_in_fails_that_tenant_only(
+    fake_msal: FakeMsal, tmp_path: Path, recorder: ModuleType
+) -> None:
+    fake_msal.tenant_errors[TENANT_C] = NOT_IN_TENANT
+    fake_msal.interactive_errors[TENANT_C] = {"error": "access_denied", "error_description": "no"}
+    path = _gamma_csv(tmp_path)
+    assert _main(recorder, "--group", "pilot", "--tenants-file", str(path)) == 1
+    assert [r.status for r in _reported(recorder)] == ["ok", "auth_failed"]
+
+
+@pytest.mark.integration
+def test_all_runs_gdap_tenants_only(
+    fake_msal: FakeMsal, tmp_path: Path, recorder: ModuleType
+) -> None:
+    path = _gamma_csv(tmp_path)
+    assert _main(recorder, "--all", "--tenants-file", str(path)) == 0
+    assert _tenant_ids(recorder) == [TENANT_A, TENANT_B]
 
 
 @pytest.mark.integration
@@ -619,23 +708,6 @@ def test_exit_2_when_the_groups_select_nothing(
 
 
 @pytest.mark.integration
-@pytest.mark.acceptance
-def test_group_skips_members_in_another_cloud(
-    fake_msal: FakeMsal, tmp_path: Path, recorder: ModuleType, caplog: pytest.LogCaptureFixture
-) -> None:
-    caplog.set_level(logging.INFO, logger="m365_gdap_runner.tenants")
-    path = _tenants_csv(
-        tmp_path / "tenants.csv",
-        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,pilot",
-        f"{TENANT_A},Alpha,,Commercial,TRUE",
-        f"{TENANT_C},Gamma,,USGov,TRUE",  # another cloud: out of this sign-in's reach, no error
-    )
-    assert _main(recorder, "--group", "pilot", "--tenants-file", str(path)) == 0
-    assert _tenant_ids(recorder) == [TENANT_A]
-    assert "Skipped 1 tenant(s) outside the Commercial cloud: Gamma (USGov)" in caplog.text
-
-
-@pytest.mark.integration
 def test_run_fills_in_blank_clouds_by_discovery(
     fake_msal: FakeMsal, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -645,14 +717,16 @@ def test_run_fills_in_blank_clouds_by_discovery(
         "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,pilot",
         f"{TENANT_A},Alpha,,,TRUE",
         f"{TENANT_B},beta corp,,,FALSE",
+        f"{TENANT_C},Gamma,,,FALSE",  # no GDAP relationship, but a tenant all the same
     )
     assert _main(LICENSED_USERS, "--group", "pilot", "--tenants-file", str(path)) == 0
     assert path.read_text(encoding="utf-8-sig").splitlines() == [
         "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,pilot",
         f"{TENANT_A},Alpha,,Commercial,TRUE",
         f"{TENANT_B},beta corp,,Commercial,FALSE",
+        f"{TENANT_C},Gamma,,Commercial,FALSE",
     ]
-    assert f"Filled in the cloud of 2 tenant(s) in {path}: Alpha, beta corp" in caplog.text
+    assert f"Filled in the cloud of 3 tenant(s) in {path}: Alpha, beta corp, Gamma" in caplog.text
 
 
 @pytest.mark.integration

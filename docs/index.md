@@ -60,9 +60,10 @@ uv run users.py --tenant Contoso
 ```
 
 The runner signs in once per client in `CLIENTS` at the partner tenant (each uses a
-different Microsoft app), then for every selected tenant checks each client silently before
-calling `run()`. A tenant that has not consented, or wants a fresh sign-in, is reported as
-`auth_failed` and skipped. With `--cache disk` later runs skip the browser.
+different Microsoft app), then, before the first `run()`, checks every selected tenant
+silently through that sign-in. A tenant it cannot reach that way gets a sign-in of its own
+(see [Tenants outside GDAP](#tenants-outside-gdap)). With `--cache disk` later runs skip the
+browser.
 
 ## Reports
 
@@ -107,37 +108,53 @@ A run has to say which tenants it is for; one that names none is refused. Pick t
 
 - `--group NAME`: the tenants marked TRUE in column `NAME` of the tenants file. Repeat it
   to add groups together.
-- `--tenant NAME_OR_ID`: one tenant by display name or ID. Repeatable, and combines with
-  `--group`.
+- `--tenant NAME_OR_ID`: one tenant by display name or ID, a GDAP customer or a row of the
+  tenants file. Repeatable, and combines with `--group`.
 - `--all`: every tenant with a GDAP relationship.
 
 `--exclude NAME_OR_ID` drops tenants from any of these.
 
 The tenants file is a CSV you edit in a spreadsheet, one row per customer. This package owns
-four columns, `m365_tenant_id`, `m365_tenant_name`, `m365_domain` and `m365_cloud`, and
-reads one more per `--group`: a column holding TRUE or FALSE, where a blank cell counts as
-FALSE and anything else is an error. Every other column is left alone, so the same file can
-carry what other tools know about the same customers on other platforms. Tenants are matched
-by ID; the name and domain columns are there for you. A row with no `m365_tenant_id` is a
-customer without an M365 tenant and is skipped.
+five columns, `m365_tenant_id`, `m365_tenant_name`, `m365_domain`, `m365_cloud` and
+`m365_username` (optional; a file without it still works), and reads one more per `--group`:
+a column holding TRUE or FALSE, where a blank cell counts as FALSE and anything else is an
+error. Every other column is left alone, so the same file can carry what other tools know
+about the same customers on other platforms. Tenants are matched by ID; the name and domain
+columns are there for you. A row with no `m365_tenant_id` is a customer without an M365
+tenant and is skipped.
 
 ```csv
-m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,pilot,patching,cw_company_id
-aaaaaaaa-0000-0000-0000-00000000000a,Alpha,alpha.example,Commercial,TRUE,FALSE,1001
-bbbbbbbb-0000-0000-0000-00000000000b,beta corp,beta.example,USGov,TRUE,TRUE,1002
+m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,pilot,patching,cw_company_id
+aaaaaaaa-0000-0000-0000-00000000000a,Alpha,alpha.example,Commercial,,TRUE,FALSE,1001
+bbbbbbbb-0000-0000-0000-00000000000b,beta corp,beta.example,USGov,admin@beta.us,TRUE,TRUE,1002
 ```
 
-`m365_cloud` is `Commercial`, `USGov`, `USGovDoD` or `China`. The file tracks tenants in
-every cloud, but a run signs in to one, so a group member in another cloud is skipped and the
-log says so. The runner fills the cell in itself, by OpenID Connect discovery, when it appends
-a tenant or finds the cell blank.
+`m365_cloud` is `Commercial`, `USGov`, `USGovDoD` or `China`. The runner fills the cell in
+itself, by OpenID Connect discovery, when it appends a tenant or finds the cell blank.
 
 The file is `tenants.csv` in the config directory (`m365-gdap-runner-config path` shows
 where), unless the `tenants_file` setting or `--tenants-file` points elsewhere. Every run
 keeps it current: a GDAP tenant with no row is appended with its name, its cloud and every
 other column blank, and a warning names it. The `m365-gdap-runner` command does that, lists
-the tenants and runs nothing, so run it once to create the file, then add group columns. A row whose tenant
-no longer has a GDAP relationship is left alone; selecting it with `--group` is an error.
+the tenants and runs nothing, so run it once to create the file, then add group columns. Rows
+for tenants without a GDAP relationship are yours to add and keep.
+
+## Tenants outside GDAP
+
+A tenant the partner sign-in cannot reach still runs. That covers a row of the tenants file
+with no GDAP relationship, a tenant in another cloud (the partner sign-in reaches its own
+cloud only), and a GDAP tenant where consent is missing or a policy wants a fresh sign-in.
+
+Before the first `run()`, every selected tenant in the partner's cloud is checked silently
+through the partner sign-in. Each tenant that fails that check, and each tenant in another
+cloud, then gets a sign-in of its own, in its own cloud, as the account in its
+`m365_username` cell, or the partner account when the cell is blank. That is one browser
+sign-in per client in `CLIENTS`, one tenant at a time, all before the loop starts, so
+`--jobs` runs never prompt. With `--cache disk` and an `m365_username`, later runs are silent.
+A sign-in that fails or is cancelled leaves that tenant `auth_failed`; the rest run.
+
+`--gdap-only` turns this off, for unattended runs: a tenant the partner sign-in cannot reach
+is `auth_failed`, with the reason, and no browser opens for it.
 
 `ctx.auth` is the azure-auth context for the tenant. Hand it to any azure-auth client, or to
 an Azure SDK client as `credential=`, for resources the four properties do not cover.

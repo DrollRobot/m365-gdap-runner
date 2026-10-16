@@ -1,10 +1,9 @@
-"""Run one payload across many tenants.
+"""Run one script across many tenants.
 
-For each tenant the runner builds a :class:`~m365_gdap_runner.context.TenantContext`
-and calls its ``probe()`` before ``run()``: every declared client asks the customer
-tenant for a token without prompting. A scope that is not consented there, or a
-Conditional Access policy that wants a sign-in, becomes an ``auth_failed`` result and
-``run()`` never starts.
+Access is settled before the loop (:meth:`~m365_gdap_runner.session.PartnerSession.check_access`):
+every declared client already holds a token for each tenant it could reach. For each tenant
+the runner builds a :class:`~m365_gdap_runner.context.TenantContext` and calls ``run()``; a
+tenant that could not be reached becomes an ``auth_failed`` result and ``run()`` never starts.
 
 Consent is not authorization: a consented scope can still get 403 if the GDAP
 relationship lacks the needed role. That surfaces inside ``run()`` as a resource
@@ -325,7 +324,7 @@ def _run_one(session: ContextFactory, payload: Payload, tenant: Tenant) -> Tenan
 def _execute(
     session: ContextFactory, payload: Payload, tenant: Tenant
 ) -> tuple[Status, object, str | None]:
-    """Build the context, probe every client, and call ``run()``.
+    """Build the context and call ``run()``.
 
     Args:
         session: A signed-in session.
@@ -344,14 +343,6 @@ def _execute(
         return "auth_failed", None, repr(exc)
 
     with context:
-        try:
-            context.probe()
-        except AuthError as exc:
-            return "auth_failed", None, str(exc)
-        except Exception as exc:
-            logger.debug("Token request failed", exc_info=True)
-            return "auth_failed", None, repr(exc)
-
         try:
             result = payload.run(context)
         except AuthError as exc:

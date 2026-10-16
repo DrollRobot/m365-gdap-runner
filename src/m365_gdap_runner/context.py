@@ -161,9 +161,10 @@ class TenantContext:
     def probe(self) -> None:
         """Get a token for every declared client without prompting.
 
-        This is the consent check the runner makes before ``run()``: a sibling context never
-        opens a browser, so a scope that is not consented in this tenant, or a Conditional
-        Access policy that wants a fresh sign-in, fails here instead of inside the payload.
+        This is the check :meth:`~m365_gdap_runner.session.PartnerSession.check_access` makes
+        before the run: a sibling context never opens a browser, so a scope that is not
+        consented in this tenant, or a Conditional Access policy that wants a fresh sign-in,
+        fails here instead of inside the script.
 
         Raises:
             azure_auth.ConsentRequired: If consent is missing in this tenant.

@@ -2,20 +2,18 @@
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 
 import pytest
 
 from m365_gdap_runner.config.paths import CONFIG_DIR_ENV
 from m365_gdap_runner.tenants import (
-    REQUIRED_COLUMNS,
+    OWN_COLUMNS,
     Tenant,
     TenantFile,
     TenantFileError,
     TenantRow,
     TenantSelectionError,
-    group_members,
     select,
     tenants_file_path,
 )
@@ -82,7 +80,10 @@ def test_select_include_and_exclude() -> None:
 
 @pytest.mark.parametrize("option", ["include", "exclude"])
 def test_select_unknown_name_is_an_error(option: str) -> None:
-    with pytest.raises(TenantSelectionError, match="No GDAP tenant matches 'Contoso'"):
+    with pytest.raises(
+        TenantSelectionError,
+        match="No tenant matches 'Contoso': it is neither a GDAP customer nor in the tenants file",
+    ):
         select([ALPHA, BETA], **{option: ["Contoso"]})
 
 
@@ -161,7 +162,7 @@ def test_load_of_an_empty_file_is_a_fresh_file(tmp_path: Path) -> None:
     path = tmp_path / "t.csv"
     path.write_bytes(b"")
     tenant_file = TenantFile.load(path)
-    assert (tenant_file.columns, tenant_file.rows) == (list(REQUIRED_COLUMNS), [])
+    assert (tenant_file.columns, tenant_file.rows) == (list(OWN_COLUMNS), [])
 
 
 def test_load_requires_the_four_m365_columns(tmp_path: Path) -> None:
@@ -194,6 +195,27 @@ def test_members_returns_marked_rows_in_file_order(csv_path: Path) -> None:
         TenantRow(TENANT_B, "beta corp", ""),
     ]
     assert tenant_file.members("pilot") == [TenantRow(TENANT_B, "beta corp", "")]
+
+
+def test_members_reads_the_optional_username_column(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "t.csv",
+        f"{M365},m365_username,g",
+        f"{TENANT_A},Alpha,,Commercial, admin@alpha.example ,TRUE",
+        f"{TENANT_B},beta corp,,,,TRUE",
+    )
+    assert TenantFile.load(path).members("g") == [
+        TenantRow(TENANT_A, "Alpha", "Commercial", "admin@alpha.example"),
+        TenantRow(TENANT_B, "beta corp", "", ""),
+    ]
+
+
+def test_the_username_column_is_not_a_group(tmp_path: Path) -> None:
+    path = _write(tmp_path / "t.csv", f"{M365},m365_username,g", f"{TENANT_A},Alpha,,,,TRUE")
+    tenant_file = TenantFile.load(path)
+    assert tenant_file.groups == ["g"]
+    with pytest.raises(TenantFileError, match="no group column 'm365_username'"):
+        tenant_file.members("m365_username")
 
 
 def test_members_skips_a_marked_row_with_no_m365_tenant(tmp_path: Path) -> None:
@@ -285,10 +307,12 @@ def test_sync_appends_unknown_tenants_and_fills_blank_clouds(csv_path: Path) -> 
 
     tenant_file = TenantFile.load(csv_path)
     report = tenant_file.sync([Tenant(TENANT_A.upper(), "Alpha renamed"), BETA, DELTA], lookup)
-    assert (report.added, report.clouds_filled, report.changed) == ([DELTA], [BETA], True)
-    assert looked_up == [TENANT_B, DELTA.tenant_id]  # Alpha's cloud is already known
+    # Gamma has no GDAP relationship but a row, so its blank cloud is filled in too.
+    assert (report.added, report.clouds_filled, report.changed) == ([DELTA], [BETA, GAMMA], True)
+    assert looked_up == [DELTA.tenant_id, TENANT_B, TENANT_C]  # Alpha's cloud is already known
     assert tenant_file.rows[0]["m365_tenant_name"] == "Alpha"  # existing rows are left alone
     assert tenant_file.rows[1]["m365_cloud"] == "USGov"
+    assert tenant_file.rows[2]["m365_cloud"] == "USGov"
     assert tenant_file.rows[-1] == {
         "m365_tenant_id": DELTA.tenant_id,
         "m365_tenant_name": "Delta",
@@ -309,11 +333,18 @@ def test_sync_leaves_the_cloud_blank_when_the_lookup_finds_nothing(csv_path: Pat
     assert tenant_file.rows[-1]["m365_cloud"] == ""
 
 
-def test_sync_with_nothing_to_do_changes_nothing_and_looks_nothing_up(csv_path: Path) -> None:
+def test_sync_with_nothing_to_do_changes_nothing_and_looks_nothing_up(tmp_path: Path) -> None:
     def never(tenant_id: str) -> str:
         raise AssertionError(f"looked up {tenant_id}")
 
-    tenant_file = TenantFile.load(csv_path)
+    path = _write(
+        tmp_path / "t.csv",
+        f"{M365},g",
+        f"{TENANT_A},Alpha,,Commercial,TRUE",
+        f"{TENANT_C},Gamma,,USGov,TRUE",
+        ",Acme,,,TRUE",
+    )
+    tenant_file = TenantFile.load(path)
     before = [dict(row) for row in tenant_file.rows]
     report = tenant_file.sync([ALPHA], never)
     assert report.changed is False
@@ -328,7 +359,7 @@ def test_save_round_trips_other_tools_data_and_appended_rows(csv_path: Path) -> 
         HEADER,
         f"{TENANT_A},Alpha,alpha.example,Commercial,TRUE,FALSE,1001,first one",
         f"{TENANT_B},beta corp,beta.example,Commercial,TRUE,TRUE,1002,",
-        f"{TENANT_C},Gamma,,,FALSE,,1003,gone from GDAP",
+        f"{TENANT_C},Gamma,,Commercial,FALSE,,1003,gone from GDAP",
         ",,,,TRUE,TRUE,1004,no M365 tenant",
         f"{DELTA.tenant_id},Delta,,Commercial,,,,",
     ]
@@ -342,50 +373,53 @@ def test_save_creates_the_file_and_its_directory(tmp_path: Path) -> None:
     tenant_file.sync([ALPHA], commercial)
     tenant_file.save()
     assert path.read_text(encoding="utf-8-sig").splitlines() == [
-        M365,
-        f"{TENANT_A},Alpha,,Commercial",
+        f"{M365},m365_username",
+        f"{TENANT_A},Alpha,,Commercial,",
     ]
 
 
-# --- group_members ---------------------------------------------------------------------
+# --- extra_tenants / details -----------------------------------------------------------
 
 
-def test_group_members_unions_groups_in_gdap_order(csv_path: Path) -> None:
-    tenant_file = TenantFile.load(csv_path)
-    tenants = [BETA, ALPHA]  # GDAP order differs from file order
-    assert group_members(tenants, tenant_file, ["pilot"], cloud="Commercial") == [BETA]
-    assert group_members(tenants, tenant_file, ["pilot", "patching"], cloud="Commercial") == [
-        BETA,
-        ALPHA,
-    ]
-    assert group_members(tenants, tenant_file, [], cloud="Commercial") == []
-
-
-def test_group_members_skips_tenants_in_another_cloud(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    caplog.set_level(logging.INFO, logger="m365_gdap_runner.tenants")
+def test_extra_tenants_are_the_rows_gdap_does_not_list(tmp_path: Path) -> None:
     path = _write(
         tmp_path / "t.csv",
-        f"{M365},g",
-        f"{TENANT_A},Alpha,,Commercial,TRUE",
-        f"{TENANT_B},beta corp,,,TRUE",  # blank: taken to be this run's cloud
-        f"{TENANT_C},Gamma,,USGov,TRUE",  # not reachable from a commercial sign-in
+        M365,
+        f"{TENANT_A},Alpha renamed,,",
+        f"{TENANT_C},Gamma,,USGov",
+        ",Acme,,",  # no M365 tenant
+        f"{TENANT_C.upper()},Gamma again,,",  # the same tenant twice: the first row wins
+        f"{DELTA.tenant_id},,,",  # unnamed: named by its ID
     )
-    chosen = group_members([ALPHA, BETA], TenantFile.load(path), ["g"], cloud="commercial")
-    assert chosen == [ALPHA, BETA]
-    assert "Skipped 1 tenant(s) outside the commercial cloud: Gamma (USGov)" in caplog.text
+    assert TenantFile.load(path).extra_tenants([ALPHA, BETA]) == [
+        GAMMA,
+        Tenant(DELTA.tenant_id, DELTA.tenant_id),
+    ]
 
 
-def test_group_members_without_gdap_is_an_error(csv_path: Path) -> None:
-    # Gamma has a row but no GDAP relationship: harmless until a group selects it.
-    tenant_file = TenantFile.load(csv_path)
-    assert group_members([ALPHA, BETA], tenant_file, ["pilot"], cloud="Commercial") == [BETA]
-    path = _write(csv_path, f"{M365},nope", f"{TENANT_C},Gamma,,,TRUE")
-    with pytest.raises(TenantSelectionError, match=rf"'Gamma' \({TENANT_C}\) is in group 'nope'"):
-        group_members([ALPHA, BETA], TenantFile.load(path), ["nope"], cloud="Commercial")
+def test_details_take_the_cloud_and_username_from_the_row(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "t.csv",
+        f"{M365},m365_username",
+        f"{TENANT_A},Alpha,,,",
+        f"{TENANT_C},Gamma,,usgov,admin@gamma.example",
+    )
+    tenant_file = TenantFile.load(path)
+    assert tenant_file.details(GAMMA, default_cloud="Commercial") == Tenant(
+        TENANT_C, "Gamma", "USGov", "admin@gamma.example"
+    )
+    # A blank cloud, or no row at all, is the partner's cloud and the partner account.
+    assert tenant_file.details(ALPHA, default_cloud="Commercial") == Tenant(
+        TENANT_A, "Alpha", "Commercial"
+    )
+    assert tenant_file.details(BETA, default_cloud="Commercial") == Tenant(
+        TENANT_B, "beta corp", "Commercial"
+    )
 
 
-def test_group_members_propagates_file_errors(csv_path: Path) -> None:
-    with pytest.raises(TenantFileError, match="no group column 'missing'"):
-        group_members([ALPHA, BETA], TenantFile.load(csv_path), ["missing"], cloud="Commercial")
+def test_details_reject_an_unknown_cloud_naming_the_row(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "t.csv", M365, f"{TENANT_A},Alpha,,Commercial", f"{TENANT_C},Gamma,,Mars"
+    )
+    with pytest.raises(TenantFileError, match="row 3: 'Mars' in column 'm365_cloud'"):
+        TenantFile.load(path).details(GAMMA, default_cloud="Commercial")

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import httpx
 import pytest
-from azure_auth import ConsentRequired, TenantNotFound
+from azure_auth import AuthError, ConsentRequired, TenantNotFound
 from azure_auth.constants import (
     AZURE_POWERSHELL_CLIENT_ID,
     EXCHANGE_POWERSHELL_CLIENT_ID,
@@ -16,10 +16,12 @@ from m365_gdap_runner.session import PartnerSession
 from m365_gdap_runner.tenants import Tenant
 from tests._gdap_fakes import (
     CONSENT_REQUIRED,
+    GAMMA_ADMIN,
     PARTNER_TENANT,
     TENANT_A,
     TENANT_B,
     TENANT_C,
+    USER,
     FakeMsal,
     bearer_tenant,
     customers_body,
@@ -181,3 +183,83 @@ def test_cloud_of_is_blank_when_discovery_fails(
     session = PartnerSession(make_settings())
     monkeypatch.setattr("azure_auth.Tenant.lookup", failing)
     assert session.cloud_of(TENANT_A) == ""
+
+
+# --- check_access ----------------------------------------------------------------------
+
+ALPHA = Tenant(TENANT_A, "Alpha", "Commercial")
+BETA = Tenant(TENANT_B, "beta corp", "Commercial")
+GAMMA_GOV = Tenant(TENANT_C, "Gamma", "USGov", GAMMA_ADMIN)
+
+
+def _signed_in(clients: list[str]) -> PartnerSession:
+    session = PartnerSession(make_settings(), transport=TRANSPORT)
+    session.login(clients)
+    return session
+
+
+def test_check_access_reaches_gdap_tenants_through_the_partner_sign_in(
+    fake_msal: FakeMsal,
+) -> None:
+    session = _signed_in(["graph"])
+    session.check_access([ALPHA, BETA], scopes=["User.Read.All"], jobs=2)
+    with session.context_for(ALPHA, scopes=["User.Read.All"]) as alpha:
+        assert alpha.auth.is_sibling
+    assert fake_msal.interactive_tenants() == [PARTNER_TENANT]
+    assert fake_msal.silent_calls(TENANT_B) == [
+        (GRAPH_CLI_CLIENT_ID, ("https://graph.microsoft.com/User.Read.All",))
+    ]
+
+
+def test_check_access_signs_in_directly_where_the_partner_sign_in_fails(
+    fake_msal: FakeMsal,
+) -> None:
+    fake_msal.tenant_errors[TENANT_B] = CONSENT_REQUIRED
+    session = _signed_in(["graph"])
+    session.check_access([ALPHA, BETA], scopes=["User.Read.All"])
+    with session.context_for(BETA, scopes=["User.Read.All"]) as beta:
+        assert not beta.auth.is_sibling
+        assert (beta.auth.tenant.id, beta.auth.username) == (TENANT_B, USER)
+        assert bearer_tenant(beta.graph.request("GET", "/users").request) == TENANT_B
+    assert fake_msal.interactive_tenants() == [PARTNER_TENANT, TENANT_B]
+
+
+def test_check_access_signs_in_to_another_cloud_once_per_client_as_its_account(
+    fake_msal: FakeMsal,
+) -> None:
+    session = _signed_in(["graph", "exchange"])
+    session.check_access([GAMMA_GOV], scopes=["User.Read.All"], clients=["graph", "exchange"])
+    # Straight to Gamma's own sign-in, never through the commercial partner sign-in: Graph
+    # first, then Exchange, which has no refresh token of its own for this account yet.
+    assert [(c.method, c.client_id) for c in fake_msal.calls if c.tenant_id == TENANT_C] == [
+        ("interactive", GRAPH_CLI_CLIENT_ID),
+        ("silent", EXCHANGE_POWERSHELL_CLIENT_ID),
+        ("interactive", EXCHANGE_POWERSHELL_CLIENT_ID),
+    ]
+    assert fake_msal.authority(TENANT_C) == f"https://login.microsoftonline.us/{TENANT_C}"
+    with session.context_for(
+        GAMMA_GOV, scopes=["User.Read.All"], clients=["graph", "exchange"]
+    ) as gamma:
+        assert (gamma.auth.tenant.cloud.name, gamma.auth.username) == ("USGov", GAMMA_ADMIN)
+        assert gamma.graph.request("GET", "/users").request.url.host == "graph.microsoft.us"
+
+
+def test_check_access_without_direct_sign_ins_leaves_the_reason_for_context_for(
+    fake_msal: FakeMsal,
+) -> None:
+    fake_msal.tenant_errors[TENANT_B] = CONSENT_REQUIRED
+    session = _signed_in(["graph"])
+    session.check_access([ALPHA, BETA, GAMMA_GOV], scopes=["User.Read.All"], direct=False)
+    with pytest.raises(ConsentRequired):
+        session.context_for(BETA, scopes=["User.Read.All"])
+    with pytest.raises(AuthError, match="Gamma is in the USGov cloud"):
+        session.context_for(GAMMA_GOV, scopes=["User.Read.All"])
+    assert fake_msal.interactive_tenants() == [PARTNER_TENANT]
+
+
+def test_a_failed_direct_sign_in_is_what_context_for_raises(fake_msal: FakeMsal) -> None:
+    fake_msal.interactive_errors[TENANT_C] = {"error": "access_denied", "error_description": "no"}
+    session = _signed_in(["graph"])
+    session.check_access([GAMMA_GOV], scopes=["User.Read.All"])
+    with pytest.raises(AuthError, match="access_denied"):
+        session.context_for(GAMMA_GOV, scopes=["User.Read.All"])

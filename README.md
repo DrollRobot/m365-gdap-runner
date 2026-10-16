@@ -61,7 +61,9 @@ uv run users.py --group pilot
 ```
 
 Tenants are chosen with `--group` (a column of the tenants CSV), `--tenant` or `--all`, less
-`--exclude`. The library writes no output of its own: `run()` writes any per-tenant report,
+`--exclude`. A tenant the partner sign-in cannot reach, including one without GDAP or in
+another cloud, gets a sign-in of its own before the run; `--gdap-only` turns that off. The
+library writes no output of its own: `run()` writes any per-tenant report,
 `report()` the run's. A script with flags of its own adds the library's to its parser with
 `add_arguments()`. `ctx` also offers `exchange`, `ipps` and `azure` clients when declared in
 `CLIENTS`, and `ctx.auth`, the azure-auth context, for anything else. See

@@ -1,13 +1,18 @@
 """The partner sign-in and what hangs off it: tenant listing and per-tenant contexts.
 
 azure-auth does the authentication. This module only decides *what* to sign in to: one
-sign-in per client id the payload uses, all at the partner (home) tenant, before the loop
+sign-in per client id the script uses, all at the partner (home) tenant, before the loop
 starts. Customer tenants are reached through azure-auth sibling contexts, which never prompt;
 they redeem the home sign-in's refresh token in the customer tenant.
 
+A tenant the partner sign-in cannot reach (no GDAP relationship, missing consent, a policy
+that wants a fresh sign-in, or another Microsoft cloud) gets a direct sign-in instead: a
+context of its own, in its own cloud, as the tenant's own account. All of that happens in
+:meth:`PartnerSession.check_access`, before the loop, so the loop never opens a browser.
+
 Why sign in per client: Microsoft's first-party apps differ per resource (Graph PowerShell,
 Exchange Online PowerShell, Azure PowerShell) and a refresh token belongs to one app, so a
-payload that uses Graph and Exchange needs two home sign-ins. With an encrypted disk cache
+script that uses Graph and Exchange needs two home sign-ins. With an encrypted disk cache
 later runs are silent.
 """
 
@@ -15,6 +20,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from typing import Literal, cast
 
 import azure_auth
@@ -89,6 +95,9 @@ class PartnerSession:
                 raise ConfigError(str(exc)) from exc
             tenant = _partner_tenant(settings.partner_tenant_id, cloud)
         self._transport = transport
+        self._settings = settings
+        # How check_access() found each tenant can be reached, by lower-cased tenant ID.
+        self._routes: dict[str, AuthContext | Exception] = {}
         self.auth = AuthContext(
             tenant,
             username=settings.username,
@@ -171,22 +180,149 @@ class PartnerSession:
             tenants.values(), key=lambda t: (t.display_name.casefold(), t.tenant_id.lower())
         )
 
+    def check_access(
+        self,
+        tenants: Sequence[Tenant],
+        *,
+        scopes: Sequence[str] = (),
+        clients: Sequence[str] = ("graph",),
+        direct: bool = True,
+        jobs: int = 1,
+    ) -> None:
+        """Find a way into every tenant before the run, so the run itself never prompts.
+
+        A tenant in the partner's cloud is checked first through the partner sign-in, silently
+        and the way the run will use it: every client the script uses must get a token
+        (:meth:`TenantContext.probe`). A tenant that fails that check, for whatever reason,
+        and a tenant in another cloud, then get a direct sign-in: a context of their own, in
+        their own cloud, as their ``username`` or else the partner account, signed in once per
+        client. The browser opens only where no cached sign-in will do. Direct sign-ins run
+        one at a time, on this thread.
+
+        :meth:`context_for` then hands out what was found, and raises the reason for a tenant
+        that could not be reached.
+
+        Args:
+            tenants: The selected tenants, with their cloud filled in.
+            scopes: The script's Graph scopes.
+            clients: The script's ``CLIENTS``.
+            direct: Sign in directly where the partner sign-in fails. False leaves those
+                tenants unreachable, for unattended runs.
+            jobs: How many silent checks run at once.
+        """
+        partner_cloud = self.cloud_name.lower()
+        nearby = [t for t in tenants if (t.cloud or self.cloud_name).lower() == partner_cloud]
+        logger.info("Checking access to %d tenant(s)", len(tenants))
+        with ThreadPoolExecutor(
+            max_workers=max(1, min(jobs, len(nearby))), thread_name_prefix="check"
+        ) as pool:
+            checked = dict(
+                zip(
+                    (t.tenant_id.lower() for t in nearby),
+                    pool.map(lambda t: self._through_partner(t, scopes, clients), nearby),
+                    strict=True,
+                )
+            )
+        for tenant in tenants:
+            key = tenant.tenant_id.lower()
+            route = checked.get(key)
+            if isinstance(route, AuthContext):
+                self._routes[key] = route
+                continue
+            if route is None:
+                why = f"it is in the {tenant.cloud} cloud"
+                route = AuthError(
+                    f"{tenant.display_name} is in the {tenant.cloud} cloud, which the partner "
+                    "sign-in cannot reach; it needs a direct sign-in."
+                )
+            else:
+                why = f"the partner sign-in cannot reach it ({route})"
+            if not direct:
+                logger.warning("Skipping %s: %s", tenant.display_name, why)
+                self._routes[key] = route
+                continue
+            username = tenant.username or self._settings.username
+            logger.info("Signing in to %s directly as %s: %s", tenant.display_name, username, why)
+            self._routes[key] = self._sign_in_directly(tenant, username, scopes, clients)
+
+    def _through_partner(
+        self, tenant: Tenant, scopes: Sequence[str], clients: Sequence[str]
+    ) -> AuthContext | Exception:
+        """Check a tenant through the partner sign-in, silently.
+
+        Args:
+            tenant: The tenant, in the partner's cloud.
+            scopes: The script's Graph scopes.
+            clients: The script's ``CLIENTS``.
+
+        Returns:
+            The sibling context when every client got a token, else what went wrong.
+        """
+        try:
+            auth = self.auth.for_tenant(tenant.tenant_id)
+            with TenantContext(
+                tenant, auth, scopes=scopes, clients=clients, transport=self._transport
+            ) as context:
+                context.probe()
+        except Exception as exc:
+            logger.debug("Partner sign-in cannot reach %s", tenant.display_name, exc_info=True)
+            return exc
+        return auth
+
+    def _sign_in_directly(
+        self, tenant: Tenant, username: str, scopes: Sequence[str], clients: Sequence[str]
+    ) -> AuthContext | Exception:
+        """Sign in to a tenant on its own, once per client the script uses.
+
+        Args:
+            tenant: The tenant, with its cloud filled in.
+            username: The account to sign in as.
+            scopes: The script's Graph scopes.
+            clients: The script's ``CLIENTS``.
+
+        Returns:
+            The tenant's own context, signed in to every client, else what went wrong.
+        """
+        try:
+            cloud = get_cloud(tenant.cloud or self.cloud_name)
+            auth = AuthContext(
+                azure_auth.Tenant(tenant.tenant_id, cloud),
+                username=username,
+                client_id=self._settings.client_id or None,
+                cache=cast(Literal["memory", "disk"], self._settings.cache),
+            )
+            for kind in clients:
+                with build_client(kind, auth, scopes=scopes, transport=self._transport) as client:
+                    client.login()
+        except Exception as exc:
+            logger.warning("Could not sign in to %s as %s: %s", tenant.display_name, username, exc)
+            return exc
+        return auth
+
     def context_for(
         self, tenant: Tenant, *, scopes: Sequence[str] = (), clients: Sequence[str] = ("graph",)
     ) -> TenantContext:
-        """Build the context a payload receives for one customer tenant.
+        """Build the context a script receives for one customer tenant.
 
         Args:
             tenant: The customer tenant.
-            scopes: The payload's Graph scopes.
-            clients: The payload's ``CLIENTS``.
+            scopes: The script's Graph scopes.
+            clients: The script's ``CLIENTS``.
 
         Returns:
-            The context, with one client per declared kind. No network call is made.
+            The context, with one client per declared kind: on the route
+            :meth:`check_access` found, or through the partner sign-in for a tenant it did
+            not check. No network call is made.
+
+        Raises:
+            Exception: Why :meth:`check_access` could not reach the tenant.
         """
+        route = self._routes.get(tenant.tenant_id.lower())
+        if isinstance(route, Exception):
+            raise route
         return TenantContext(
             tenant,
-            self.auth.for_tenant(tenant.tenant_id),
+            route or self.auth.for_tenant(tenant.tenant_id),
             scopes=scopes,
             clients=clients,
             transport=self._transport,

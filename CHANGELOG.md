@@ -21,20 +21,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   writes any per-tenant report and `report()` the run's.
 - `TenantContext`: the tenant, its azure-auth context (`ctx.auth`, usable with any
   azure-auth or Azure SDK client), and one ready-made client per declared kind, each
-  checked in the customer tenant before `run()` starts.
+  checked in the customer tenant before the first `run()` starts.
 - Settings `partner_tenant_id`, `username`, `client_id`, `cache` (`memory`, or `disk` for
   an encrypted file) and `cloud`, with matching `--partner-tenant-id`, `--username`,
   `--client-id`, `--cache` and `--cloud` flags.
 - Tenant selection from a tenants file: a CSV with `m365_tenant_id`, `m365_tenant_name`,
-  `m365_domain`, `m365_cloud` and one TRUE/FALSE column per group; other tools may keep
-  their own columns in the same file. The cloud is filled in by OpenID Connect discovery,
-  and a group member in a cloud other than the run's is skipped. `--group NAME` runs the
-  tenants marked in that column
+  `m365_domain`, `m365_cloud`, an optional `m365_username`, and one TRUE/FALSE column per
+  group; other tools may keep their own columns in the same file. A blank cloud is filled in
+  by OpenID Connect discovery. `--group NAME` runs the tenants marked in that column
   (repeatable, combines with `--tenant`), `--all` runs every GDAP tenant, and a run that
-  names neither `--group`, `--tenant` nor `--all` is refused. Every run appends the GDAP
-  tenants the file lacks and warns which; the `m365-gdap-runner` command creates or refreshes
-  the file and lists the tenants. Setting `tenants_file` and flag `--tenants-file` locate the file
-  (default `tenants.csv` in the config directory).
+  names neither `--group`, `--tenant` nor `--all` is refused. `--group` and `--tenant` may
+  pick rows without a GDAP relationship, in any cloud. Every run appends the GDAP tenants the
+  file lacks and warns which; the `m365-gdap-runner` command creates or refreshes the file and
+  lists the tenants. Setting `tenants_file` and flag `--tenants-file` locate the file (default
+  `tenants.csv` in the config directory).
+- Tenants the partner sign-in cannot reach: before the first `run()`, every selected tenant
+  is checked silently through the partner sign-in, and each one that fails, or lives in
+  another cloud, gets a sign-in of its own, in its own cloud, as its `m365_username` (the
+  partner account when blank), one client at a time, so the loop never prompts.
+  `--gdap-only` leaves those tenants `auth_failed` instead.
 - Example scripts, each with the header `uv run` builds its environment from:
   `examples/licensed_users.py` (Graph; its `report()` prints every tenant's users as JSON),
   `examples/audit_disabled.py` (Exchange Online; no `report()`, its log is the report), and

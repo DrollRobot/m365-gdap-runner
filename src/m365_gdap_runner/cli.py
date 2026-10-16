@@ -18,8 +18,11 @@ writes the run's.
 
 Tenants are chosen with ``--group`` (a TRUE/FALSE column of the tenants file, see
 ``tenants.py``), ``--tenant`` or ``--all``, less ``--exclude``; a run that names none is
-refused. Every run appends GDAP tenants the file lacks. The ``m365-gdap-runner`` command
-(:func:`list_tenants`) does only that, and prints the list.
+refused. ``--group`` and ``--tenant`` may pick tenants without a GDAP relationship, or in
+another cloud, from the tenants file; before the loop, every tenant the partner sign-in
+cannot reach gets a sign-in of its own, unless ``--gdap-only`` is given. Every run appends
+GDAP tenants the file lacks. The ``m365-gdap-runner`` command (:func:`list_tenants`) does only
+that, and prints the list.
 
 Configuration comes from the config system (see ``src/m365_gdap_runner/config/``);
 ``--partner-tenant-id``, ``--username``, ``--client-id``, ``--cache``, ``--cloud`` and
@@ -57,7 +60,6 @@ from m365_gdap_runner.tenants import (
     TenantFile,
     TenantFileError,
     TenantSelectionError,
-    group_members,
     select,
     tenants_file_path,
 )
@@ -192,7 +194,10 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         action="append",
         default=None,
         metavar="NAME_OR_ID",
-        help="Run this tenant, by display name or ID (repeatable).",
+        help=(
+            "Run this tenant, by display name or ID: a GDAP customer or a row of the tenants "
+            "file (repeatable)."
+        ),
     )
     tenants.add_argument("--all", action="store_true", help="Run every GDAP tenant.")
     tenants.add_argument(
@@ -201,6 +206,14 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         metavar="NAME_OR_ID",
         help="Skip this tenant (repeatable).",
+    )
+    tenants.add_argument(
+        "--gdap-only",
+        action="store_true",
+        help=(
+            "Reach tenants through the partner sign-in only: a tenant it cannot reach is "
+            "auth_failed instead of getting a sign-in of its own."
+        ),
     )
     run = parser.add_argument_group("m365-gdap-runner run")
     run.add_argument(
@@ -349,30 +362,37 @@ def _select_tenants(
 ) -> list[Tenant]:
     """Apply ``--all``, ``--group``, ``--tenant`` and ``--exclude``.
 
+    ``--all`` means every GDAP tenant. ``--group`` and ``--tenant`` may also pick a row of the
+    tenants file that GDAP does not list.
+
     Args:
         args: Parsed arguments that passed :func:`_selection_error`, so one of ``--all``,
             ``--group`` or ``--tenant`` was given.
         tenants: The GDAP tenants.
-        tenant_file: The tenants file, for ``--group``.
-        cloud: Name of the cloud this run signs in to; group members in another are skipped.
+        tenant_file: The tenants file.
+        cloud: Name of the partner's cloud, for a tenant whose row names none.
 
     Returns:
-        The tenants to run, in enumeration order.
+        The tenants to run, GDAP tenants first, each with its cloud and sign-in account.
 
     Raises:
         TenantFileError: If a group has no column, a cell in it is not TRUE, FALSE or blank,
-            or a member's cloud is not a known one.
-        TenantSelectionError: If a value names no usable tenant, or the groups select none.
+            or a selected tenant's cloud is not a known one.
+        TenantSelectionError: If a value names no tenant, or the groups select none.
     """
+    known = [*tenants, *tenant_file.extra_tenants(tenants)]
     if args.all:
-        return select(tenants, exclude=args.exclude)
-    include = list(args.tenant or ())
-    members = group_members(tenants, tenant_file, args.group or (), cloud=cloud)
-    include += [t.tenant_id for t in members]
-    if not include:
-        groups = ", ".join(args.group or ())
-        raise TenantSelectionError(f"No tenant is marked TRUE in group(s) {groups}.")
-    return select(tenants, include=include, exclude=args.exclude)
+        gdap = {tenant.tenant_id for tenant in tenants}
+        chosen = [t for t in select(known, exclude=args.exclude) if t.tenant_id in gdap]
+    else:
+        include = list(args.tenant or ())
+        for group in args.group or ():
+            include += [row.tenant_id for row in tenant_file.members(group)]
+        if not include:
+            groups = ", ".join(args.group or ())
+            raise TenantSelectionError(f"No tenant is marked TRUE in group(s) {groups}.")
+        chosen = select(known, include=include, exclude=args.exclude)
+    return [tenant_file.details(tenant, default_cloud=cloud) for tenant in chosen]
 
 
 def _script_name(module: ModuleType) -> str:
@@ -455,6 +475,14 @@ def _run(
         logger.error("%s", exc)
         return EXIT_USAGE
 
+    # Every prompt happens here, one at a time, so the loop below can run in parallel.
+    session.check_access(
+        selected,
+        scopes=payload.scopes,
+        clients=payload.clients,
+        direct=not args.gdap_only,
+        jobs=args.jobs,
+    )
     logger.info("Running %s against %d tenant(s)", payload.name, len(selected))
     interrupted = False
     try:

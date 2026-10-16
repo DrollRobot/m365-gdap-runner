@@ -36,6 +36,8 @@ TENANT_A = "aaaaaaaa-0000-0000-0000-00000000000a"
 TENANT_B = "bbbbbbbb-0000-0000-0000-00000000000b"
 TENANT_C = "cccccccc-0000-0000-0000-00000000000c"
 USER = "admin@partner.example"
+# An account of a tenant the partner has no GDAP relationship with.
+GAMMA_ADMIN = "admin@gamma.example"
 
 # Customers the fake partner tenant has GDAP relationships with.
 CUSTOMERS = ((TENANT_A, "Alpha"), (TENANT_B, "beta corp"))
@@ -48,6 +50,15 @@ CONSENT_REQUIRED: dict[str, Any] = {
     ),
     "error_codes": [65001],
     "suberror": "consent_required",
+}
+
+# What Entra says when the partner account asks a tenant it has no access to for a token.
+NOT_IN_TENANT: dict[str, Any] = {
+    "error": "invalid_grant",
+    "error_description": (
+        f"AADSTS50020: User account '{USER}' from identity provider does not exist in tenant."
+    ),
+    "error_codes": [50020],
 }
 
 
@@ -127,9 +138,9 @@ class FakeApp:
         self, scopes: list[str], account: Mapping[str, Any], **kwargs: Any
     ) -> dict[str, Any] | None:
         self.module.record("silent", self, scopes)
-        # A refresh token belongs to one client id: no interactive sign-in for this client
-        # id yet means MSAL finds nothing to redeem, whatever the tenant.
-        if self.client_id not in self.module.signed_in:
+        # A refresh token belongs to one account and one client id: no interactive sign-in
+        # for both yet means MSAL finds nothing to redeem, whatever the tenant.
+        if (self.client_id, account["username"].lower()) not in self.module.signed_in:
             return None
         error = self.module.tenant_errors.get(self.tenant_id.lower())
         if error is not None:
@@ -140,11 +151,16 @@ class FakeApp:
         self.module.record("interactive", self, scopes)
         if self.module.interactive_result is not None:
             return dict(self.module.interactive_result)
-        self.module.sign_in(self.client_id)
+        refused = self.module.interactive_errors.get(self.tenant_id.lower())
+        if refused is not None:
+            return dict(refused)
+        # The person signs in as the account the page was pre-filled with.
+        username = kwargs.get("login_hint") or USER
+        self.module.sign_in(self.client_id, username)
         return {
             "access_token": fake_access(self.tenant_id),
             "expires_in": 3600,
-            "id_token_claims": {"preferred_username": USER, "tid": self.tenant_id},
+            "id_token_claims": {"preferred_username": username, "tid": self.tenant_id},
         }
 
 
@@ -155,15 +171,18 @@ class FakeMsal:
     Attributes:
         tenant_errors: Tenant id to the MSAL error result its silent requests return.
         interactive_result: When set, what every interactive sign-in returns (a failure).
+        interactive_errors: Tenant id to the MSAL error result its interactive sign-ins return.
         accounts: Cached accounts, shared by every application.
-        signed_in: Client ids that have signed in interactively (and so hold a refresh token).
+        signed_in: ``(client_id, username)`` pairs that have signed in interactively, and so
+            hold a refresh token.
         calls: Every token request, in order.
     """
 
     tenant_errors: dict[str, dict[str, Any]] = field(default_factory=dict)
     interactive_result: dict[str, Any] | None = None
+    interactive_errors: dict[str, dict[str, Any]] = field(default_factory=dict)
     accounts: list[dict[str, Any]] = field(default_factory=list)
-    signed_in: set[str] = field(default_factory=set)
+    signed_in: set[tuple[str, str]] = field(default_factory=set)
     calls: list[Call] = field(default_factory=list)
     apps: list[FakeApp] = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock)
@@ -183,12 +202,12 @@ class FakeMsal:
         with self.lock:
             self.calls.append(Call(method, app.tenant_id, app.client_id, tuple(scopes)))
 
-    def sign_in(self, client_id: str) -> None:
-        """Put the partner user's account and a refresh token for *client_id* in the cache."""
+    def sign_in(self, client_id: str, username: str = USER) -> None:
+        """Put an account and a refresh token for *client_id* in the cache."""
         with self.lock:
-            self.signed_in.add(client_id)
-            if not any(a["username"] == USER for a in self.accounts):
-                self.accounts.append({"username": USER, "home_account_id": f"oid.{PARTNER_TENANT}"})
+            self.signed_in.add((client_id, username.lower()))
+            if not any(a["username"] == username for a in self.accounts):
+                self.accounts.append({"username": username, "home_account_id": f"oid.{username}"})
 
     @property
     def interactive_calls(self) -> int:
@@ -201,6 +220,15 @@ class FakeMsal:
             for call in self.calls
             if call.method == "silent" and call.tenant_id.lower() == tenant_id.lower()
         ]
+
+    def interactive_tenants(self) -> list[str]:
+        """Return the tenant of every interactive sign-in, in order."""
+        return [call.tenant_id for call in self.calls if call.method == "interactive"]
+
+    def authority(self, tenant_id: str) -> str:
+        """Return the sign-in authority the applications for a tenant were built with."""
+        (authority,) = {app.authority for app in self.apps if app.tenant_id == tenant_id}
+        return authority
 
 
 @dataclass
@@ -261,26 +289,25 @@ def fake_services(request: httpx.Request) -> httpx.Response:
 
 
 class FakeContext(TenantContext):
-    """A tenant context with no clients: ``probe()`` raises what it is told to."""
+    """A tenant context with no clients."""
 
-    def __init__(self, tenant: Tenant, error: BaseException | None = None) -> None:
+    def __init__(self, tenant: Tenant) -> None:
         self.tenant = tenant
-        self.error = error
         self.closed = False
         self._clients = {}
-
-    def probe(self) -> None:
-        if self.error is not None:
-            raise self.error
 
     def close(self) -> None:
         self.closed = True
 
 
 class FakeSession:
-    """Session whose contexts fail their probe for the tenants given in *auth_errors*."""
+    """Session that could not reach the tenants given in *auth_errors*, as check_access() left it.
 
-    def __init__(self, auth_errors: Mapping[str, BaseException] | None = None) -> None:
+    ``context_for()`` raises a tenant's error, as the real session does for a tenant it could
+    not reach.
+    """
+
+    def __init__(self, auth_errors: Mapping[str, Exception] | None = None) -> None:
         self.auth_errors = dict(auth_errors or {})
         self.contexts: dict[str, FakeContext] = {}
         self.requests: list[tuple[str, tuple[str, ...], tuple[str, ...]]] = []
@@ -289,8 +316,12 @@ class FakeSession:
     def context_for(
         self, tenant: Tenant, *, scopes: Sequence[str] = (), clients: Sequence[str] = ("graph",)
     ) -> TenantContext:
-        context = FakeContext(tenant, self.auth_errors.get(tenant.tenant_id))
+        with self.lock:
+            self.requests.append((tenant.tenant_id, tuple(scopes), tuple(clients)))
+        error = self.auth_errors.get(tenant.tenant_id)
+        if error is not None:
+            raise error
+        context = FakeContext(tenant)
         with self.lock:
             self.contexts[tenant.tenant_id] = context
-            self.requests.append((tenant.tenant_id, tuple(scopes), tuple(clients)))
         return context
