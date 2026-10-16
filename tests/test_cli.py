@@ -21,6 +21,7 @@ import pytest
 from m365_gdap_runner import cli
 from m365_gdap_runner.config.paths import CONFIG_DIR_ENV
 from m365_gdap_runner.config.schema import ENV_PREFIX
+from m365_gdap_runner.runner import TenantResult
 from m365_gdap_runner.tenants import TenantFile
 from tests._gdap_fakes import (
     CONSENT_REQUIRED,
@@ -41,6 +42,18 @@ AUDIT_DISABLED = load_script(EXAMPLES / "audit_disabled.py")
 # The real one: the fixture below replaces it so tests do not stack handlers on the root logger.
 CONFIGURE_LOGGING = cli.configure_logging
 
+# A script whose report() keeps what it is given, so a test can see every tenant's result.
+RECORDER = """
+    SCOPES = ["User.Read.All"]
+    REPORTED = []
+
+    def run(ctx):
+        return [user["userPrincipalName"] for user in ctx.graph.get_all("/users")]
+
+    def report(results):
+        REPORTED.append(results)
+"""
+
 Handler = Callable[[httpx.Request], httpx.Response]
 
 
@@ -54,6 +67,11 @@ def _config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv(ENV_PREFIX + "PARTNER_TENANT_ID", PARTNER_TENANT)
     monkeypatch.setenv(ENV_PREFIX + "USERNAME", USER)
     monkeypatch.setattr(cli, "configure_logging", lambda verbosity: None)
+
+
+@pytest.fixture
+def recorder(tmp_path: Path) -> ModuleType:
+    return _script(tmp_path, RECORDER)
 
 
 def _args(*argv: str) -> argparse.Namespace:
@@ -70,10 +88,20 @@ def _list_tenants(*argv: str) -> int:
     return cli.list_tenants(list(argv), transport=httpx.MockTransport(fake_services))
 
 
-def _script(tmp_path: Path, body: str) -> ModuleType:
-    path = tmp_path / "script.py"
+def _script(tmp_path: Path, body: str, name: str = "script") -> ModuleType:
+    path = tmp_path / f"{name}.py"
     path.write_text(textwrap.dedent(body), encoding="utf-8")
     return load_script(path)
+
+
+def _reported(script: ModuleType) -> list[TenantResult]:
+    """Return what the script's report() was given by the latest run."""
+    reported: list[list[TenantResult]] = script.__dict__["REPORTED"]
+    return reported[-1]
+
+
+def _tenant_ids(script: ModuleType) -> list[str]:
+    return [result.tenant.tenant_id for result in _reported(script)]
 
 
 # --- arguments -------------------------------------------------------------------------
@@ -82,7 +110,7 @@ def _script(tmp_path: Path, body: str) -> ModuleType:
 @pytest.mark.unit
 def test_add_arguments_defaults() -> None:
     args = _args("--all")
-    assert (args.output, args.format, args.jobs, args.continue_on_error) == ("-", "json", 1, False)
+    assert (args.jobs, args.continue_on_error) == (1, False)
     assert (args.tenant, args.group, args.exclude, args.all) == (None, None, None, True)
     assert (args.partner_tenant_id, args.username, args.client_id, args.cache, args.cloud) == (
         None,
@@ -96,7 +124,9 @@ def test_add_arguments_defaults() -> None:
 
 @pytest.mark.unit
 @pytest.mark.parametrize(
-    "argv", [["--jobs", "0"], ["--jobs", "two"], ["--cache", "plaintext"]], ids=str
+    "argv",
+    [["--jobs", "0"], ["--jobs", "two"], ["--cache", "plaintext"], ["--format", "json"]],
+    ids=str,
 )
 def test_the_parser_refuses_bad_values(argv: list[str]) -> None:
     with pytest.raises(SystemExit) as info:
@@ -173,35 +203,37 @@ def test_settings_flags_override_config() -> None:
 @pytest.mark.integration
 @pytest.mark.acceptance
 def test_main_reads_the_command_line_when_the_script_brings_no_parser(
-    fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, recorder: ModuleType
 ) -> None:
-    monkeypatch.setattr(sys, "argv", ["licensed_users.py", "--tenant", "Alpha"])
-    assert cli.main(LICENSED_USERS, transport=httpx.MockTransport(fake_services)) == 0
-    assert [r["tenant_id"] for r in json.loads(capsys.readouterr().out)] == [TENANT_A]
+    monkeypatch.setattr(sys, "argv", ["script.py", "--tenant", "Alpha"])
+    assert cli.main(recorder, transport=httpx.MockTransport(fake_services)) == 0
+    assert _tenant_ids(recorder) == [TENANT_A]
 
 
 @pytest.mark.integration
 def test_main_finds_the_script_by_module_name(
-    fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, recorder: ModuleType
 ) -> None:
-    monkeypatch.setitem(sys.modules, "__main__", LICENSED_USERS)
+    monkeypatch.setitem(sys.modules, "__main__", recorder)
     assert cli.main("__main__", _args("--all"), transport=httpx.MockTransport(fake_services)) == 0
-    assert len(json.loads(capsys.readouterr().out)) == 2
+    assert _tenant_ids(recorder) == [TENANT_A, TENANT_B]
 
 
 @pytest.mark.integration
 @pytest.mark.acceptance
-def test_a_script_adds_flags_of_its_own(
-    fake_msal: FakeMsal, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_a_script_adds_flags_of_its_own(fake_msal: FakeMsal, tmp_path: Path) -> None:
     script = _script(
         tmp_path,
         """
         CLIENTS = ["exchange"]
         LABEL = "unset"
+        REPORTED = []
 
         def run(ctx):
             return {"label": LABEL}
+
+        def report(results):
+            REPORTED.append(results)
         """,
     )
     parser = argparse.ArgumentParser()
@@ -213,7 +245,7 @@ def test_a_script_adds_flags_of_its_own(
     args = parser.parse_args(["--label", "weekly", "--tenant", "Alpha"])
     script.__dict__["LABEL"] = args.label  # what the script's __main__ block does with it
     assert cli.main(script, args, transport=httpx.MockTransport(fake_services)) == 0
-    assert [r["result"] for r in json.loads(capsys.readouterr().out)] == [{"label": "weekly"}]
+    assert [result.result for result in _reported(script)] == [{"label": "weekly"}]
 
 
 @pytest.mark.integration
@@ -235,55 +267,132 @@ def test_main_refuses_all_with_a_narrower_selection(
     assert "--all cannot be combined with --tenant or --group." in caplog.text
 
 
+# --- report() --------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+@pytest.mark.acceptance
+def test_report_gets_every_tenant_in_order_failures_included(
+    fake_msal: FakeMsal, recorder: ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake_msal.tenant_errors[TENANT_B] = CONSENT_REQUIRED
+    assert _main(recorder, "--all") == 1
+    (alpha, beta) = _reported(recorder)
+    assert (alpha.tenant.tenant_id, alpha.status, alpha.result) == (
+        TENANT_A,
+        "ok",
+        [f"admin@{TENANT_A}.example"],
+    )
+    assert (beta.tenant.tenant_id, beta.status, beta.result) == (TENANT_B, "auth_failed", None)
+    assert beta.error is not None
+    assert "AADSTS65001" in beta.error
+    captured = capsys.readouterr()
+    assert captured.out == ""  # the library writes nothing; stdout is the script's
+    assert "Summary: ok=1, auth_failed=1, error=0, skipped=0" in captured.err
+
+
+@pytest.mark.integration
+def test_a_script_without_report_runs_and_writes_nothing(
+    fake_msal: FakeMsal, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    script = _script(tmp_path, 'SCOPES = ["User.Read.All"]\n\ndef run(ctx):\n    return 1\n')
+    assert _main(script, "--all") == 0
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "Summary: ok=2, auth_failed=0, error=0, skipped=0" in captured.err
+
+
+@pytest.mark.integration
+@pytest.mark.acceptance
+def test_exit_2_when_report_fails(
+    fake_msal: FakeMsal,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    script = _script(
+        tmp_path,
+        """
+        SCOPES = ["User.Read.All"]
+
+        def run(ctx):
+            return 1
+
+        def report(results):
+            raise RuntimeError("disk full")
+        """,
+        name="audit",
+    )
+    assert _main(script, "--all") == 2
+    assert "audit's report() failed" in caplog.text
+    assert "RuntimeError: disk full" in caplog.text
+    assert "Summary: ok=2, auth_failed=0, error=0, skipped=0" in capsys.readouterr().err
+
+
+@pytest.mark.integration
+@pytest.mark.acceptance
+def test_interrupt_skips_report(
+    fake_msal: FakeMsal, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    script = _script(
+        tmp_path,
+        """
+        SCOPES = ["User.Read.All"]
+        REPORTED = []
+
+        def run(ctx):
+            if ctx.tenant.display_name == "beta corp":
+                raise KeyboardInterrupt
+            return 1
+
+        def report(results):
+            REPORTED.append(results)
+        """,
+    )
+    assert _main(script, "--all") == 130
+    assert script.__dict__["REPORTED"] == []
+    assert "Summary: ok=1, auth_failed=0, error=1, skipped=0" in capsys.readouterr().err
+
+
 # --- end to end ------------------------------------------------------------------------
 
 
 @pytest.mark.integration
-def test_runs_example_script_to_json_on_stdout(
+def test_runs_the_graph_example_and_its_report(
     fake_msal: FakeMsal, capsys: pytest.CaptureFixture[str]
 ) -> None:
     assert _main(LICENSED_USERS, "--all", "--jobs", "2") == 0
-    captured = capsys.readouterr()
-    records = json.loads(captured.out)
-    assert [(r["tenant_id"], r["status"]) for r in records] == [(TENANT_A, "ok"), (TENANT_B, "ok")]
-    assert records[1]["result"][0]["userPrincipalName"] == f"admin@{TENANT_B}.example"
-    assert "Summary: ok=2, auth_failed=0, error=0, skipped=0" in captured.err
+    rows = json.loads(capsys.readouterr().out)
+    assert [(r["tenantId"], r["tenant"], r["status"]) for r in rows] == [
+        (TENANT_A, "Alpha", "ok"),
+        (TENANT_B, "beta corp", "ok"),
+    ]
+    assert rows[1]["users"] == [
+        {
+            "userPrincipalName": f"admin@{TENANT_B}.example",
+            "displayName": "Admin",
+            "skuIds": "sku-1;sku-2",
+        }
+    ]
     assert fake_msal.interactive_calls == 1
 
 
 @pytest.mark.integration
-def test_runs_exchange_example(fake_msal: FakeMsal, capsys: pytest.CaptureFixture[str]) -> None:
-    assert _main(AUDIT_DISABLED, "--tenant", "beta corp") == 0
-    records = json.loads(capsys.readouterr().out)
-    assert [(r["status"], r["result"]["auditDisabled"]) for r in records] == [("ok", True)]
+def test_runs_the_exchange_example_whose_log_is_the_report(
+    fake_msal: FakeMsal, capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO)
+    assert _main(AUDIT_DISABLED, "--all") == 0
+    assert capsys.readouterr().out == ""
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings == ["Mailbox auditing is off tenant-wide (AuditDisabled is True)"]
     assert fake_msal.interactive_calls == 2
 
 
 @pytest.mark.integration
-def test_writes_csv_file(fake_msal: FakeMsal, tmp_path: Path) -> None:
-    output = tmp_path / "users.csv"
-    assert _main(LICENSED_USERS, "--all", "--format", "csv", "--output", str(output)) == 0
-    assert output.read_text(encoding="utf-8").splitlines() == [
-        "tenant_id,display_name,userPrincipalName,displayName,skuIds",
-        f"{TENANT_A},Alpha,admin@{TENANT_A}.example,Admin,sku-1;sku-2",
-        f"{TENANT_B},beta corp,admin@{TENANT_B}.example,Admin,sku-1;sku-2",
-    ]
-
-
-@pytest.mark.integration
-def test_exit_1_when_a_tenant_refuses_consent(
-    fake_msal: FakeMsal, capsys: pytest.CaptureFixture[str]
-) -> None:
-    fake_msal.tenant_errors[TENANT_B] = CONSENT_REQUIRED
-    assert _main(LICENSED_USERS, "--all") == 1
-    records = json.loads(capsys.readouterr().out)
-    assert [r["status"] for r in records] == ["ok", "auth_failed"]
-
-
-@pytest.mark.integration
-def test_tenant_filters(fake_msal: FakeMsal, capsys: pytest.CaptureFixture[str]) -> None:
-    assert _main(LICENSED_USERS, "--all", "--exclude", "BETA CORP") == 0
-    assert [r["tenant_id"] for r in json.loads(capsys.readouterr().out)] == [TENANT_A]
+def test_tenant_filters(fake_msal: FakeMsal, recorder: ModuleType) -> None:
+    assert _main(recorder, "--all", "--exclude", "BETA CORP") == 0
+    assert _tenant_ids(recorder) == [TENANT_A]
 
 
 @pytest.mark.integration
@@ -324,36 +433,25 @@ def test_exit_2_on_failed_sign_in(fake_msal: FakeMsal) -> None:
 
 
 @pytest.mark.integration
-def test_undeclared_client_is_a_tenant_error(
-    fake_msal: FakeMsal, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    script = _script(
-        tmp_path,
-        'SCOPES = ["User.Read.All"]\n\ndef run(ctx):\n    return ctx.exchange.run("Get-Mailbox")\n',
-    )
-    assert _main(script, "--tenant", "Alpha") == 1
-    (record,) = json.loads(capsys.readouterr().out)
-    assert record["status"] == "error"
-    assert "ClientNotDeclared" in record["error"]
-
-
-@pytest.mark.integration
-def test_interrupt_writes_partial_output(fake_msal: FakeMsal, tmp_path: Path) -> None:
+def test_undeclared_client_is_a_tenant_error(fake_msal: FakeMsal, tmp_path: Path) -> None:
     script = _script(
         tmp_path,
         """
         SCOPES = ["User.Read.All"]
+        REPORTED = []
 
         def run(ctx):
-            if ctx.tenant.display_name == "beta corp":
-                raise KeyboardInterrupt
-            return {"tenant": ctx.tenant.display_name}
+            return ctx.exchange.run("Get-Mailbox")
+
+        def report(results):
+            REPORTED.append(results)
         """,
     )
-    output = tmp_path / "out.json"
-    assert _main(script, "--all", "--output", str(output)) == 130
-    records = json.loads(output.read_text(encoding="utf-8"))
-    assert [(r["status"], r["error"]) for r in records] == [("ok", None), ("error", "interrupted")]
+    assert _main(script, "--tenant", "Alpha") == 1
+    (result,) = _reported(script)
+    assert result.status == "error"
+    assert result.error is not None
+    assert "ClientNotDeclared" in result.error
 
 
 # --- the m365-gdap-runner command ------------------------------------------------------
@@ -436,7 +534,7 @@ def test_run_appends_tenants_the_file_lacks_and_warns(
 @pytest.mark.integration
 @pytest.mark.acceptance
 def test_group_runs_only_the_marked_tenants(
-    fake_msal: FakeMsal, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    fake_msal: FakeMsal, tmp_path: Path, recorder: ModuleType
 ) -> None:
     path = _tenants_csv(
         tmp_path / "tenants.csv",
@@ -445,13 +543,13 @@ def test_group_runs_only_the_marked_tenants(
         f"{TENANT_B},beta corp,,Commercial,TRUE",
         f"{TENANT_C},Gamma,,,FALSE",  # no GDAP relationship: harmless while unselected
     )
-    assert _main(LICENSED_USERS, "--group", "pilot", "--tenants-file", str(path)) == 0
-    assert [r["tenant_id"] for r in json.loads(capsys.readouterr().out)] == [TENANT_B]
+    assert _main(recorder, "--group", "pilot", "--tenants-file", str(path)) == 0
+    assert _tenant_ids(recorder) == [TENANT_B]
 
 
 @pytest.mark.integration
 def test_groups_and_tenants_add_up_and_exclude_applies(
-    fake_msal: FakeMsal, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    fake_msal: FakeMsal, tmp_path: Path, recorder: ModuleType
 ) -> None:
     path = _tenants_csv(
         tmp_path / "tenants.csv",
@@ -460,20 +558,17 @@ def test_groups_and_tenants_add_up_and_exclude_applies(
         f"{TENANT_B},beta corp,,Commercial,FALSE,TRUE",
     )
     file_flag = ["--tenants-file", str(path)]
-    assert _main(LICENSED_USERS, "--group", "pilot", "--group", "PATCHING", *file_flag) == 0
-    assert [r["tenant_id"] for r in json.loads(capsys.readouterr().out)] == [TENANT_A, TENANT_B]
-    assert _main(LICENSED_USERS, "--group", "pilot", "--tenant", "beta corp", *file_flag) == 0
-    assert [r["tenant_id"] for r in json.loads(capsys.readouterr().out)] == [TENANT_A, TENANT_B]
-    assert _main(LICENSED_USERS, "--group", "pilot", "--exclude", "Alpha", *file_flag) == 0
-    assert json.loads(capsys.readouterr().out) == []
+    assert _main(recorder, "--group", "pilot", "--group", "PATCHING", *file_flag) == 0
+    assert _tenant_ids(recorder) == [TENANT_A, TENANT_B]
+    assert _main(recorder, "--group", "pilot", "--tenant", "beta corp", *file_flag) == 0
+    assert _tenant_ids(recorder) == [TENANT_A, TENANT_B]
+    assert _main(recorder, "--group", "pilot", "--exclude", "Alpha", *file_flag) == 0
+    assert _tenant_ids(recorder) == []
 
 
 @pytest.mark.integration
 def test_tenants_file_setting_locates_the_file(
-    fake_msal: FakeMsal,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
+    fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, recorder: ModuleType
 ) -> None:
     path = _tenants_csv(
         tmp_path / "elsewhere" / "customers.csv",
@@ -481,8 +576,8 @@ def test_tenants_file_setting_locates_the_file(
         f"{TENANT_A},Alpha,,Commercial,TRUE",
     )
     monkeypatch.setenv(ENV_PREFIX + "TENANTS_FILE", str(path))
-    assert _main(LICENSED_USERS, "--group", "pilot") == 0
-    assert [r["tenant_id"] for r in json.loads(capsys.readouterr().out)] == [TENANT_A]
+    assert _main(recorder, "--group", "pilot") == 0
+    assert _tenant_ids(recorder) == [TENANT_A]
     assert not (tmp_path / "config" / "tenants.csv").exists()
 
 
@@ -526,10 +621,7 @@ def test_exit_2_when_the_groups_select_nothing(
 @pytest.mark.integration
 @pytest.mark.acceptance
 def test_group_skips_members_in_another_cloud(
-    fake_msal: FakeMsal,
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-    caplog: pytest.LogCaptureFixture,
+    fake_msal: FakeMsal, tmp_path: Path, recorder: ModuleType, caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.INFO, logger="m365_gdap_runner.tenants")
     path = _tenants_csv(
@@ -538,8 +630,8 @@ def test_group_skips_members_in_another_cloud(
         f"{TENANT_A},Alpha,,Commercial,TRUE",
         f"{TENANT_C},Gamma,,USGov,TRUE",  # another cloud: out of this sign-in's reach, no error
     )
-    assert _main(LICENSED_USERS, "--group", "pilot", "--tenants-file", str(path)) == 0
-    assert [r["tenant_id"] for r in json.loads(capsys.readouterr().out)] == [TENANT_A]
+    assert _main(recorder, "--group", "pilot", "--tenants-file", str(path)) == 0
+    assert _tenant_ids(recorder) == [TENANT_A]
     assert "Skipped 1 tenant(s) outside the Commercial cloud: Gamma (USGov)" in caplog.text
 
 

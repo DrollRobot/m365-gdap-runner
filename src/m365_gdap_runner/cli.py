@@ -12,6 +12,10 @@ calls the script's ``run(ctx)`` for each selected tenant::
 then ``uv run audit.py --group pilot``. A script with flags of its own builds the parser,
 adds the library's flags with :func:`add_arguments`, and passes what it parsed to ``main()``.
 
+The library writes no output of its own. ``run()`` writes any per-tenant report; after the
+last tenant, the script's ``report(results)``, when it has one, gets every tenant's result and
+writes the run's.
+
 Tenants are chosen with ``--group`` (a TRUE/FALSE column of the tenants file, see
 ``tenants.py``), ``--tenant`` or ``--all``, less ``--exclude``; a run that names none is
 refused. Every run appends GDAP tenants the file lacks. The ``m365-gdap-runner`` command
@@ -19,11 +23,11 @@ refused. Every run appends GDAP tenants the file lacks. The ``m365-gdap-runner``
 
 Configuration comes from the config system (see ``src/m365_gdap_runner/config/``);
 ``--partner-tenant-id``, ``--username``, ``--client-id``, ``--cache``, ``--cloud`` and
-``--tenants-file`` override it. Progress and the summary go to stderr; stdout carries only
-output (``--output -``).
+``--tenants-file`` override it. Progress and the summary go to stderr; stdout is the
+script's.
 
-Exit codes: 0 all tenants ok; 1 any tenant not ok; 2 usage, configuration,
-script, sign-in, enumeration, tenants-file, or tenant-selection error; 130 interrupted.
+Exit codes: 0 all tenants ok; 1 any tenant not ok; 2 usage, configuration, script, sign-in,
+enumeration, tenants-file or tenant-selection error, or ``report()`` failed; 130 interrupted.
 """
 
 from __future__ import annotations
@@ -39,9 +43,14 @@ import httpx
 from azure_auth import AuthError, ResourceError
 
 from m365_gdap_runner.config import ConfigError, Settings, load_settings
-from m365_gdap_runner.loader import PayloadInvalid, payload_from_module
-from m365_gdap_runner.output import FORMATS, STDOUT, OutputFormatError, write_results
-from m365_gdap_runner.runner import RunInterrupted, TenantLogFilter, run_payload, summarize
+from m365_gdap_runner.loader import Payload, PayloadInvalid, payload_from_module
+from m365_gdap_runner.runner import (
+    RunInterrupted,
+    TenantLogFilter,
+    TenantResult,
+    run_payload,
+    summarize,
+)
 from m365_gdap_runner.session import CACHE_KINDS, PartnerSession
 from m365_gdap_runner.tenants import (
     Tenant,
@@ -194,12 +203,6 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         help="Skip this tenant (repeatable).",
     )
     run = parser.add_argument_group("m365-gdap-runner run")
-    run.add_argument(
-        "--output", default=STDOUT, metavar="PATH", help="Output file, or - for stdout (default)."
-    )
-    run.add_argument(
-        "--format", choices=FORMATS, default="json", help="Output format (default: json)."
-    )
     run.add_argument(
         "--continue-on-error",
         action="store_true",
@@ -400,10 +403,31 @@ def _parser(module: ModuleType) -> argparse.ArgumentParser:
     return parser
 
 
+def _report(payload: Payload, results: list[TenantResult]) -> bool:
+    """Hand every tenant's result to the script's ``report()``, when it has one.
+
+    Args:
+        payload: The validated script.
+        results: One result per tenant, in input order.
+
+    Returns:
+        False when ``report()`` raised; the error is logged with its traceback.
+    """
+    if payload.report is None:
+        return True
+    logger.debug("Calling %s's report() with %d result(s)", payload.name, len(results))
+    try:
+        payload.report(results)
+    except Exception:
+        logger.exception("%s's report() failed", payload.name)
+        return False
+    return True
+
+
 def _run(
     module: ModuleType, args: argparse.Namespace, *, transport: httpx.BaseTransport | None
 ) -> int:
-    """Validate the script, sign in, pick tenants, run them, and write the output.
+    """Validate the script, sign in, pick tenants, run them, and call ``report()``.
 
     The script is checked before sign-in, so a mistake in it never costs a browser prompt.
 
@@ -440,20 +464,18 @@ def _run(
             selected,
             continue_on_error=args.continue_on_error,
             jobs=args.jobs,
-            output_format=args.format,
         )
     except RunInterrupted as exc:
         results = exc.results
         interrupted = True
 
-    try:
-        write_results(results, args.output, args.format)
-    except (OSError, OutputFormatError) as exc:
-        logger.error("Could not write output: %s", exc)
-        return EXIT_USAGE
+    # A report built from part of a run would look complete, so an interrupted run has none.
+    reported = interrupted or _report(payload, results)
     print(f"Summary: {summarize(results)}", file=sys.stderr)
     if interrupted:
         return EXIT_INTERRUPTED
+    if not reported:
+        return EXIT_USAGE
     return EXIT_OK if all(r.status == "ok" for r in results) else EXIT_TENANT_FAILED
 
 

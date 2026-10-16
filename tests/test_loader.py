@@ -35,6 +35,12 @@ def test_valid_script() -> None:
     assert payload.scopes == ("User.Read.All",)
     assert payload.clients == ("graph",)
     assert callable(payload.run)
+    assert payload.report is None
+
+
+def test_report_is_picked_up() -> None:
+    module = _module(VALID + "\n    def report(results, title='Report'):\n        pass\n")
+    assert payload_from_module(module, "script").report is module.report
 
 
 def test_clients_are_normalized_and_deduplicated() -> None:
@@ -96,6 +102,14 @@ def test_run_with_optional_parameters_is_accepted() -> None:
             "'graph' is not in CLIENTS",
         ),
         ('CLIENTS = ["graph", "exchange"]\ndef run(ctx):\n    pass\n', "must define SCOPES"),
+        (
+            'SCOPES = ["User.Read.All"]\ndef run(ctx):\n    pass\nreport = "summary.xlsx"\n',
+            r"must define a callable report\(results\)",
+        ),
+        (
+            'SCOPES = ["User.Read.All"]\ndef run(ctx):\n    pass\ndef report():\n    pass\n',
+            r"report\(\) must accept exactly one positional argument \(results\)",
+        ),
     ],
 )
 def test_invalid_scripts_are_rejected(body: str, message: str) -> None:

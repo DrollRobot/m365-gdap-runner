@@ -2,20 +2,18 @@
 # requires-python = ">=3.14"
 # dependencies = [
 #   "m365-gdap-runner @ git+https://github.com/DrollRobot/m365-gdap-runner.git@v0.1.0",
+#   "openpyxl>=3.1.5",
 # ]
 # ///
 """Example script: mailboxes whose audit action sets lag Microsoft's defaults.
 
-A port of a PowerShell report. The script connected, collected, analysed, exported an
-``.xlsx`` and read it back; here the runner connects and writes, so the script is only the
-middle two steps and returns findings as flat rows. A tenant with nothing wrong returns no
-rows, which is what makes the merged CSV a report of gaps only::
+A port of a PowerShell report, and an example of both kinds of report. ``run()`` writes each
+tenant's workbook as soon as that tenant is done: its audit switches, the mailboxes missing
+actions, and the audit bypass associations. After the last tenant, ``report()`` writes one
+summary workbook: a row per tenant, failed ones included, and every tenant's gaps on one
+sheet. ``--out`` is the script's own flag, beside the library's::
 
-    uv run mailbox_audit_gaps.py --group pilot --format csv
-
-or against one tenant::
-
-    uv run mailbox_audit_gaps.py --tenant Contoso
+    uv run mailbox_audit_gaps.py --group pilot --out reports
 
 The reference action set per logon type (Admin, Delegate, Owner) is derived from the
 mailboxes still enrolled in Microsoft's managed defaults, then every mailbox that left a
@@ -39,11 +37,19 @@ Note:
 
 from __future__ import annotations
 
+import datetime
 import logging
-from collections.abc import Iterable, Mapping
+import re
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
-from m365_gdap_runner import TenantContext
+from openpyxl import Workbook
+from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.table import Table, TableStyleInfo
+
+from m365_gdap_runner import TenantContext, TenantResult
 
 logger = logging.getLogger(__name__)
 
@@ -59,50 +65,136 @@ RECIPIENT_TYPES = ["UserMailbox", "SharedMailbox", "RoomMailbox", "EquipmentMail
 # Properties read beside the Audit property set, which carries each logon type's actions.
 AUDIT_PROPERTIES = ["DefaultAuditSet", "UserPrincipalName", "RecipientTypeDetails"]
 
-# What the ``finding`` column holds. Every row has the same columns so the CSV stays flat;
-# ``recipientTypeDetails`` and ``missingActions`` are blank except for ``audit_gap``.
-AUDIT_DISABLED = "audit_disabled"
-UNIFIED_AUDIT_LOG_OFF = "unified_audit_log_off"
-AUDIT_GAP = "audit_gap"
-AUDIT_BYPASS = "audit_bypass"
+# Where the workbooks go. ``--out`` replaces it before the run starts.
+OUT_DIR = Path("reports")
+
+# The look ImportExcel gave the PowerShell report: a striped table with filters on each sheet.
+TABLE_STYLE = "TableStyleMedium8"
+
+# Widest a column is made to fit its longest value, in characters.
+MAX_COLUMN_WIDTH = 80
 
 
-def run(ctx: TenantContext) -> list[dict[str, str]]:
-    """Return every audit finding in the tenant.
+@dataclass(frozen=True)
+class TenantAudit:
+    """What ``run()`` found in one tenant, for ``report()``.
+
+    Attributes:
+        tenant: The tenant's initial ``*.onmicrosoft.com`` domain.
+        audit_disabled: Whether mailbox auditing is off tenant-wide.
+        unified_audit_log: Whether records reach the unified audit log.
+        mailboxes: How many mailboxes were read.
+        gaps: One row per mailbox missing actions, as the workbook's Audit Gaps sheet has it.
+        bypassed: One row per principal whose mailbox access is not audited.
+        workbook: The tenant's workbook.
+    """
+
+    tenant: str
+    audit_disabled: bool
+    unified_audit_log: bool
+    mailboxes: int
+    gaps: list[dict[str, str]]
+    bypassed: list[dict[str, str]]
+    workbook: Path
+
+
+def run(ctx: TenantContext) -> TenantAudit:
+    """Audit one tenant and write its workbook.
 
     Args:
         ctx: The tenant context supplied by the runner.
 
     Returns:
-        One row per finding with ``finding``, ``identity``, ``recipientTypeDetails`` and
-        ``missingActions`` (comma-separated). Empty when the tenant is clean.
+        What was found, and where the workbook is.
     """
     exchange = ctx.exchange
     tenant = _initial_domain(exchange.run("Get-AcceptedDomain"))
-    rows: list[dict[str, str]] = []
 
     (org_config,) = exchange.run("Get-OrganizationConfig")
     tenant = tenant or str(org_config.get("Name") or ctx.tenant.display_name)
-    if org_config.get("AuditDisabled"):
+    audit_disabled = bool(org_config.get("AuditDisabled"))
+    if audit_disabled:
         logger.warning("AuditDisabled is True: mailbox auditing is off tenant-wide.")
-        rows.append(_row(AUDIT_DISABLED, tenant))
 
     (audit_config,) = exchange.run("Get-AdminAuditLogConfig")
-    if not audit_config.get("UnifiedAuditLogIngestionEnabled"):
+    unified_audit_log = bool(audit_config.get("UnifiedAuditLogIngestionEnabled"))
+    if not unified_audit_log:
         logger.warning("UnifiedAuditLogIngestionEnabled is False: nothing reaches the audit log.")
-        rows.append(_row(UNIFIED_AUDIT_LOG_OFF, tenant))
 
     mailboxes = exchange.mailboxes(
         PropertySet="Audit", RecipientTypeDetails=RECIPIENT_TYPES, select=AUDIT_PROPERTIES
     )
     logger.info("%d mailboxes retrieved", len(mailboxes))
-    rows.extend(audit_gaps(mailboxes))
+    gaps = audit_gaps(mailboxes)
 
     logger.info("Checking audit bypass associations (enumerates every principal; can be slow)")
-    for item in exchange.run("Get-MailboxAuditBypassAssociation"):
-        if item.get("AuditBypassEnabled"):
-            rows.append(_row(AUDIT_BYPASS, str(item.get("Identity") or item.get("Name") or "")))
-    return rows
+    bypassed = sorted(
+        (
+            {"Name": str(item.get("Name") or ""), "Identity": str(item.get("Identity") or "")}
+            for item in exchange.run("Get-MailboxAuditBypassAssociation")
+            if item.get("AuditBypassEnabled")
+        ),
+        key=lambda row: row["Name"].casefold(),
+    )
+
+    workbook = _workbook()
+    settings = {
+        "Tenant": tenant,
+        "Collected": datetime.datetime.now().replace(microsecond=0),
+        "AuditDisabled": audit_disabled,
+        "UnifiedAuditLogIngestionEnabled": unified_audit_log,
+    }
+    _add_sheet(workbook, "Tenant", "TenantSettings", [settings])
+    if gaps:
+        _add_sheet(workbook, "Audit Gaps", "AuditGaps", gaps)
+    if bypassed:
+        _add_sheet(workbook, "Audit Bypass", "AuditBypass", bypassed)
+    path = _save(workbook, f"MailboxAuditGaps_{_file_safe(tenant)}")
+    logger.info(
+        "Wrote %s: %d mailboxes, %d with gaps, %d bypassed",
+        path,
+        len(mailboxes),
+        len(gaps),
+        len(bypassed),
+    )
+    return TenantAudit(
+        tenant, audit_disabled, unified_audit_log, len(mailboxes), gaps, bypassed, path
+    )
+
+
+def report(results: list[TenantResult]) -> None:
+    """Write the run's summary workbook: one row per tenant, and every tenant's gaps.
+
+    Args:
+        results: Every tenant's result, in run order. A tenant that failed has its status
+            and error and no counts.
+    """
+    tenants: list[dict[str, object]] = []
+    gaps: list[dict[str, object]] = []
+    for result in results:
+        audit = result.result if isinstance(result.result, TenantAudit) else None
+        tenants.append(
+            {
+                "Tenant": result.tenant.display_name,
+                "TenantId": result.tenant.tenant_id,
+                "Status": result.status,
+                "AuditDisabled": audit.audit_disabled if audit else None,
+                "UnifiedAuditLogIngestionEnabled": audit.unified_audit_log if audit else None,
+                "Mailboxes": audit.mailboxes if audit else None,
+                "WithGaps": len(audit.gaps) if audit else None,
+                "Bypassed": len(audit.bypassed) if audit else None,
+                "Workbook": audit.workbook.name if audit else "",
+                "Error": result.error or "",
+            }
+        )
+        if audit:
+            gaps += [{"Tenant": result.tenant.display_name, **row} for row in audit.gaps]
+    workbook = _workbook()
+    _add_sheet(workbook, "Tenants", "Tenants", tenants)
+    if gaps:
+        _add_sheet(workbook, "Audit Gaps", "AuditGaps", gaps)
+    path = _save(workbook, "MailboxAuditGaps_summary")
+    print(f"Wrote {path}")
 
 
 def audit_gaps(mailboxes: Iterable[Mapping[str, Any]]) -> list[dict[str, str]]:
@@ -112,7 +204,9 @@ def audit_gaps(mailboxes: Iterable[Mapping[str, Any]]) -> list[dict[str, str]]:
         mailboxes: The audit read of every mailbox.
 
     Returns:
-        One ``audit_gap`` row per mailbox with missing actions, sorted by identity.
+        One row per mailbox with missing actions, sorted by user principal name:
+        ``UserPrincipalName``, ``RecipientTypeDetails`` and ``MissingActions``
+        (comma-separated).
     """
     mailboxes = list(mailboxes)
     reference = reference_sets(mailboxes)
@@ -125,14 +219,13 @@ def audit_gaps(mailboxes: Iterable[Mapping[str, Any]]) -> list[dict[str, str]]:
                 missing |= reference[logon_type] - _names(mailbox.get(f"Audit{logon_type}"))
         if missing:
             rows.append(
-                _row(
-                    AUDIT_GAP,
-                    str(mailbox.get("UserPrincipalName") or ""),
-                    recipient_type=str(mailbox.get("RecipientTypeDetails") or ""),
-                    missing_actions=",".join(sorted(missing)),
-                )
+                {
+                    "UserPrincipalName": str(mailbox.get("UserPrincipalName") or ""),
+                    "RecipientTypeDetails": str(mailbox.get("RecipientTypeDetails") or ""),
+                    "MissingActions": ",".join(sorted(missing)),
+                }
             )
-    return sorted(rows, key=lambda row: row["identity"].casefold())
+    return sorted(rows, key=lambda row: row["UserPrincipalName"].casefold())
 
 
 def reference_sets(mailboxes: Iterable[Mapping[str, Any]]) -> dict[str, frozenset[str]]:
@@ -191,29 +284,105 @@ def _names(value: object) -> frozenset[str]:
     return frozenset(name for name in (str(item).strip() for item in items) if name)
 
 
-def _row(
-    finding: str, identity: str, *, recipient_type: str = "", missing_actions: str = ""
-) -> dict[str, str]:
-    """Build one output row.
+def _file_safe(tenant: str) -> str:
+    """Turn a tenant's domain into the part of a file name that names it.
 
     Args:
-        finding: One of the finding kinds.
-        identity: The tenant domain, mailbox UPN or bypassed principal.
-        recipient_type: ``RecipientTypeDetails`` for a mailbox finding.
-        missing_actions: Comma-separated actions for an ``audit_gap`` finding.
+        tenant: The tenant's initial domain, such as ``contoso.onmicrosoft.com``.
 
     Returns:
-        The row.
+        Its first label with anything but letters, digits, ``_`` and ``-`` replaced.
     """
-    return {
-        "finding": finding,
-        "identity": identity,
-        "recipientTypeDetails": recipient_type,
-        "missingActions": missing_actions,
-    }
+    return re.sub(r"[^\w-]", "_", tenant.split(".")[0])
+
+
+def _workbook() -> Workbook:
+    """Return a workbook with no sheets, ready for :func:`_add_sheet`.
+
+    Returns:
+        The workbook.
+    """
+    workbook = Workbook()
+    for sheet in list(workbook.worksheets):
+        workbook.remove(sheet)
+    return workbook
+
+
+def _add_sheet(
+    workbook: Workbook, title: str, table_name: str, rows: Sequence[Mapping[str, object]]
+) -> None:
+    """Add a sheet holding *rows* as a styled table, filters on, top row frozen.
+
+    Args:
+        workbook: The workbook.
+        title: The sheet's name.
+        table_name: The table's name, unique in the workbook and without spaces.
+        rows: At least one row; the first row's keys are the columns.
+    """
+    sheet = workbook.create_sheet(title)
+    columns = list(rows[0])
+    sheet.append(columns)
+    for row in rows:
+        sheet.append([row.get(column) for column in columns])
+    last_cell = f"{get_column_letter(len(columns))}{len(rows) + 1}"
+    table = Table(displayName=table_name, ref=f"A1:{last_cell}")
+    table.tableStyleInfo = TableStyleInfo(name=TABLE_STYLE, showRowStripes=True)
+    sheet.add_table(table)
+    sheet.freeze_panes = "A2"
+    for number, column in enumerate(columns, start=1):
+        longest = max(len(_text(value)) for value in [column, *(row.get(column) for row in rows)])
+        width = min(longest + 2, MAX_COLUMN_WIDTH)
+        sheet.column_dimensions[get_column_letter(number)].width = width
+
+
+def _text(value: object) -> str:
+    """Show a cell value as the text a column has to fit.
+
+    Args:
+        value: The cell value.
+
+    Returns:
+        The text; empty for None.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, datetime.datetime):
+        return value.isoformat(sep=" ")
+    return str(value)
+
+
+def _save(workbook: Workbook, stem: str) -> Path:
+    """Save a workbook in :data:`OUT_DIR`, named with today's date.
+
+    Args:
+        workbook: The workbook.
+        stem: The file name before the date.
+
+    Returns:
+        Where it was saved.
+    """
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    path = OUT_DIR / f"{stem}_{datetime.date.today().isoformat()}.xlsx"
+    workbook.save(path)
+    return path
 
 
 if __name__ == "__main__":
-    from m365_gdap_runner import main
+    import argparse
 
-    raise SystemExit(main(__name__))
+    from m365_gdap_runner import add_arguments, main
+
+    parser = argparse.ArgumentParser(
+        description="Mailboxes whose audit action sets lag Microsoft's defaults."
+    )
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=OUT_DIR,
+        metavar="DIR",
+        help=f"Folder for the workbooks (default: {OUT_DIR}).",
+    )
+    add_arguments(parser)
+    args = parser.parse_args()
+    OUT_DIR = args.out
+    raise SystemExit(main(__name__, args))

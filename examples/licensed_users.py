@@ -7,9 +7,11 @@
 """Example script: licensed users in each tenant.
 
 Copy this file as the starting point for new scripts. The header above tells uv what the
-script needs, so ``uv run`` builds its environment; run it across a group of tenants::
+script needs, so ``uv run`` builds its environment. ``run()`` collects one tenant's users;
+``report()`` prints every tenant's as JSON once the last is done. Run it across a group of
+tenants, keeping the report::
 
-    uv run licensed_users.py --group pilot --format csv --output users.csv
+    uv run licensed_users.py --group pilot > users.json
 
 or against one tenant::
 
@@ -21,7 +23,9 @@ working copy instead of the release the header names.
 
 from __future__ import annotations
 
-from m365_gdap_runner import TenantContext
+import json
+
+from m365_gdap_runner import TenantContext, TenantResult
 
 # Which of ctx.graph, ctx.exchange, ctx.ipps and ctx.azure this script uses. The runner
 # signs in once per client at the partner tenant and checks each in every customer tenant.
@@ -39,7 +43,7 @@ def run(ctx: TenantContext) -> list[dict[str, str]]:
 
     Returns:
         One row per licensed user with ``userPrincipalName``, ``displayName``,
-        and ``skuIds`` (semicolon-separated, so rows stay flat for CSV output).
+        and ``skuIds`` (semicolon-separated).
     """
     users = ctx.graph.get_all(
         "/users",
@@ -64,6 +68,26 @@ def run(ctx: TenantContext) -> list[dict[str, str]]:
         }
         for user in users
     ]
+
+
+def report(results: list[TenantResult]) -> None:
+    """Print every tenant's licensed users as one JSON array on stdout.
+
+    Args:
+        results: Every tenant's result. A tenant that failed has its status and error, and
+            no users.
+    """
+    rows = [
+        {
+            "tenant": result.tenant.display_name,
+            "tenantId": result.tenant.tenant_id,
+            "status": result.status,
+            "error": result.error,
+            "users": result.result,
+        }
+        for result in results
+    ]
+    print(json.dumps(rows, indent=2))
 
 
 if __name__ == "__main__":

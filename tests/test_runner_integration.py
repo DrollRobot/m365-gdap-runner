@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import argparse
+import datetime
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -10,16 +13,21 @@ from typing import Any
 import httpx
 import pytest
 from azure_auth.constants import EXCHANGE_POWERSHELL_CLIENT_ID, GRAPH_CLI_CLIENT_ID
+from openpyxl import load_workbook
 
+from m365_gdap_runner import cli
 from m365_gdap_runner.config.paths import CONFIG_DIR_ENV
 from m365_gdap_runner.config.schema import ENV_PREFIX
 from m365_gdap_runner.loader import Payload, payload_from_module
-from m365_gdap_runner.runner import run_payload
+from m365_gdap_runner.runner import TenantResult, run_payload
 from m365_gdap_runner.session import PartnerSession
+from m365_gdap_runner.tenants import Tenant
 from tests._gdap_fakes import (
     CONSENT_REQUIRED,
+    PARTNER_TENANT,
     TENANT_A,
     TENANT_B,
+    USER,
     FakeMsal,
     bearer_tenant,
     fake_services,
@@ -60,7 +68,7 @@ def test_graph_example_runs_through_session_and_azure_auth(fake_msal: FakeMsal) 
     session = PartnerSession(make_settings(), transport=httpx.MockTransport(handler))
     session.login(payload.clients)
     tenants = session.list_tenants()
-    results = run_payload(session, payload, tenants, output_format="csv")
+    results = run_payload(session, payload, tenants)
 
     assert [t.tenant_id for t in tenants] == [TENANT_A, TENANT_B]
     assert [r.status for r in results] == ["ok", "auth_failed"]
@@ -74,29 +82,32 @@ def test_graph_example_runs_through_session_and_azure_auth(fake_msal: FakeMsal) 
     assert results[1].error is not None
     assert "AADSTS65001" in results[1].error
 
-    # Consent was checked with the payload's own scopes, not .default.
+    # Consent was checked with the script's own scopes, not .default.
     assert fake_msal.silent_calls(TENANT_B) == [
         (GRAPH_CLI_CLIENT_ID, ("https://graph.microsoft.com/User.Read.All",))
     ]
-    # The payload never ran for the tenant that refused the token.
+    # The script never ran for the tenant that refused the token.
     users_requests = [r for r in seen if r.url.path == "/v1.0/users"]
     assert [bearer_tenant(r) for r in users_requests] == [TENANT_A]
     assert users_requests[0].headers["ConsistencyLevel"] == "eventual"
     assert fake_msal.interactive_calls == 1
 
 
-def test_exchange_example_signs_in_to_exchange_and_runs_the_cmdlet(fake_msal: FakeMsal) -> None:
+def test_exchange_example_signs_in_to_exchange_and_runs_the_cmdlet(
+    fake_msal: FakeMsal, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO)
     payload = _example(AUDIT_DISABLED)
-    assert (payload.clients, payload.scopes) == (("exchange",), ())
+    assert (payload.clients, payload.scopes, payload.report) == (("exchange",), (), None)
 
     session = PartnerSession(make_settings(), transport=httpx.MockTransport(fake_services))
     session.login(payload.clients)
     results = run_payload(session, payload, session.list_tenants())
 
     assert [r.status for r in results] == ["ok", "ok"]
-    assert [r.result for r in results] == [
-        {"name": f"{TENANT_A}.onmicrosoft.com", "auditDisabled": False},
-        {"name": f"{TENANT_B}.onmicrosoft.com", "auditDisabled": True},
+    assert [r.getMessage() for r in caplog.records if r.filename == "audit_disabled.py"] == [
+        "Mailbox auditing is on",
+        "Mailbox auditing is off tenant-wide (AuditDisabled is True)",
     ]
     # Graph for the tenant list, Exchange for the cmdlet: two home sign-ins.
     assert [c.client_id for c in fake_msal.calls if c.method == "interactive"] == [
@@ -108,6 +119,9 @@ def test_exchange_example_signs_in_to_exchange_and_runs_the_cmdlet(fake_msal: Fa
         EXCHANGE_POWERSHELL_CLIENT_ID,
         ("https://outlook.office365.com/.default",),
     )
+
+
+# --- mailbox_audit_gaps.py -------------------------------------------------------------
 
 
 def _mailbox(upn: str, kind: str, defaults: list[str], **actions: Any) -> dict[str, Any]:
@@ -144,41 +158,119 @@ def _audit_services(request: httpx.Request) -> httpx.Response:
         "Get-OrganizationConfig": [{"AuditDisabled": gaps}],
         "Get-AdminAuditLogConfig": [{"UnifiedAuditLogIngestionEnabled": not gaps}],
         "Get-MailboxAuditBypassAssociation": [
-            {"Identity": "svc-backup", "AuditBypassEnabled": gaps},
-            {"Identity": "svc-other", "AuditBypassEnabled": False},
+            {"Name": "svc-backup", "Identity": "svc-backup", "AuditBypassEnabled": gaps},
+            {"Name": "svc-other", "Identity": "svc-other", "AuditBypassEnabled": False},
         ],
     }
     return httpx.Response(200, json={"value": answers[cmdlet]})
 
 
-def test_mailbox_audit_example_reads_mailboxes_through_the_rest_endpoint(
+def _sheets(path: Path) -> dict[str, list[tuple[Any, ...]]]:
+    """Read every sheet of a workbook as rows of values, the header row first."""
+    workbook = load_workbook(path)
+    return {sheet.title: list(sheet.iter_rows(values_only=True)) for sheet in workbook.worksheets}
+
+
+@pytest.fixture
+def mailbox_audit_gaps(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
+    """The example, writing its workbooks to a temp dir, as ``--out`` makes it."""
+    module = load_script(MAILBOX_AUDIT_GAPS)
+    monkeypatch.setattr(module, "OUT_DIR", tmp_path / "reports")
+    return module
+
+
+def test_mailbox_audit_example_writes_a_workbook_per_tenant_and_a_summary(
     fake_msal: FakeMsal,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    mailbox_audit_gaps: Any,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
+    monkeypatch.setenv(ENV_PREFIX + "PARTNER_TENANT_ID", PARTNER_TENANT)
+    monkeypatch.setenv(ENV_PREFIX + "USERNAME", USER)
+    monkeypatch.setattr(cli, "configure_logging", lambda verbosity: None)
     seen: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request)
         return _audit_services(request)
 
-    payload = _example(MAILBOX_AUDIT_GAPS)
-    session = PartnerSession(make_settings(), transport=httpx.MockTransport(handler))
-    session.login(payload.clients)
-    results = run_payload(session, payload, session.list_tenants(), output_format="csv")
+    parser = argparse.ArgumentParser()
+    cli.add_arguments(parser)
+    args = parser.parse_args(["--all", "--jobs", "2"])
+    assert cli.main(mailbox_audit_gaps, args, transport=httpx.MockTransport(handler)) == 0
 
-    assert [r.status for r in results] == ["ok", "ok"]
-    assert results[0].result == []
-    domain = f"{TENANT_B}.onmicrosoft.com"
-    columns = ("finding", "identity", "recipientTypeDetails", "missingActions")
-    assert results[1].result == [
-        dict(zip(columns, row, strict=True))
-        for row in [
-            ("audit_disabled", domain, "", ""),
-            ("unified_audit_log_off", domain, "", ""),
-            ("audit_gap", "cee@b", "UserMailbox", "Move"),
-            ("audit_gap", "Zed@b", "SharedMailbox", "MailboxLogin"),
-            ("audit_bypass", "svc-backup", "", ""),
-        ]
+    today = datetime.date.today().isoformat()
+    reports = tmp_path / "reports"
+    assert sorted(p.name for p in reports.iterdir()) == [
+        f"MailboxAuditGaps_{TENANT_A}_{today}.xlsx",
+        f"MailboxAuditGaps_{TENANT_B}_{today}.xlsx",
+        f"MailboxAuditGaps_summary_{today}.xlsx",
     ]
+    summary_path = reports / f"MailboxAuditGaps_summary_{today}.xlsx"
+    assert capsys.readouterr().out == f"Wrote {summary_path}\n"
+
+    clean = _sheets(reports / f"MailboxAuditGaps_{TENANT_A}_{today}.xlsx")
+    assert list(clean) == ["Tenant"]
+    header, settings = clean["Tenant"]
+    assert header == ("Tenant", "Collected", "AuditDisabled", "UnifiedAuditLogIngestionEnabled")
+    assert (settings[0], settings[2], settings[3]) == (f"{TENANT_A}.onmicrosoft.com", False, True)
+    assert isinstance(settings[1], datetime.datetime)
+
+    findings = _sheets(reports / f"MailboxAuditGaps_{TENANT_B}_{today}.xlsx")
+    assert list(findings) == ["Tenant", "Audit Gaps", "Audit Bypass"]
+    assert findings["Audit Gaps"] == [
+        ("UserPrincipalName", "RecipientTypeDetails", "MissingActions"),
+        ("cee@b", "UserMailbox", "Move"),
+        ("Zed@b", "SharedMailbox", "MailboxLogin"),
+    ]
+    assert findings["Audit Bypass"] == [("Name", "Identity"), ("svc-backup", "svc-backup")]
+
+    summary = _sheets(summary_path)
+    assert summary["Tenants"] == [
+        (
+            "Tenant",
+            "TenantId",
+            "Status",
+            "AuditDisabled",
+            "UnifiedAuditLogIngestionEnabled",
+            "Mailboxes",
+            "WithGaps",
+            "Bypassed",
+            "Workbook",
+            "Error",
+        ),
+        (
+            "Alpha",
+            TENANT_A,
+            "ok",
+            False,
+            True,
+            1,
+            0,
+            0,
+            f"MailboxAuditGaps_{TENANT_A}_{today}.xlsx",
+            None,
+        ),
+        (
+            "beta corp",
+            TENANT_B,
+            "ok",
+            True,
+            False,
+            3,
+            2,
+            1,
+            f"MailboxAuditGaps_{TENANT_B}_{today}.xlsx",
+            None,
+        ),
+    ]
+    assert summary["Audit Gaps"] == [
+        ("Tenant", "UserPrincipalName", "RecipientTypeDetails", "MissingActions"),
+        ("beta corp", "cee@b", "UserMailbox", "Move"),
+        ("beta corp", "Zed@b", "SharedMailbox", "MailboxLogin"),
+    ]
+
     # Get-EXOMailbox -PropertySets Audit -RecipientTypeDetails ... -Properties ...
     (read,) = [r for r in seen if r.url.path == f"/adminapi/beta/{TENANT_B}/Mailbox"]
     assert read.method == "GET"
@@ -187,3 +279,21 @@ def test_mailbox_audit_example_reads_mailboxes_through_the_rest_endpoint(
         "RecipientTypeDetails": "UserMailbox,SharedMailbox,RoomMailbox,EquipmentMailbox",
         "$select": "DefaultAuditSet,UserPrincipalName,RecipientTypeDetails",
     }
+
+
+def test_mailbox_audit_summary_lists_the_tenants_that_failed(
+    tmp_path: Path, mailbox_audit_gaps: Any
+) -> None:
+    failed = TenantResult(Tenant(TENANT_A, "Alpha"), "auth_failed", error="AADSTS65001")
+    mailbox_audit_gaps.report([failed])
+    (path,) = (tmp_path / "reports").iterdir()
+    workbook = load_workbook(path)
+    sheet = workbook["Tenants"]
+    assert list(sheet.iter_rows(min_row=2, values_only=True)) == [
+        ("Alpha", TENANT_A, "auth_failed", None, None, None, None, None, None, "AADSTS65001")
+    ]
+    assert workbook.sheetnames == ["Tenants"]  # no gaps from a tenant that never ran
+    assert sheet.freeze_panes == "A2"
+    (table,) = sheet.tables.values()
+    assert table.tableStyleInfo is not None
+    assert table.tableStyleInfo.name == "TableStyleMedium8"

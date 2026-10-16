@@ -9,6 +9,10 @@ A script defines ``run(ctx)`` and declares what it uses:
   when ``graph`` is in ``CLIENTS``, not allowed otherwise. The runner requests exactly
   these scopes per tenant, so a scope missing consent fails the tenant before
   ``run()`` starts; ``.default`` would bypass that check and is rejected.
+
+It may also define ``report(results)``, called once after the last tenant with every
+tenant's :class:`~m365_gdap_runner.runner.TenantResult`, failed ones included. The library
+writes nothing itself: ``run()`` writes any per-tenant report, ``report()`` the run's.
 """
 
 from __future__ import annotations
@@ -17,8 +21,12 @@ import inspect
 from collections.abc import Callable
 from dataclasses import dataclass
 from types import ModuleType
+from typing import TYPE_CHECKING
 
 from m365_gdap_runner.context import CLIENT_KINDS, TenantContext
+
+if TYPE_CHECKING:
+    from m365_gdap_runner.runner import TenantResult
 
 # Scopes MSAL adds itself and rejects when passed in.
 RESERVED_SCOPES = frozenset({"openid", "profile", "offline_access"})
@@ -40,12 +48,43 @@ class Payload:
         run: The script's ``run(ctx)`` function.
         scopes: Delegated Graph scopes the script needs in each tenant.
         clients: Client kinds the script uses (``graph``, ``exchange``, ``ipps``, ``azure``).
+        report: The script's ``report(results)`` function, or None when it has none.
     """
 
     name: str
     run: Callable[[TenantContext], object]
     scopes: tuple[str, ...]
     clients: tuple[str, ...] = DEFAULT_CLIENTS
+    report: Callable[[list[TenantResult]], object] | None = None
+
+
+def _one_argument_function(
+    function: object, name: str, attribute: str, argument: str
+) -> Callable[..., object]:
+    """Make sure a script function exists and can be called with one positional argument.
+
+    Args:
+        function: The module attribute.
+        name: Script name for error messages.
+        attribute: The function's name in the contract, such as ``run``.
+        argument: What the contract calls its argument, such as ``ctx``.
+
+    Returns:
+        The function.
+
+    Raises:
+        PayloadInvalid: If *function* is not callable or cannot take one positional argument.
+    """
+    if not callable(function):
+        raise PayloadInvalid(f"Script {name!r} must define a callable {attribute}({argument}).")
+    try:
+        inspect.signature(function).bind(None)
+    except TypeError as exc:
+        raise PayloadInvalid(
+            f"Script {name!r}: {attribute}() must accept exactly one positional argument "
+            f"({argument})."
+        ) from exc
+    return function
 
 
 def payload_from_module(module: ModuleType, name: str) -> Payload:
@@ -59,21 +98,16 @@ def payload_from_module(module: ModuleType, name: str) -> Payload:
         The validated script.
 
     Raises:
-        PayloadInvalid: If ``run`` is missing or cannot take one positional
-            argument, or ``CLIENTS`` or ``SCOPES`` is invalid.
+        PayloadInvalid: If ``run`` is missing, ``run`` or ``report`` cannot take one
+            positional argument, or ``CLIENTS`` or ``SCOPES`` is invalid.
     """
-    run = getattr(module, "run", None)
-    if not callable(run):
-        raise PayloadInvalid(f"Script {name!r} must define a callable run(ctx).")
-    try:
-        inspect.signature(run).bind(None)
-    except TypeError as exc:
-        raise PayloadInvalid(
-            f"Script {name!r}: run() must accept exactly one positional argument (ctx)."
-        ) from exc
+    run = _one_argument_function(getattr(module, "run", None), name, "run", "ctx")
+    report = getattr(module, "report", None)
+    if report is not None:
+        report = _one_argument_function(report, name, "report", "results")
     clients = validate_clients(getattr(module, "CLIENTS", None), name)
     scopes = validate_scopes(getattr(module, "SCOPES", None), name, graph="graph" in clients)
-    return Payload(name=name, run=run, scopes=scopes, clients=clients)
+    return Payload(name=name, run=run, scopes=scopes, clients=clients, report=report)
 
 
 def validate_clients(value: object, name: str) -> tuple[str, ...]:

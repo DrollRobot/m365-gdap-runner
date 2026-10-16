@@ -32,7 +32,6 @@ from azure_auth import AuthError
 
 from m365_gdap_runner.context import TenantContext
 from m365_gdap_runner.loader import Payload
-from m365_gdap_runner.output import OutputFormatError, check_result
 from m365_gdap_runner.tenants import Tenant
 
 logger = logging.getLogger(__name__)
@@ -83,7 +82,7 @@ class TenantResult:
     Attributes:
         tenant: The tenant.
         status: ``ok``, ``auth_failed``, ``error``, or ``skipped``.
-        result: The payload's return value when ``ok``, else None.
+        result: What the script's ``run()`` returned when ``ok``, as it is; else None.
         error: Failure description when not ``ok`` or ``skipped``, else None.
     """
 
@@ -130,7 +129,6 @@ def run_payload(
     *,
     continue_on_error: bool = False,
     jobs: int = 1,
-    output_format: str = "json",
 ) -> list[TenantResult]:
     """Run *payload* against every tenant.
 
@@ -141,7 +139,6 @@ def run_payload(
         continue_on_error: Keep going after a payload error. Auth failures
             never stop the run.
         jobs: Maximum tenants processed concurrently.
-        output_format: Format results must fit (``json`` or ``csv``).
 
     Returns:
         One result per tenant, in input order.
@@ -153,20 +150,13 @@ def run_payload(
     if jobs < 1:
         raise ValueError("jobs must be at least 1.")
     if jobs == 1 or len(tenants) <= 1:
-        return _run_serial(
-            session,
-            payload,
-            tenants,
-            continue_on_error=continue_on_error,
-            output_format=output_format,
-        )
+        return _run_serial(session, payload, tenants, continue_on_error=continue_on_error)
     return _run_parallel(
         session,
         payload,
         tenants,
         jobs=min(jobs, len(tenants)),
         continue_on_error=continue_on_error,
-        output_format=output_format,
     )
 
 
@@ -176,7 +166,6 @@ def _run_serial(
     tenants: Sequence[Tenant],
     *,
     continue_on_error: bool,
-    output_format: str,
 ) -> list[TenantResult]:
     """Run tenants one at a time.
 
@@ -185,7 +174,6 @@ def _run_serial(
         payload: The validated payload.
         tenants: Tenants in output order.
         continue_on_error: Keep going after a payload error.
-        output_format: Format results must fit.
 
     Returns:
         One result per tenant; tenants after a stopping error are ``skipped``.
@@ -196,7 +184,7 @@ def _run_serial(
     results: list[TenantResult] = []
     for tenant in tenants:
         try:
-            tenant_result = _run_one(session, payload, tenant, output_format=output_format)
+            tenant_result = _run_one(session, payload, tenant)
         except KeyboardInterrupt:
             results.append(TenantResult(tenant, "error", error="interrupted"))
             raise RunInterrupted(_fill_skipped(results, tenants)) from None
@@ -214,7 +202,6 @@ def _run_parallel(
     *,
     jobs: int,
     continue_on_error: bool,
-    output_format: str,
 ) -> list[TenantResult]:
     """Run tenants on a thread pool.
 
@@ -224,7 +211,6 @@ def _run_parallel(
         tenants: Tenants in output order.
         jobs: Worker threads.
         continue_on_error: Keep going after a payload error.
-        output_format: Format results must fit.
 
     Returns:
         One result per tenant, in input order; cancelled tenants are ``skipped``.
@@ -235,7 +221,7 @@ def _run_parallel(
     done: dict[int, TenantResult] = {}
     executor = ThreadPoolExecutor(max_workers=jobs, thread_name_prefix="tenant")
     futures: dict[Future[TenantResult], int] = {
-        executor.submit(_run_one, session, payload, tenant, output_format=output_format): index
+        executor.submit(_run_one, session, payload, tenant): index
         for index, tenant in enumerate(tenants)
     }
     interrupted = False
@@ -311,16 +297,13 @@ def _ordered(done: dict[int, TenantResult], tenants: Sequence[Tenant]) -> list[T
     ]
 
 
-def _run_one(
-    session: ContextFactory, payload: Payload, tenant: Tenant, *, output_format: str
-) -> TenantResult:
+def _run_one(session: ContextFactory, payload: Payload, tenant: Tenant) -> TenantResult:
     """Process one tenant and log its outcome.
 
     Args:
         session: A signed-in session.
         payload: The validated payload.
         tenant: The tenant.
-        output_format: Format the result must fit.
 
     Returns:
         The tenant's result.
@@ -328,7 +311,7 @@ def _run_one(
     context_token = _current_tenant.set(tenant.display_name)
     start = time.monotonic()
     try:
-        status, result, error = _execute(session, payload, tenant, output_format)
+        status, result, error = _execute(session, payload, tenant)
         duration = time.monotonic() - start
         if error:
             logger.info("%s in %.1fs: %s", status, duration, error)
@@ -340,15 +323,14 @@ def _run_one(
 
 
 def _execute(
-    session: ContextFactory, payload: Payload, tenant: Tenant, output_format: str
+    session: ContextFactory, payload: Payload, tenant: Tenant
 ) -> tuple[Status, object, str | None]:
-    """Build the context, probe every client, call ``run()``, and check the result.
+    """Build the context, probe every client, and call ``run()``.
 
     Args:
         session: A signed-in session.
         payload: The validated payload.
         tenant: The tenant.
-        output_format: Format the result must fit.
 
     Returns:
         ``(status, result, error)``.
@@ -377,9 +359,4 @@ def _execute(
         except Exception as exc:
             logger.debug("Payload raised", exc_info=True)
             return "error", None, repr(exc)
-
-    try:
-        check_result(result, output_format)
-    except OutputFormatError as exc:
-        return "error", None, f"invalid result: {exc}"
     return "ok", result, None

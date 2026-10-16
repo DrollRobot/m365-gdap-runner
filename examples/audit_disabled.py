@@ -6,9 +6,10 @@
 # ///
 """Example script: is mailbox auditing switched off tenant-wide?
 
-Shows a script that uses Exchange Online instead of Graph. Run it across tenants::
+Shows a script that uses Exchange Online instead of Graph, and one with no ``report()``: each
+tenant's log line is the report, so a tenant with auditing off stands out as a warning::
 
-    uv run audit_disabled.py --all --format csv --output audit.csv
+    uv run audit_disabled.py --all
 
 or against one tenant::
 
@@ -17,29 +18,30 @@ or against one tenant::
 
 from __future__ import annotations
 
+import logging
+
 from m365_gdap_runner import TenantContext
+
+logger = logging.getLogger(__name__)
 
 # Exchange only: no Graph, so no SCOPES. Exchange Online PowerShell is pre-authorised for
 # its own cmdlets; consent is not per scope there.
 CLIENTS = ["exchange"]
 
 
-def run(ctx: TenantContext) -> dict[str, object]:
-    """Return the tenant's organisation-wide audit switch.
+def run(ctx: TenantContext) -> None:
+    """Log whether mailbox auditing is off for every mailbox in the tenant.
+
+    ``AuditDisabled`` turns auditing off whatever each mailbox's own settings say.
 
     Args:
         ctx: The tenant context supplied by the runner.
-
-    Returns:
-        One row with ``name`` (the organisation's name in Exchange) and
-        ``auditDisabled``. ``True`` means mailbox auditing is off for every mailbox,
-        whatever each mailbox's own settings say.
     """
     (config,) = ctx.exchange.run("Get-OrganizationConfig")
-    return {
-        "name": str(config.get("Name") or ""),
-        "auditDisabled": bool(config.get("AuditDisabled")),
-    }
+    if config.get("AuditDisabled"):
+        logger.warning("Mailbox auditing is off tenant-wide (AuditDisabled is True)")
+    else:
+        logger.info("Mailbox auditing is on")
 
 
 if __name__ == "__main__":

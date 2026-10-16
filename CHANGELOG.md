@@ -11,11 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A library for scripts that run across GDAP tenants. A script calls `main(__name__)` from
   its `__main__` block, and `uv run script.py` then signs in once per client it uses, lists
-  GDAP tenants, and runs its `run(ctx)` per tenant with consent checks, error isolation,
-  `--jobs` parallelism, and JSON/CSV output. `add_arguments()` adds the library's flags to a
-  script's own parser, for scripts with flags of their own.
-- Script contract: `run(ctx)`, the Graph `SCOPES` it needs, and `CLIENTS` naming which of
-  `ctx.graph`, `ctx.exchange`, `ctx.ipps` and `ctx.azure` it uses (default `graph`).
+  GDAP tenants, and runs its `run(ctx)` per tenant with consent checks, error isolation and
+  `--jobs` parallelism. `add_arguments()` adds the library's flags to a script's own parser,
+  for scripts with flags of their own.
+- Script contract: `run(ctx)`, the Graph `SCOPES` it needs, `CLIENTS` naming which of
+  `ctx.graph`, `ctx.exchange`, `ctx.ipps` and `ctx.azure` it uses (default `graph`), and an
+  optional `report(results)`, called once after the last tenant with every tenant's
+  `TenantResult`, failed ones included. The library writes no output of its own: `run()`
+  writes any per-tenant report and `report()` the run's.
 - `TenantContext`: the tenant, its azure-auth context (`ctx.auth`, usable with any
   azure-auth or Azure SDK client), and one ready-made client per declared kind, each
   checked in the customer tenant before `run()` starts.
@@ -32,10 +35,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tenants the file lacks and warns which; the `m365-gdap-runner` command creates or refreshes
   the file and lists the tenants. Setting `tenants_file` and flag `--tenants-file` locate the file
   (default `tenants.csv` in the config directory).
-- Example scripts `examples/licensed_users.py` (Graph), `examples/audit_disabled.py`
-  (Exchange Online), and `examples/mailbox_audit_gaps.py` (mailboxes whose audit actions
-  lag Microsoft's defaults, read through Exchange's REST endpoint), each with the header
-  `uv run` builds its environment from.
+- Example scripts, each with the header `uv run` builds its environment from:
+  `examples/licensed_users.py` (Graph; its `report()` prints every tenant's users as JSON),
+  `examples/audit_disabled.py` (Exchange Online; no `report()`, its log is the report), and
+  `examples/mailbox_audit_gaps.py` (mailboxes whose audit actions lag Microsoft's defaults,
+  read through Exchange's REST endpoint; an Excel workbook per tenant and a summary
+  workbook, in the folder its own `--out` flag names).
 
 ### Changed
 

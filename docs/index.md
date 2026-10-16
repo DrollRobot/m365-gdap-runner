@@ -2,8 +2,9 @@
 
 Run a Python script across every customer tenant you reach through GDAP, from a single
 partner sign-in. The library owns the loop: sign-in, tenant listing, consent checks, error
-isolation, parallelism and merged output. Authentication and the service clients come from
-[azure-auth](https://github.com/DrollRobot/azure-auth). A script contains neither.
+isolation and parallelism. Authentication and the service clients come from
+[azure-auth](https://github.com/DrollRobot/azure-auth). A script contains neither; it holds
+the work for one tenant and its own reports.
 
 ## Installation
 
@@ -18,8 +19,9 @@ builds the script's own environment from that.
 
 ## Quick start
 
-A script is a `.py` file with `run(ctx)`, two declarations, and a `__main__` block that hands
-it to the library. The header at the top tells uv what the script needs:
+A script is a `.py` file with `run(ctx)`, two declarations, an optional `report(results)`,
+and a `__main__` block that hands it to the library. The header at the top tells uv what the
+script needs:
 
 ```python
 # /// script
@@ -28,15 +30,20 @@ it to the library. The header at the top tells uv what the script needs:
 #   "m365-gdap-runner @ git+https://github.com/DrollRobot/m365-gdap-runner.git@v0.1.0",
 # ]
 # ///
-from m365_gdap_runner import TenantContext
+from m365_gdap_runner import TenantContext, TenantResult
 
 CLIENTS = ["graph"]  # which of ctx.graph, ctx.exchange, ctx.ipps, ctx.azure you use
 SCOPES = ["User.Read.All"]  # delegated Graph scopes; only when "graph" is in CLIENTS
 
 
-def run(ctx: TenantContext) -> list[dict[str, str]]:
+def run(ctx: TenantContext) -> list[str]:
     users = ctx.graph.get_all("/users", params={"$select": "userPrincipalName"})
-    return [{"userPrincipalName": u["userPrincipalName"]} for u in users]
+    return [u["userPrincipalName"] for u in users]
+
+
+def report(results: list[TenantResult]) -> None:
+    for result in results:
+        print(result.tenant.display_name, result.status, len(result.result or []))
 
 
 if __name__ == "__main__":
@@ -48,7 +55,7 @@ if __name__ == "__main__":
 Run it across a group of tenants, or against one:
 
 ```bash
-uv run users.py --group pilot --jobs 5 --format csv --output users.csv
+uv run users.py --group pilot --jobs 5
 uv run users.py --tenant Contoso
 ```
 
@@ -56,6 +63,22 @@ The runner signs in once per client in `CLIENTS` at the partner tenant (each use
 different Microsoft app), then for every selected tenant checks each client silently before
 calling `run()`. A tenant that has not consented, or wants a fresh sign-in, is reported as
 `auth_failed` and skipped. With `--cache disk` later runs skip the browser.
+
+## Reports
+
+The library writes no output of its own; reports belong to the script, in whatever form it
+needs.
+
+- **Per tenant:** `run(ctx)` writes it, with `ctx.tenant` for the tenant's name and ID.
+- **Per run:** `report(results)`, when the script has one, is called once after the last
+  tenant. It gets one `TenantResult` per tenant in run order, failed ones included: `tenant`,
+  `status` (`ok`, `auth_failed`, `error` or `skipped`), `result` (whatever `run()` returned,
+  as it is) and `error`.
+
+`report()` is not called after Ctrl+C, since a report of part of a run would look complete.
+If it raises, the error is logged and the run exits with code 2. Logs and the summary go to
+stderr, so stdout is the script's. `examples/mailbox_audit_gaps.py` writes an Excel workbook
+of each kind.
 
 ## Flags of your own
 

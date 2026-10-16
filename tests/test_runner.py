@@ -150,23 +150,11 @@ def test_auth_failures_never_stop_the_run() -> None:
     assert _statuses(results) == ["auth_failed", "ok", "ok"]
 
 
-def test_non_serializable_result_is_an_error() -> None:
-    results = run_payload(FakeSession(), _payload(lambda ctx: object()), [ALPHA])
-    assert _statuses(results) == ["error"]
-    assert results[0].error is not None
-    assert results[0].error.startswith("invalid result:")
-
-
-def test_csv_shape_is_checked_per_tenant() -> None:
-    def run(ctx: TenantContext) -> object:
-        if ctx.tenant is ALPHA:
-            return {"nested": {"x": 1}}
-        return {"flat": 1}
-
-    results = run_payload(
-        FakeSession(), _payload(run), [ALPHA, BETA], continue_on_error=True, output_format="csv"
-    )
-    assert _statuses(results) == ["error", "ok"]
+def test_any_result_is_kept_as_it_is() -> None:
+    found = object()
+    results = run_payload(FakeSession(), _payload(lambda ctx: found), [ALPHA])
+    assert _statuses(results) == ["ok"]
+    assert results[0].result is found
 
 
 def test_parallel_runs_tenants_concurrently_in_input_order() -> None:
