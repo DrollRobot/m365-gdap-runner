@@ -165,12 +165,11 @@ def test_load_of_an_empty_file_is_a_fresh_file(tmp_path: Path) -> None:
     assert (tenant_file.columns, tenant_file.rows) == (list(OWN_COLUMNS), [])
 
 
-def test_load_requires_the_four_m365_columns(tmp_path: Path) -> None:
+def test_load_accepts_a_header_missing_m365_columns(tmp_path: Path) -> None:
     path = _write(tmp_path / "t.csv", "m365_tenant_id,patching", f"{TENANT_A},TRUE")
-    with pytest.raises(
-        TenantFileError, match=r"lacks the column\(s\) m365_tenant_name, m365_domain, m365_cloud"
-    ):
-        TenantFile.load(path)
+    tenant_file = TenantFile.load(path)
+    assert tenant_file.columns == ["m365_tenant_id", "patching"]
+    assert tenant_file.members("patching") == [TenantRow(TENANT_A, "", "")]
 
 
 def test_load_rejects_non_utf8(tmp_path: Path) -> None:
@@ -318,6 +317,7 @@ def test_sync_appends_unknown_tenants_and_fills_blank_clouds(csv_path: Path) -> 
         "m365_tenant_name": "Delta",
         "m365_domain": "",
         "m365_cloud": "USGov",
+        "m365_username": "",
         "patching": "",
         "pilot": "",
         "cw_company_id": "",
@@ -339,10 +339,10 @@ def test_sync_with_nothing_to_do_changes_nothing_and_looks_nothing_up(tmp_path: 
 
     path = _write(
         tmp_path / "t.csv",
-        f"{M365},g",
-        f"{TENANT_A},Alpha,,Commercial,TRUE",
-        f"{TENANT_C},Gamma,,USGov,TRUE",
-        ",Acme,,,TRUE",
+        f"{M365},m365_username,g",
+        f"{TENANT_A},Alpha,,Commercial,,TRUE",
+        f"{TENANT_C},Gamma,,USGov,,TRUE",
+        ",Acme,,,,TRUE",
     )
     tenant_file = TenantFile.load(path)
     before = [dict(row) for row in tenant_file.rows]
@@ -355,16 +355,47 @@ def test_save_round_trips_other_tools_data_and_appended_rows(csv_path: Path) -> 
     tenant_file = TenantFile.load(csv_path)
     tenant_file.sync([ALPHA, BETA, DELTA], commercial)
     tenant_file.save()
+    # The file predates m365_username, so the column is added after m365_cloud.
     assert csv_path.read_text(encoding="utf-8-sig").splitlines() == [
-        HEADER,
-        f"{TENANT_A},Alpha,alpha.example,Commercial,TRUE,FALSE,1001,first one",
-        f"{TENANT_B},beta corp,beta.example,Commercial,TRUE,TRUE,1002,",
-        f"{TENANT_C},Gamma,,Commercial,FALSE,,1003,gone from GDAP",
-        ",,,,TRUE,TRUE,1004,no M365 tenant",
-        f"{DELTA.tenant_id},Delta,,Commercial,,,,",
+        f"{M365},m365_username,patching,pilot,cw_company_id,notes",
+        f"{TENANT_A},Alpha,alpha.example,Commercial,,TRUE,FALSE,1001,first one",
+        f"{TENANT_B},beta corp,beta.example,Commercial,,TRUE,TRUE,1002,",
+        f"{TENANT_C},Gamma,,Commercial,,FALSE,,1003,gone from GDAP",
+        ",,,,,TRUE,TRUE,1004,no M365 tenant",
+        f"{DELTA.tenant_id},Delta,,Commercial,,,,,",
     ]
     assert csv_path.read_bytes().startswith(b"\xef\xbb\xbf")  # BOM for spreadsheets
     assert [p.name for p in csv_path.parent.iterdir()] == [csv_path.name]  # no temp file left
+
+
+def test_sync_adds_missing_columns_after_the_last_m365_column(tmp_path: Path) -> None:
+    # The m365_ columns out of order, among another tool's, and without m365_username.
+    path = _write(
+        tmp_path / "t.csv",
+        "my_name,m365_tenant_name,m365_domain,m365_tenant_id,m365_cloud,exclude",
+        f"Alpha Inc,Alpha,,{TENANT_A},Commercial,TRUE",
+    )
+    tenant_file = TenantFile.load(path)
+    report = tenant_file.sync([ALPHA], commercial)
+    assert (report.columns_added, report.added, report.changed) == (["m365_username"], [], True)
+    tenant_file.save()
+    assert path.read_text(encoding="utf-8-sig").splitlines() == [
+        "my_name,m365_tenant_name,m365_domain,m365_tenant_id,m365_cloud,m365_username,exclude",
+        f"Alpha Inc,Alpha,,{TENANT_A},Commercial,,TRUE",
+    ]
+
+
+def test_sync_adds_every_m365_column_at_the_end_of_a_file_without_them(tmp_path: Path) -> None:
+    path = _write(tmp_path / "t.csv", "my_name,pilot", "Acme,TRUE")
+    tenant_file = TenantFile.load(path)
+    report = tenant_file.sync([ALPHA], commercial)
+    assert (report.columns_added, report.added) == (list(OWN_COLUMNS), [ALPHA])
+    tenant_file.save()
+    assert path.read_text(encoding="utf-8-sig").splitlines() == [
+        f"my_name,pilot,{','.join(OWN_COLUMNS)}",
+        "Acme,TRUE,,,,,",
+        f",,{TENANT_A},Alpha,,Commercial,",
+    ]
 
 
 def test_save_creates_the_file_and_its_directory(tmp_path: Path) -> None:

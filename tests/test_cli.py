@@ -522,14 +522,14 @@ def test_run_appends_tenants_the_file_lacks_and_warns(
 ) -> None:
     path = _tenants_csv(
         tmp_path / "tenants.csv",
-        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,pilot,notes",
-        f"{TENANT_A},Alpha,alpha.example,Commercial,TRUE,keep me",
+        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,pilot,notes",
+        f"{TENANT_A},Alpha,alpha.example,Commercial,,TRUE,keep me",
     )
     assert _main(LICENSED_USERS, "--tenant", "Alpha", "--tenants-file", str(path)) == 0
     assert path.read_text(encoding="utf-8-sig").splitlines() == [
-        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,pilot,notes",
-        f"{TENANT_A},Alpha,alpha.example,Commercial,TRUE,keep me",
-        f"{TENANT_B},beta corp,,Commercial,,",
+        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,pilot,notes",
+        f"{TENANT_A},Alpha,alpha.example,Commercial,,TRUE,keep me",
+        f"{TENANT_B},beta corp,,Commercial,,,",
     ]
     assert f"Added 1 tenant(s) to {path}; they are in no group yet: beta corp" in caplog.text
 
@@ -714,19 +714,40 @@ def test_run_fills_in_blank_clouds_by_discovery(
     caplog.set_level(logging.INFO, logger=cli.__name__)
     path = _tenants_csv(
         tmp_path / "tenants.csv",
-        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,pilot",
-        f"{TENANT_A},Alpha,,,TRUE",
-        f"{TENANT_B},beta corp,,,FALSE",
-        f"{TENANT_C},Gamma,,,FALSE",  # no GDAP relationship, but a tenant all the same
+        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,pilot",
+        f"{TENANT_A},Alpha,,,,TRUE",
+        f"{TENANT_B},beta corp,,,,FALSE",
+        f"{TENANT_C},Gamma,,,,FALSE",  # no GDAP relationship, but a tenant all the same
     )
     assert _main(LICENSED_USERS, "--group", "pilot", "--tenants-file", str(path)) == 0
     assert path.read_text(encoding="utf-8-sig").splitlines() == [
-        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,pilot",
-        f"{TENANT_A},Alpha,,Commercial,TRUE",
-        f"{TENANT_B},beta corp,,Commercial,FALSE",
-        f"{TENANT_C},Gamma,,Commercial,FALSE",
+        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,pilot",
+        f"{TENANT_A},Alpha,,Commercial,,TRUE",
+        f"{TENANT_B},beta corp,,Commercial,,FALSE",
+        f"{TENANT_C},Gamma,,Commercial,,FALSE",
     ]
     assert f"Filled in the cloud of 3 tenant(s) in {path}: Alpha, beta corp, Gamma" in caplog.text
+
+
+@pytest.mark.integration
+@pytest.mark.acceptance
+def test_run_adds_the_columns_the_file_lacks(
+    fake_msal: FakeMsal, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger=cli.__name__)
+    path = _tenants_csv(
+        tmp_path / "tenants.csv",
+        "m365_tenant_id,m365_tenant_name,pilot",
+        f"{TENANT_A},Alpha,TRUE",
+        f"{TENANT_B},beta corp,FALSE",
+    )
+    assert _main(LICENSED_USERS, "--group", "pilot", "--tenants-file", str(path)) == 0
+    assert path.read_text(encoding="utf-8-sig").splitlines() == [
+        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,pilot",
+        f"{TENANT_A},Alpha,,Commercial,,TRUE",
+        f"{TENANT_B},beta corp,,Commercial,,FALSE",
+    ]
+    assert f"Added column(s) m365_domain, m365_cloud, m365_username to {path}" in caplog.text
 
 
 @pytest.mark.integration
@@ -750,10 +771,6 @@ def test_run_fills_in_blank_clouds_by_discovery(
                 f"{TENANT_A},Alpha,,Mars,TRUE",
             ),
             "row 2: 'Mars' in column 'm365_cloud' is not a cloud",
-        ),
-        (
-            ("m365_tenant_id,pilot", f"{TENANT_A},TRUE"),
-            "lacks the column(s) m365_tenant_name, m365_domain, m365_cloud",
         ),
     ],
 )

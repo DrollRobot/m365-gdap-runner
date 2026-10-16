@@ -2,8 +2,8 @@
 
 Graph says which customer tenants have a GDAP relationship (see ``session.py``). The tenants
 file says which tenants belong to which group: a CSV edited in a spreadsheet, one row per
-customer, with the columns ``m365_tenant_id``, ``m365_tenant_name``, ``m365_domain`` and
-``m365_cloud``, an optional ``m365_username``, and one column per group holding TRUE or FALSE.
+customer, with the columns ``m365_tenant_id``, ``m365_tenant_name``, ``m365_domain``,
+``m365_cloud`` and ``m365_username``, and one column per group holding TRUE or FALSE.
 ``--group NAME`` runs the tenants marked TRUE in column ``NAME``.
 
 The file may be shared with tools that describe the same customers on other platforms, so
@@ -12,10 +12,11 @@ unless a run names it as a group, and a row with no ``m365_tenant_id`` is a cust
 an M365 tenant: never selected, never an error.
 
 Tenants are matched by ID only; the name and domain columns are for the person editing the
-file. A GDAP tenant with no row is appended, and a blank cloud is filled in by OpenID Connect
-discovery (:meth:`TenantFile.sync`). A row whose tenant has no GDAP relationship, or lives in
-another Microsoft cloud, can still be selected: the runner signs in to it directly, as the
-account in ``m365_username`` (the partner account when blank).
+file. A column the file lacks is added, a GDAP tenant with no row is appended, and a blank
+cloud is filled in by OpenID Connect discovery (:meth:`TenantFile.sync`). A row whose tenant
+has no GDAP relationship, or lives in another Microsoft cloud, can still be selected: the
+runner signs in to it directly, as the account in ``m365_username`` (the partner account when
+blank).
 """
 
 from __future__ import annotations
@@ -33,16 +34,15 @@ from azure_auth.clouds import CLOUDS, get_cloud
 from m365_gdap_runner.config import Settings
 from m365_gdap_runner.config.paths import config_dir
 
-# The columns this package owns. A new file gets them in this order; other tools sharing the
-# file add their own, and any column outside these may serve as a group.
+# The columns this package owns. A new file gets them in this order, and an existing one gets
+# any it lacks; other tools sharing the file add their own, and any column outside these may
+# serve as a group.
 ID_COLUMN = "m365_tenant_id"
 NAME_COLUMN = "m365_tenant_name"
 DOMAIN_COLUMN = "m365_domain"
 CLOUD_COLUMN = "m365_cloud"
 USERNAME_COLUMN = "m365_username"
-REQUIRED_COLUMNS = (ID_COLUMN, NAME_COLUMN, DOMAIN_COLUMN, CLOUD_COLUMN)
-# A new file gets these; an older one without m365_username still loads.
-OWN_COLUMNS = (*REQUIRED_COLUMNS, USERNAME_COLUMN)
+OWN_COLUMNS = (ID_COLUMN, NAME_COLUMN, DOMAIN_COLUMN, CLOUD_COLUMN, USERNAME_COLUMN)
 
 # File name in the config directory when the ``tenants_file`` setting is empty.
 TENANTS_FILE_NAME = "tenants.csv"
@@ -102,17 +102,19 @@ class SyncReport:
     """What :meth:`TenantFile.sync` changed.
 
     Attributes:
+        columns_added: Columns this package owns that the file lacked, in the order added.
         added: Tenants that got a new row.
         clouds_filled: Tenants whose existing row got its ``m365_cloud`` filled in.
     """
 
+    columns_added: list[str]
     added: list[Tenant]
     clouds_filled: list[Tenant]
 
     @property
     def changed(self) -> bool:
         """Whether the file differs from what was loaded."""
-        return bool(self.added or self.clouds_filled)
+        return bool(self.columns_added or self.added or self.clouds_filled)
 
 
 def tenants_file_path(settings: Settings) -> Path:
@@ -134,8 +136,8 @@ class TenantFile:
     """The tenants CSV: one row per customer, one TRUE/FALSE column per group.
 
     Rows keep every cell as the text the file holds, so :meth:`save` writes back what was
-    read plus any appended rows. Only the group column a caller asks about, and the cloud of
-    the rows marked in it, are checked; every other cell may hold anything.
+    read plus any added columns and rows. Only the group column a caller asks about, and the
+    cloud of the rows marked in it, are checked; every other cell may hold anything.
 
     Attributes:
         path: Where the file is, or will be, on disk.
@@ -150,7 +152,8 @@ class TenantFile:
 
         Args:
             path: Where the file is, or will be, on disk.
-            columns: Column names in file order; must include :data:`REQUIRED_COLUMNS`.
+            columns: Column names in file order. :meth:`sync` adds any of
+                :data:`OWN_COLUMNS` missing.
             rows: One mapping per row, column name to cell text.
         """
         self.path = path
@@ -159,7 +162,7 @@ class TenantFile:
 
     @classmethod
     def empty(cls, path: Path) -> TenantFile:
-        """Return a file with the required columns and no rows, not yet on disk.
+        """Return a file with this package's columns and no rows, not yet on disk.
 
         Args:
             path: Where :meth:`save` will write it.
@@ -173,7 +176,8 @@ class TenantFile:
     def load(cls, path: Path) -> TenantFile:
         """Read the file.
 
-        A file with nothing in it, not even a header, counts as :meth:`empty`.
+        A file with nothing in it, not even a header, counts as :meth:`empty`. A header that
+        lacks some of this package's columns is fine; :meth:`sync` adds them.
 
         Args:
             path: The CSV to read. UTF-8, with or without a byte-order mark.
@@ -182,8 +186,7 @@ class TenantFile:
             The file's contents.
 
         Raises:
-            TenantFileError: If the file cannot be read, is not UTF-8, or its header lacks a
-                required column.
+            TenantFileError: If the file cannot be read or is not UTF-8.
         """
         try:
             with path.open(newline="", encoding="utf-8-sig") as handle:
@@ -199,12 +202,6 @@ class TenantFile:
             raise TenantFileError(f"Cannot read {path}: {exc}") from exc
         if columns is None:
             return cls.empty(path)
-        missing = [column for column in REQUIRED_COLUMNS if column not in columns]
-        if missing:
-            raise TenantFileError(
-                f"{path} lacks the column(s) {', '.join(missing)}; the header must include "
-                f"{', '.join(REQUIRED_COLUMNS)}."
-            )
         return cls(path, columns, rows)
 
     @property
@@ -359,10 +356,31 @@ class TenantFile:
                 return replace(tenant, cloud=found.cloud or default_cloud, username=found.username)
         return replace(tenant, cloud=default_cloud)
 
-    def sync(self, tenants: Sequence[Tenant], cloud_of: Callable[[str], str]) -> SyncReport:
-        """Append a row for each tenant the file lacks, and fill in clouds it does not know.
+    def _add_missing_columns(self) -> list[str]:
+        """Add the columns of :data:`OWN_COLUMNS` the file lacks, blank in every row.
 
-        An appended row gets the tenant's ID and name, its cloud from *cloud_of*, and every
+        They go right after the last column this package owns, so its columns stay together,
+        or at the end when the file has none of them.
+
+        Returns:
+            The columns added, in :data:`OWN_COLUMNS` order.
+        """
+        missing = [column for column in OWN_COLUMNS if column not in self.columns]
+        if not missing:
+            return []
+        own = [index for index, column in enumerate(self.columns) if column in OWN_COLUMNS]
+        at = own[-1] + 1 if own else len(self.columns)
+        self.columns[at:at] = missing
+        for row in self.rows:
+            for column in missing:
+                row.setdefault(column, "")
+        return missing
+
+    def sync(self, tenants: Sequence[Tenant], cloud_of: Callable[[str], str]) -> SyncReport:
+        """Add missing columns, append a row for each tenant the file lacks, and fill in clouds.
+
+        A column of :data:`OWN_COLUMNS` the file lacks is added, blank in every row. An
+        appended row gets the tenant's ID and name, its cloud from *cloud_of*, and every
         other column blank. Any other row with a tenant ID and a blank ``m365_cloud``, a GDAP
         tenant or not, gets it from *cloud_of* too, so a file another tool wrote, or that
         predates the column, fills in over time. Nothing is written; call :meth:`save`.
@@ -375,6 +393,7 @@ class TenantFile:
         Returns:
             What changed.
         """
+        columns_added = self._add_missing_columns()
         by_id: dict[str, dict[str, str]] = {}
         for existing in self.rows:
             by_id.setdefault(existing.get(ID_COLUMN, "").strip().lower(), existing)
@@ -401,7 +420,7 @@ class TenantFile:
                 row[CLOUD_COLUMN] = cloud
                 named = row.get(NAME_COLUMN, "").strip() or tenant_id
                 filled.append(gdap.get(key) or Tenant(tenant_id, named))
-        return SyncReport(added, filled)
+        return SyncReport(columns_added, added, filled)
 
     def save(self) -> None:
         """Write the file, replacing it in one step so a failure leaves the old one intact.

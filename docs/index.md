@@ -116,7 +116,7 @@ A run has to say which tenants it is for; one that names none is refused. Pick t
 
 The tenants file is a CSV you edit in a spreadsheet, one row per customer. This package owns
 five columns, `m365_tenant_id`, `m365_tenant_name`, `m365_domain`, `m365_cloud` and
-`m365_username` (optional; a file without it still works), and reads one more per `--group`:
+`m365_username`, and reads one more per `--group`:
 a column holding TRUE or FALSE, where a blank cell counts as FALSE and anything else is an
 error. Every other column is left alone, so the same file can carry what other tools know
 about the same customers on other platforms. Tenants are matched by ID; the name and domain
@@ -134,8 +134,9 @@ itself, by OpenID Connect discovery, when it appends a tenant or finds the cell 
 
 The file is `tenants.csv` in the config directory (`m365-gdap-runner-config path` shows
 where), unless the `tenants_file` setting or `--tenants-file` points elsewhere. Every run
-keeps it current: a GDAP tenant with no row is appended with its name, its cloud and every
-other column blank, and a warning names it. The `m365-gdap-runner` command does that, lists
+keeps it current. Any of the five `m365_` columns the file lacks is added, blank, after the
+`m365_` columns it has (or at the end when it has none). A GDAP tenant with no row is
+appended with its name, its cloud and every other column blank, and a warning names it. The `m365-gdap-runner` command does that, lists
 the tenants and runs nothing, so run it once to create the file, then add group columns. Rows
 for tenants without a GDAP relationship are yours to add and keep.
 

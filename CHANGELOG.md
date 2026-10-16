@@ -26,9 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an encrypted file) and `cloud`, with matching `--partner-tenant-id`, `--username`,
   `--client-id`, `--cache` and `--cloud` flags.
 - Tenant selection from a tenants file: a CSV with `m365_tenant_id`, `m365_tenant_name`,
-  `m365_domain`, `m365_cloud`, an optional `m365_username`, and one TRUE/FALSE column per
-  group; other tools may keep their own columns in the same file. A blank cloud is filled in
-  by OpenID Connect discovery. `--group NAME` runs the tenants marked in that column
+  `m365_domain`, `m365_cloud`, `m365_username`, and one TRUE/FALSE column per group; other
+  tools may keep their own columns in the same file. Any of the `m365_` columns the file
+  lacks is added, and a blank cloud is filled in by OpenID Connect discovery. `--group NAME` runs the tenants marked in that column
   (repeatable, combines with `--tenant`), `--all` runs every GDAP tenant, and a run that
   names neither `--group`, `--tenant` nor `--all` is refused. `--group` and `--tenant` may
   pick rows without a GDAP relationship, in any cloud. Every run appends the GDAP tenants the
