@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+from typing import Any
+
 import httpx
 import pytest
-from azure_auth import AuthError, ConsentRequired, TenantNotFound
+from azure_auth import AuthContext, AuthError, ConsentRequired, TenantNotFound
 from azure_auth.constants import (
     AZURE_POWERSHELL_CLIENT_ID,
     EXCHANGE_POWERSHELL_CLIENT_ID,
@@ -131,9 +134,13 @@ def test_partner_tenant_id_is_the_guid(fake_msal: FakeMsal) -> None:
 
 @pytest.mark.parametrize(
     ("field", "value", "message"),
-    [("cache", "plaintext", "cache must be one of"), ("cloud", "Mars", "Unknown cloud 'Mars'")],
+    [
+        ("cache", "plaintext", "cache must be one of"),
+        ("sign_in", "wam", "sign_in must be one of"),
+        ("cloud", "Mars", "Unknown cloud 'Mars'"),
+    ],
 )
-def test_bad_cache_or_cloud_is_a_config_error(
+def test_bad_cache_sign_in_or_cloud_is_a_config_error(
     fake_msal: FakeMsal, field: str, value: str, message: str
 ) -> None:
     with pytest.raises(ConfigError, match=message):
@@ -196,6 +203,48 @@ def _signed_in(clients: list[str]) -> PartnerSession:
     session = PartnerSession(make_settings(), transport=TRANSPORT)
     session.login(clients)
     return session
+
+
+@pytest.fixture
+def brokers(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
+    """The ``broker`` argument of every ``AuthContext`` built during the test, in order."""
+    built: list[bool] = []
+    original = AuthContext.__init__
+
+    def init(self: AuthContext, *args: Any, **kwargs: Any) -> None:
+        built.append(kwargs.get("broker", False))
+        original(self, *args, **kwargs)
+
+    monkeypatch.setattr(AuthContext, "__init__", init)
+    return built
+
+
+@pytest.mark.parametrize(
+    ("sign_in", "platform", "broker"),
+    [
+        ("broker", "win32", True),
+        ("broker", "linux", False),
+        ("broker", "darwin", False),
+        ("browser", "win32", False),
+    ],
+)
+def test_the_broker_signs_in_on_windows_only(
+    fake_msal: FakeMsal,
+    brokers: list[bool],
+    monkeypatch: pytest.MonkeyPatch,
+    sign_in: str,
+    platform: str,
+    broker: bool,
+) -> None:
+    # Only the runner is told the platform; azure-auth checks the real one for itself.
+    monkeypatch.setattr("m365_gdap_runner.session.sys", SimpleNamespace(platform=platform))
+    fake_msal.tenant_errors[TENANT_B] = CONSENT_REQUIRED
+    beta_with_admin = Tenant(TENANT_B, "beta corp", "Commercial", BETA_ADMIN)
+    session = PartnerSession(make_settings(sign_in=sign_in), transport=TRANSPORT)
+    session.login(["graph"])
+    session.check_access([beta_with_admin], scopes=["User.Read.All"])
+    # The partner sign-in, then beta corp's own.
+    assert brokers == [broker, broker]
 
 
 def test_check_access_reaches_gdap_tenants_through_the_partner_sign_in(

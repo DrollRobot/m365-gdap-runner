@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Settings `partner_tenant_id`, `username`, `client_id`, `cache` (`memory`, or `disk` for
   an encrypted file) and `cloud`, with matching `--partner-tenant-id`, `--username`,
   `--client-id`, `--cache` and `--cloud` flags.
+- Setting `sign_in` and flag `--sign-in`: `browser` (the default), or `broker` for the Windows
+  sign-in window, which can sign in the account already signed in to Windows without asking.
+  Other systems ignore it.
 - Setting `debug_log_path`, for development: every log record, debug and library ones
   included, is appended to that file, or to `m365_gdap_runner_debug.log` in it when it names
   a folder. The terminal shows what it did without it.

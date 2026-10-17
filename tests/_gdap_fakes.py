@@ -118,6 +118,9 @@ class Call:
 class FakeApp:
     """Fake ``PublicClientApplication`` bound to one client id and one tenant authority."""
 
+    # azure-auth hands it to a sign-in through the broker.
+    CONSOLE_WINDOW_HANDLE = object()
+
     def __init__(
         self, module: FakeMsal, client_id: str, authority: str, token_cache: object
     ) -> None:

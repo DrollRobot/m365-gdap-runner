@@ -63,7 +63,11 @@ The runner signs in once per client in `CLIENTS` at the partner tenant (each use
 different Microsoft app), then, before the first `run()`, checks every selected tenant
 silently through that sign-in. A tenant it cannot reach that way gets a sign-in of its own
 (see [Tenants outside GDAP](#tenants-outside-gdap)). With `--cache disk` later runs skip the
-browser.
+sign-in.
+
+Sign-ins open the browser. On Windows, the `sign_in` setting or `--sign-in` set to `broker`
+uses the Windows sign-in window instead, and when Windows is signed in as the partner
+account, the partner sign-in needs no window at all. Other systems ignore it.
 
 ## Reports
 
@@ -149,16 +153,16 @@ cloud only), and a GDAP tenant where consent is missing or a policy wants a fres
 Before the first `run()`, every selected tenant in the partner's cloud is checked silently
 through the partner sign-in. Each tenant that fails that check, and each tenant in another
 cloud, then gets a sign-in of its own, in its own cloud, as the account in its
-`m365_username` cell. That is one browser sign-in per client in `CLIENTS`, one tenant at a
+`m365_username` cell. That is one sign-in per client in `CLIENTS`, one tenant at a
 time, all before the loop starts, so `--jobs` runs never prompt. With `--cache disk`, later
 runs are silent. A sign-in that fails or is cancelled leaves that tenant `auth_failed`; the
 rest run.
 
 A tenant whose `m365_username` cell is blank gets no sign-in of its own: it is `auth_failed`,
-with the reason, and no browser opens for it.
+with the reason, and no sign-in window opens for it.
 
 `--gdap-only` turns this off, for unattended runs: a tenant the partner sign-in cannot reach
-is `auth_failed`, with the reason, and no browser opens for it.
+is `auth_failed`, with the reason, and no sign-in window opens for it.
 
 `ctx.auth` is the azure-auth context for the tenant. Hand it to any azure-auth client, or to
 an Azure SDK client as `credential=`, for resources the four properties do not cover.

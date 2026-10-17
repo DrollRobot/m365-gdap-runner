@@ -146,7 +146,14 @@ class Settings:
         default_value="memory",
         help=(
             "Token cache: 'memory' lives for one run; 'disk' is an encrypted file that lets "
-            "later runs skip the browser sign-in"
+            "later runs skip the sign-in"
+        ),
+    )
+    sign_in: str = option(
+        default_value="browser",
+        help=(
+            "How the partner account signs in: 'browser', or 'broker', the Windows sign-in "
+            "window, which can use the account signed in to Windows; ignored on other systems"
         ),
     )
     cloud: str = option(

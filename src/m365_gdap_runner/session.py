@@ -5,6 +5,10 @@ sign-in per client id the script uses, all at the partner (home) tenant, before 
 starts. Customer tenants are reached through azure-auth sibling contexts, which never prompt;
 they redeem the home sign-in's refresh token in the customer tenant.
 
+The partner signs in through the browser or, with ``sign_in = "broker"`` on Windows, through
+the Windows broker, which holds the refresh token itself and can sign in the account already
+signed in to Windows without asking. Other systems ignore the setting.
+
 A tenant the partner sign-in cannot reach (no GDAP relationship, missing consent, a policy
 that wants a fresh sign-in, or another Microsoft cloud) gets a direct sign-in instead: a
 context of its own, in its own cloud, as the tenant's own account. A tenant with no account
@@ -20,6 +24,7 @@ later runs are silent.
 from __future__ import annotations
 
 import logging
+import sys
 from collections.abc import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from typing import Literal, cast
@@ -41,6 +46,26 @@ logger = logging.getLogger(__name__)
 PARTNER_SCOPES = ("DelegatedAdminRelationship.Read.All",)
 
 CACHE_KINDS = ("memory", "disk")
+
+SIGN_IN_KINDS = ("browser", "broker")
+
+
+def _use_broker(sign_in: str) -> bool:
+    """Decide whether sign-ins go through the Windows broker.
+
+    Args:
+        sign_in: The ``sign_in`` setting.
+
+    Returns:
+        True for ``broker`` on Windows. The broker is Windows only, so elsewhere the setting
+        is ignored and the browser signs in.
+    """
+    if sign_in != "broker":
+        return False
+    if sys.platform != "win32":
+        logger.debug("sign_in is broker, which is Windows only; signing in through the browser")
+        return False
+    return True
 
 
 def _partner_tenant(name: str, cloud: Cloud) -> azure_auth.Tenant:
@@ -80,13 +105,18 @@ class PartnerSession:
             transport: Optional httpx transport for every client this session builds (tests).
 
         Raises:
-            ConfigError: If ``cache`` or ``cloud`` holds a value azure-auth does not know.
+            ConfigError: If ``cache``, ``sign_in`` or ``cloud`` holds a value azure-auth does
+                not know.
             azure_auth.AuthError: If the partner tenant cannot be looked up, or the disk
                 cache cannot be encrypted on this platform.
         """
         if settings.cache not in CACHE_KINDS:
             raise ConfigError(
                 f"cache must be one of {', '.join(CACHE_KINDS)}, not {settings.cache!r}."
+            )
+        if settings.sign_in not in SIGN_IN_KINDS:
+            raise ConfigError(
+                f"sign_in must be one of {', '.join(SIGN_IN_KINDS)}, not {settings.sign_in!r}."
             )
         tenant: str | azure_auth.Tenant = settings.partner_tenant_id
         if settings.cloud:
@@ -97,6 +127,7 @@ class PartnerSession:
             tenant = _partner_tenant(settings.partner_tenant_id, cloud)
         self._transport = transport
         self._settings = settings
+        self._broker = _use_broker(settings.sign_in)
         # How check_access() found each tenant can be reached, by lower-cased tenant ID.
         self._routes: dict[str, AuthContext | Exception] = {}
         self.auth = AuthContext(
@@ -104,6 +135,7 @@ class PartnerSession:
             username=settings.username,
             client_id=settings.client_id or None,
             cache=cast(Literal["memory", "disk"], settings.cache),
+            broker=self._broker,
         )
 
     @property
@@ -139,8 +171,8 @@ class PartnerSession:
     def login(self, clients: Iterable[str] = ()) -> None:
         """Sign in at the partner tenant, once per client id the payload needs.
 
-        Graph is always signed in, for listing customers. The browser opens only for a client
-        id with no usable cached sign-in.
+        Graph is always signed in, for listing customers. A sign-in window opens only for a
+        client id with no usable cached sign-in.
 
         Args:
             clients: The payload's ``CLIENTS``.
@@ -197,8 +229,8 @@ class PartnerSession:
         (:meth:`TenantContext.probe`). A tenant that fails that check, for whatever reason,
         and a tenant in another cloud, then get a direct sign-in: a context of their own, in
         their own cloud, as their ``username``, signed in once per client. One with no
-        ``username`` gets none, and no prompt. The browser opens only where no cached sign-in
-        will do. Direct sign-ins run one at a time, on this thread.
+        ``username`` gets none, and no prompt. A sign-in window opens only where no cached
+        sign-in will do. Direct sign-ins run one at a time, on this thread.
 
         :meth:`context_for` then hands out what was found, and raises the reason for a tenant
         that could not be reached.
@@ -300,6 +332,7 @@ class PartnerSession:
                 username=tenant.username,
                 client_id=self._settings.client_id or None,
                 cache=cast(Literal["memory", "disk"], self._settings.cache),
+                broker=self._broker,
             )
             for kind in clients:
                 with build_client(kind, auth, scopes=scopes, transport=self._transport) as client:

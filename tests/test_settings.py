@@ -35,6 +35,7 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.username == "admin@partner.example"
     assert settings.client_id == ""
     assert settings.cache == "memory"
+    assert settings.sign_in == "browser"
     assert settings.cloud == ""
     assert settings.tenants_file == ""
     assert settings.debug_log_path == ""

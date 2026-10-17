@@ -123,13 +123,19 @@ def test_add_arguments_defaults() -> None:
         None,
         None,
     )
-    assert (args.tenants_file, args.profile, args.verbose) == (None, None, 0)
+    assert (args.sign_in, args.tenants_file, args.profile, args.verbose) == (None, None, None, 0)
 
 
 @pytest.mark.unit
 @pytest.mark.parametrize(
     "argv",
-    [["--jobs", "0"], ["--jobs", "two"], ["--cache", "plaintext"], ["--format", "json"]],
+    [
+        ["--jobs", "0"],
+        ["--jobs", "two"],
+        ["--cache", "plaintext"],
+        ["--sign-in", "wam"],
+        ["--format", "json"],
+    ],
     ids=str,
 )
 def test_the_parser_refuses_bad_values(argv: list[str]) -> None:
@@ -214,6 +220,8 @@ def test_settings_flags_override_config() -> None:
         "custom",
         "--cache",
         "disk",
+        "--sign-in",
+        "broker",
         "--cloud",
         "USGov",
         "--tenants-file",
@@ -226,9 +234,18 @@ def test_settings_flags_override_config() -> None:
         settings.username,
         settings.client_id,
         settings.cache,
+        settings.sign_in,
         settings.cloud,
         settings.tenants_file,
-    ) == ("other.example", "someone@other.example", "custom", "disk", "USGov", "C:/msp/tenants.csv")
+    ) == (
+        "other.example",
+        "someone@other.example",
+        "custom",
+        "disk",
+        "broker",
+        "USGov",
+        "C:/msp/tenants.csv",
+    )
 
 
 # --- how a script calls main() ---------------------------------------------------------
