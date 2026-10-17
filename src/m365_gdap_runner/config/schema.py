@@ -163,6 +163,13 @@ class Settings:
             "empty uses tenants.csv in the config directory"
         ),
     )
+    debug_log_path: str = option(
+        default_value="",
+        help=(
+            "File every log record is appended to, debug and library ones included, for "
+            "development; empty writes none"
+        ),
+    )
 
 
 def is_secret(f: Field[Any]) -> bool:

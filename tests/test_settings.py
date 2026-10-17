@@ -37,6 +37,7 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.cache == "memory"
     assert settings.cloud == ""
     assert settings.tenants_file == ""
+    assert settings.debug_log_path == ""
 
 
 @pytest.mark.parametrize("missing", ["PARTNER_TENANT_ID", "USERNAME"])

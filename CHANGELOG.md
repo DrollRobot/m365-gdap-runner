@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Settings `partner_tenant_id`, `username`, `client_id`, `cache` (`memory`, or `disk` for
   an encrypted file) and `cloud`, with matching `--partner-tenant-id`, `--username`,
   `--client-id`, `--cache` and `--cloud` flags.
+- Setting `debug_log_path`, for development: every log record, debug and library ones
+  included, is appended to that file. The terminal shows what it did without it.
 - Tenant selection from a tenants file: a CSV with `m365_tenant_id`, `m365_tenant_name`,
   `m365_domain`, `m365_cloud`, `m365_username`, and one TRUE/FALSE column per group; other
   tools may keep their own columns in the same file. Any of the `m365_` columns the file

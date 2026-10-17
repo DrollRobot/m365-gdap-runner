@@ -27,7 +27,7 @@ does only that, and prints the list.
 Configuration comes from the config system (see ``src/m365_gdap_runner/config/``);
 ``--partner-tenant-id``, ``--username``, ``--client-id``, ``--cache``, ``--cloud`` and
 ``--tenants-file`` override it. Progress and the summary go to stderr; stdout is the
-script's.
+script's. The ``debug_log_path`` setting also appends every log record to a file.
 
 Exit codes: 0 all tenants ok; 1 any tenant not ok; 2 usage, configuration, script, sign-in,
 enumeration, tenants-file or tenant-selection error, or ``report()`` failed; 130 interrupted.
@@ -82,7 +82,7 @@ SETUP_ERRORS = (
     httpx.HTTPError,
 )
 
-# Library loggers kept at WARNING unless -vv is given.
+# Library loggers kept at WARNING on the terminal unless -vv is given.
 _LIBRARY_LOGGERS = (
     "httpx",
     "httpcore",
@@ -92,6 +92,9 @@ _LIBRARY_LOGGERS = (
     "azure",
     "azure_auth",
 )
+
+# Debug log lines: the full date, and the logger each record came from.
+_DEBUG_LOG_FORMAT = "%(asctime)s %(levelname)s [%(tenant)s] %(name)s: %(message)s"
 
 # Settings a flag can override, with the flag's metavar.
 _SETTING_FLAGS = (
@@ -273,13 +276,35 @@ def _selection_error(args: argparse.Namespace) -> str | None:
     return None
 
 
+def _quiet_libraries(record: logging.LogRecord) -> bool:
+    """Drop a library's records below WARNING: the terminal's filter without ``-vv``.
+
+    Args:
+        record: The log record.
+
+    Returns:
+        False for a record below WARNING from a logger in ``_LIBRARY_LOGGERS`` or below one.
+    """
+    if record.levelno >= logging.WARNING:
+        return True
+    return not any(
+        record.name == name or record.name.startswith(name + ".") for name in _LIBRARY_LOGGERS
+    )
+
+
 def configure_logging(verbosity: int) -> None:
     """Send logs to stderr, tagged with the tenant each record belongs to.
+
+    The handler filters by level itself, as well as the loggers, so :func:`_start_debug_log`
+    can lower the loggers' levels without changing what reaches the terminal.
 
     Args:
         verbosity: Count of ``-v`` flags.
     """
     handler = logging.StreamHandler(sys.stderr)
+    handler.setLevel(logging.DEBUG if verbosity >= 1 else logging.INFO)
+    if verbosity < 2:
+        handler.addFilter(_quiet_libraries)
     handler.addFilter(TenantLogFilter())
     handler.setFormatter(
         logging.Formatter("%(asctime)s %(levelname)s [%(tenant)s] %(message)s", "%H:%M:%S")
@@ -290,6 +315,35 @@ def configure_logging(verbosity: int) -> None:
     library_level = logging.DEBUG if verbosity >= 2 else logging.WARNING
     for name in _LIBRARY_LOGGERS:
         logging.getLogger(name).setLevel(library_level)
+
+
+def _start_debug_log(settings: Settings) -> None:
+    """Append every log record, at every level, to the ``debug_log_path`` file, when set.
+
+    The terminal shows what it did before: its handler from :func:`configure_logging`
+    filters by level itself. Records logged before settings load reach only the terminal. A
+    file that cannot be opened is reported, and the run goes on without it.
+
+    Args:
+        settings: Resolved settings.
+    """
+    if not settings.debug_log_path:
+        return
+    path = Path(settings.debug_log_path).expanduser()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handler = logging.FileHandler(path, mode="a", encoding="utf-8")
+    except OSError as exc:
+        logger.warning("Could not open debug log %s: %s", path, exc)
+        return
+    handler.addFilter(TenantLogFilter())
+    handler.setFormatter(logging.Formatter(_DEBUG_LOG_FORMAT))
+    root = logging.getLogger()
+    root.addHandler(handler)
+    root.setLevel(logging.DEBUG)
+    for name in _LIBRARY_LOGGERS:
+        logging.getLogger(name).setLevel(logging.DEBUG)
+    logger.debug("Debug log started: %s", " ".join(sys.argv))
 
 
 def _print_tenants(tenants: Sequence[Tenant]) -> None:
@@ -469,6 +523,7 @@ def _run(
     try:
         payload = payload_from_module(module, _script_name(module))
         settings = settings_from_args(args)
+        _start_debug_log(settings)
         session = PartnerSession(settings, transport=transport)
         session.login(payload.clients)
         tenants = session.list_tenants()
@@ -566,6 +621,7 @@ def list_tenants(
     configure_logging(args.verbose)
     try:
         settings = settings_from_args(args)
+        _start_debug_log(settings)
         session = PartnerSession(settings, transport=transport)
         session.login()
         tenants = session.list_tenants()

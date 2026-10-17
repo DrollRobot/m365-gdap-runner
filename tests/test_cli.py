@@ -6,12 +6,13 @@ End-to-end runs use the fake msal module and a fake service transport.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import logging
 import os
 import sys
 import textwrap
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import ModuleType
 
@@ -153,23 +154,53 @@ def test_main_returns_130_on_interrupt(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cli.main(LICENSED_USERS, _args("--all")) == 130
 
 
-@pytest.mark.unit
-def test_configure_logging_quiets_libraries_unless_very_verbose() -> None:
+@contextlib.contextmanager
+def _restoring_loggers() -> Iterator[None]:
+    """Undo what configure_logging() and the debug log do to the root and library loggers.
+
+    Use it inside a test, not a fixture: pytest swaps its own root handlers between phases.
+    """
     root = logging.getLogger()
     handlers = list(root.handlers)
     saved = {name: logging.getLogger(name).level for name in ("", *cli._LIBRARY_LOGGERS)}
     try:
+        yield
+    finally:
+        for handler in root.handlers[len(handlers) :]:
+            root.removeHandler(handler)
+            handler.close()
+        for name, level in saved.items():
+            logging.getLogger(name).setLevel(level)
+
+
+@pytest.mark.unit
+def test_configure_logging_quiets_libraries_unless_very_verbose() -> None:
+    root = logging.getLogger()
+    with _restoring_loggers():
         CONFIGURE_LOGGING(0)
         assert root.level == logging.INFO
         assert logging.getLogger("azure_auth").level == logging.WARNING
         CONFIGURE_LOGGING(2)
         assert root.level == logging.DEBUG
         assert logging.getLogger("msal").level == logging.DEBUG
-    finally:
-        for handler in root.handlers[len(handlers) :]:
-            root.removeHandler(handler)
-        for name, level in saved.items():
-            logging.getLogger(name).setLevel(level)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("name", "level", "kept"),
+    [
+        ("httpx", logging.DEBUG, False),
+        ("azure.identity", logging.INFO, False),
+        ("httpx", logging.WARNING, True),
+        ("httpx_extras", logging.INFO, True),
+        ("m365_gdap_runner.session", logging.DEBUG, True),
+    ],
+)
+def test_the_terminal_drops_library_records_below_warning(
+    name: str, level: int, kept: bool
+) -> None:
+    record = logging.LogRecord(name, level, __file__, 1, "message", None, None)
+    assert cli._quiet_libraries(record) is kept
 
 
 @pytest.mark.integration
@@ -496,6 +527,44 @@ def test_list_tenants_exit_2_on_missing_config(
     monkeypatch.delenv(ENV_PREFIX + "USERNAME")
     assert _list_tenants() == 2
     assert "username" in caplog.text
+
+
+@pytest.mark.integration
+@pytest.mark.acceptance
+def test_debug_log_gets_every_record_and_the_terminal_info_and_up(
+    fake_msal: FakeMsal,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = tmp_path / "logs" / "debug.log"
+    monkeypatch.setenv(ENV_PREFIX + "DEBUG_LOG_PATH", str(path))
+    monkeypatch.setattr(cli, "configure_logging", CONFIGURE_LOGGING)
+    for _run in range(2):  # each as its own process would, with handlers removed after
+        with _restoring_loggers():
+            assert _list_tenants() == 0
+    log = path.read_text(encoding="utf-8")
+    terminal = capsys.readouterr().err
+    # This package's debug records, and a library's below WARNING, reach the file only.
+    assert "DEBUG [-] m365_gdap_runner.session: Signing in to the partner tenant" in log
+    assert "INFO [-] httpx: HTTP Request" in log
+    assert "Signing in to the partner tenant" not in terminal
+    assert "HTTP Request" not in terminal
+    assert "Created tenants file" in terminal
+    # The second run appends.
+    assert log.count("Debug log started") == 2
+
+
+@pytest.mark.integration
+def test_a_debug_log_that_cannot_be_opened_is_a_warning_not_an_error(
+    fake_msal: FakeMsal,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setenv(ENV_PREFIX + "DEBUG_LOG_PATH", str(tmp_path))  # a folder, not a file
+    assert _list_tenants() == 0
+    assert f"Could not open debug log {tmp_path}" in caplog.text
 
 
 @pytest.mark.unit
