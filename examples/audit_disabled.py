@@ -28,6 +28,9 @@ logger = logging.getLogger(__name__)
 # its own cmdlets; consent is not per scope there.
 CLIENTS = ["exchange"]
 
+# A report only reads, so one tenant's error is no reason to stop the others.
+CONTINUE_ON_ERROR = True
+
 
 def run(ctx: TenantContext) -> None:
     """Log whether mailbox auditing is off for every mailbox in the tenant.

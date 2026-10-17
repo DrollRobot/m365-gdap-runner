@@ -56,6 +56,9 @@ logger = logging.getLogger(__name__)
 # Exchange only: no Graph, so no SCOPES.
 CLIENTS = ["exchange"]
 
+# A report only reads, so one tenant's error is no reason to stop the others.
+CONTINUE_ON_ERROR = True
+
 # The logon types a mailbox audits, each with its own action set and default-set flag.
 LOGON_TYPES = ("Admin", "Delegate", "Owner")
 

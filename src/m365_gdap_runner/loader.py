@@ -13,6 +13,11 @@ A script defines ``run(ctx)`` and declares what it uses:
 It may also define ``report(results)``, called once after the last tenant with every
 tenant's :class:`~m365_gdap_runner.runner.TenantResult`, failed ones included. The library
 writes nothing itself: ``run()`` writes any per-tenant report, ``report()`` the run's.
+
+And it may set ``CONTINUE_ON_ERROR``. An error in ``run()`` stops the run by default, so a
+script that changes things does not repeat a broken change in every tenant; a script that
+only reads sets it True to keep going. ``--continue-on-error`` and
+``--no-continue-on-error`` override it.
 """
 
 from __future__ import annotations
@@ -49,6 +54,7 @@ class Payload:
         scopes: Delegated Graph scopes the script needs in each tenant.
         clients: Client kinds the script uses (``graph``, ``exchange``, ``ipps``, ``azure``).
         report: The script's ``report(results)`` function, or None when it has none.
+        continue_on_error: Whether the run goes on after an error in ``run()``.
     """
 
     name: str
@@ -56,6 +62,7 @@ class Payload:
     scopes: tuple[str, ...]
     clients: tuple[str, ...] = DEFAULT_CLIENTS
     report: Callable[[list[TenantResult]], object] | None = None
+    continue_on_error: bool = False
 
 
 def _one_argument_function(
@@ -99,7 +106,8 @@ def payload_from_module(module: ModuleType, name: str) -> Payload:
 
     Raises:
         PayloadInvalid: If ``run`` is missing, ``run`` or ``report`` cannot take one
-            positional argument, or ``CLIENTS`` or ``SCOPES`` is invalid.
+            positional argument, ``CLIENTS`` or ``SCOPES`` is invalid, or
+            ``CONTINUE_ON_ERROR`` is not True or False.
     """
     run = _one_argument_function(getattr(module, "run", None), name, "run", "ctx")
     report = getattr(module, "report", None)
@@ -107,7 +115,19 @@ def payload_from_module(module: ModuleType, name: str) -> Payload:
         report = _one_argument_function(report, name, "report", "results")
     clients = validate_clients(getattr(module, "CLIENTS", None), name)
     scopes = validate_scopes(getattr(module, "SCOPES", None), name, graph="graph" in clients)
-    return Payload(name=name, run=run, scopes=scopes, clients=clients, report=report)
+    continue_on_error = getattr(module, "CONTINUE_ON_ERROR", False)
+    if not isinstance(continue_on_error, bool):
+        raise PayloadInvalid(
+            f"Script {name!r}: CONTINUE_ON_ERROR must be True or False, not {continue_on_error!r}."
+        )
+    return Payload(
+        name=name,
+        run=run,
+        scopes=scopes,
+        clients=clients,
+        report=report,
+        continue_on_error=continue_on_error,
+    )
 
 
 def validate_clients(value: object, name: str) -> tuple[str, ...]:

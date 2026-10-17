@@ -48,6 +48,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--gdap-only`, those tenants are left `auth_failed` instead. While the silent checks
   run, a log line every 30 seconds says how many are done and about how long the rest will
   take.
+- Script setting `CONTINUE_ON_ERROR`: an error in `run()` stops the run unless the script sets
+  it True, as the example reports do and the ConnectWise example does under `--dry-run`.
+  `--continue-on-error` and the new `--no-continue-on-error` override it.
 - Example scripts, each with the header `uv run` builds its environment from:
   `examples/licensed_users.py` (Graph; its `report()` prints every tenant's users as JSON),
   `examples/audit_disabled.py` (Exchange Online; no `report()`, its log is the report),

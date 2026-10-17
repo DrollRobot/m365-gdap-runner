@@ -35,6 +35,9 @@ logger = logging.getLogger(__name__)
 # Exchange only: no Graph, so no SCOPES.
 CLIENTS = ["exchange"]
 
+# A report only reads, so one tenant's error is no reason to stop the others.
+CONTINUE_ON_ERROR = True
+
 # Where the workbook goes. ``--out`` replaces it before the run starts.
 OUT_DIR = Path("reports")
 

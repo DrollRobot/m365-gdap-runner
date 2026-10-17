@@ -114,7 +114,7 @@ def _tenant_ids(script: ModuleType) -> list[str]:
 @pytest.mark.unit
 def test_add_arguments_defaults() -> None:
     args = _args("--all")
-    assert (args.jobs, args.continue_on_error) == (1, False)
+    assert (args.jobs, args.continue_on_error) == (1, None)
     assert (args.tenant, args.group, args.exclude, args.all) == (None, None, None, True)
     assert (args.partner_tenant_id, args.username, args.client_id, args.cache, args.cloud) == (
         None,
@@ -481,6 +481,42 @@ def test_exit_2_on_missing_config(
 def test_exit_2_on_failed_sign_in(fake_msal: FakeMsal) -> None:
     fake_msal.interactive_result = {"error": "access_denied", "error_description": "cancelled"}
     assert _main(LICENSED_USERS, "--all") == 2
+
+
+# A script whose run() fails in Alpha, the first tenant, and works in beta corp.
+FAILS_IN_ALPHA = """
+    SCOPES = ["User.Read.All"]
+    REPORTED = []
+
+    def run(ctx):
+        if ctx.tenant.display_name == "Alpha":
+            raise RuntimeError("broken")
+        return 1
+
+    def report(results):
+        REPORTED.append(results)
+"""
+
+
+@pytest.mark.integration
+@pytest.mark.acceptance
+@pytest.mark.parametrize(
+    ("setting", "flags", "beta"),
+    [
+        ("", [], "skipped"),
+        ("", ["--continue-on-error"], "ok"),
+        ("CONTINUE_ON_ERROR = True", [], "ok"),
+        ("CONTINUE_ON_ERROR = True", ["--no-continue-on-error"], "skipped"),
+        ("CONTINUE_ON_ERROR = False", [], "skipped"),
+    ],
+    ids=["default", "flag", "script", "flag-over-script", "script-false"],
+)
+def test_an_error_in_run_stops_the_run_unless_the_script_or_a_flag_says_go_on(
+    fake_msal: FakeMsal, tmp_path: Path, setting: str, flags: list[str], beta: str
+) -> None:
+    script = _script(tmp_path, FAILS_IN_ALPHA + "\n    " + setting + "\n")
+    assert _main(script, "--all", *flags) == 1
+    assert [r.status for r in _reported(script)] == ["error", beta]
 
 
 @pytest.mark.integration

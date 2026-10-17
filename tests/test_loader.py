@@ -36,11 +36,17 @@ def test_valid_script() -> None:
     assert payload.clients == ("graph",)
     assert callable(payload.run)
     assert payload.report is None
+    assert payload.continue_on_error is False
 
 
 def test_report_is_picked_up() -> None:
     module = _module(VALID + "\n    def report(results, title='Report'):\n        pass\n")
     assert payload_from_module(module, "script").report is module.report
+
+
+def test_continue_on_error_is_picked_up() -> None:
+    module = _module(VALID + "\n    CONTINUE_ON_ERROR = True\n")
+    assert payload_from_module(module, "script").continue_on_error is True
 
 
 def test_clients_are_normalized_and_deduplicated() -> None:
@@ -109,6 +115,10 @@ def test_run_with_optional_parameters_is_accepted() -> None:
         (
             'SCOPES = ["User.Read.All"]\ndef run(ctx):\n    pass\ndef report():\n    pass\n',
             r"report\(\) must accept exactly one positional argument \(results\)",
+        ),
+        (
+            'SCOPES = ["User.Read.All"]\ndef run(ctx):\n    pass\nCONTINUE_ON_ERROR = "yes"\n',
+            "CONTINUE_ON_ERROR must be True or False, not 'yes'",
         ),
     ],
 )

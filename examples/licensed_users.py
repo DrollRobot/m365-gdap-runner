@@ -34,6 +34,9 @@ CLIENTS = ["graph"]
 # Delegated Graph scopes this script needs in every customer tenant.
 SCOPES = ["User.Read.All"]
 
+# A report only reads, so one tenant's error is no reason to stop the others.
+CONTINUE_ON_ERROR = True
+
 
 def run(ctx: TenantContext) -> list[dict[str, str]]:
     """Return every licensed user in the tenant.

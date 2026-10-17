@@ -85,6 +85,15 @@ If it raises, the error is logged and the run exits with code 2. Logs and the su
 stderr, so stdout is the script's. `examples/mailbox_audit_gaps.py` writes an Excel workbook
 of each kind.
 
+## Errors in run()
+
+An error raised in `run()` stops the run: that tenant is `error`, and the tenants not yet
+started are `skipped`. That keeps a script that changes things from repeating a broken
+change in every tenant. A script that only reads sets `CONTINUE_ON_ERROR = True` to keep
+going. `--continue-on-error` and `--no-continue-on-error` override the script.
+
+A tenant that could not be reached is `auth_failed` and never stops the run.
+
 ## Flags of your own
 
 `main(__name__)` reads the library's flags only. A script with flags of its own builds the

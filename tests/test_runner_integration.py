@@ -503,3 +503,47 @@ def test_connectwise_report_lists_the_tenants_that_failed(
     assert capsys.readouterr().out == (
         f"Alpha      disabled (appId {CONNECTWISE_APP_ID})\nbeta corp  auth_failed: AADSTS65001\n"
     )
+
+
+def _refused_in_alpha(transport: httpx.MockTransport) -> httpx.MockTransport:
+    """Wrap a fake Graph so Alpha refuses the app read, as without a role that may read it."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1.0/servicePrincipals" and bearer_tenant(request) == TENANT_A:
+            error = {"code": "Authorization_RequestDenied", "message": "Insufficient privileges."}
+            return httpx.Response(403, json={"error": error})
+        return transport.handle_request(request)
+
+    return httpx.MockTransport(handler)
+
+
+def test_connectwise_dry_run_goes_on_after_a_tenant_error(
+    fake_msal: FakeMsal,
+    monkeypatch: pytest.MonkeyPatch,
+    connectwise: Any,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # What --dry-run sets.
+    monkeypatch.setattr(connectwise, "DRY_RUN", True)
+    monkeypatch.setattr(connectwise, "CONTINUE_ON_ERROR", True)
+    patches: list[httpx.Request] = []
+    apps = {TENANT_B: [_connectwise_app("sp-b", enabled=True)]}
+
+    assert _run_all(connectwise, _refused_in_alpha(_connectwise_services(apps, patches))) == 1
+
+    out = capsys.readouterr().out
+    assert "Alpha      error: GraphError(" in out
+    assert f"beta corp  would disable (appId {CONNECTWISE_APP_ID})" in out
+    assert patches == []
+
+
+def test_connectwise_stops_at_a_tenant_error_when_it_changes_things(
+    fake_msal: FakeMsal, connectwise: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    patches: list[httpx.Request] = []
+    apps = {TENANT_B: [_connectwise_app("sp-b", enabled=True)]}
+
+    assert _run_all(connectwise, _refused_in_alpha(_connectwise_services(apps, patches))) == 1
+
+    assert "beta corp  skipped" in capsys.readouterr().out
+    assert patches == []

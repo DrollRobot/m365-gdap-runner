@@ -232,8 +232,12 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     run = parser.add_argument_group("m365-gdap-runner run")
     run.add_argument(
         "--continue-on-error",
-        action="store_true",
-        help="Keep running other tenants after an error in run().",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Keep running other tenants after an error in run(); --no-continue-on-error "
+            "stops at the first. Default: the script's CONTINUE_ON_ERROR, else stop."
+        ),
     )
     run.add_argument(
         "--jobs",
@@ -579,7 +583,11 @@ def _run(
             session,
             payload,
             selected,
-            continue_on_error=args.continue_on_error,
+            continue_on_error=(
+                payload.continue_on_error
+                if args.continue_on_error is None
+                else args.continue_on_error
+            ),
             jobs=args.jobs,
         )
     except RunInterrupted as exc:

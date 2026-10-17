@@ -16,6 +16,9 @@ then without it::
 
     uv run disable_connectwise_backup_sign_in.py --group pilot
 
+A dry run keeps going after a tenant's error, so it shows every tenant; a real run stops at
+the first, rather than repeat a broken change.
+
 The app is found by its exact display name; a tenant without it is left alone. ``report()``
 prints a line per tenant: what was done, or would be in a dry run, or why the tenant failed.
 
@@ -42,6 +45,9 @@ APP_NAME = "ConnectWise Cloud Backup"
 
 # Report what would change instead of changing it. ``--dry-run`` sets it before the run.
 DRY_RUN = False
+
+# A dry run only reads, so it keeps going after a tenant's error. ``--dry-run`` sets it too.
+CONTINUE_ON_ERROR = False
 
 
 def run(ctx: TenantContext) -> list[dict[str, str]]:
@@ -118,5 +124,5 @@ if __name__ == "__main__":
     )
     add_arguments(parser)
     args = parser.parse_args()
-    DRY_RUN = args.dry_run
+    DRY_RUN = CONTINUE_ON_ERROR = args.dry_run
     raise SystemExit(main(__name__, args))
