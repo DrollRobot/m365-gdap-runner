@@ -20,7 +20,8 @@ Tenants are chosen with ``--group`` (a TRUE/FALSE column of the tenants file, se
 ``tenants.py``), ``--tenant`` or ``--all``, less ``--exclude``; a run that names none is
 refused. ``--group`` and ``--tenant`` may pick tenants without a GDAP relationship, or in
 another cloud, from the tenants file; before the loop, every tenant the partner sign-in
-cannot reach gets a sign-in of its own, unless ``--gdap-only`` is given. Every run adds the
+cannot reach gets a sign-in of its own, unless ``--gdap-only`` is given. A tenant marked
+FALSE in ``m365_gdap_access`` with a blank ``m365_username`` is left out. Every run adds the
 columns and GDAP tenants the file lacks. The ``m365-gdap-runner`` command (:func:`list_tenants`)
 does only that, and prints the list.
 
@@ -465,7 +466,9 @@ def _select_tenants(
         cloud: Name of the partner's cloud, for a tenant whose row names none.
 
     Returns:
-        The tenants to run, GDAP tenants first, each with its cloud and sign-in account.
+        The tenants to run, GDAP tenants first, each with its cloud and sign-in account. A
+        tenant marked FALSE in ``m365_gdap_access`` with a blank ``m365_username`` has no way
+        in, by design: it is left out, with a warning.
 
     Raises:
         TenantFileError: If a group has no column, a cell in it is not TRUE, FALSE or blank,
@@ -484,7 +487,15 @@ def _select_tenants(
             groups = ", ".join(args.group or ())
             raise TenantSelectionError(f"No tenant is marked TRUE in group(s) {groups}.")
         chosen = select(known, include=include, exclude=args.exclude)
-    return [tenant_file.details(tenant, default_cloud=cloud) for tenant in chosen]
+    detailed = [tenant_file.details(tenant, default_cloud=cloud) for tenant in chosen]
+    no_access = [tenant for tenant in detailed if not (tenant.gdap_access or tenant.username)]
+    if no_access:
+        logger.warning(
+            "Skipping %d tenant(s) with m365_gdap_access FALSE and a blank m365_username: %s",
+            len(no_access),
+            ", ".join(tenant.display_name for tenant in no_access),
+        )
+    return [tenant for tenant in detailed if tenant.gdap_access or tenant.username]
 
 
 def _script_name(module: ModuleType) -> str:

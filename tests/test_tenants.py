@@ -209,12 +209,37 @@ def test_members_reads_the_optional_username_column(tmp_path: Path) -> None:
     ]
 
 
-def test_the_username_column_is_not_a_group(tmp_path: Path) -> None:
-    path = _write(tmp_path / "t.csv", f"{M365},m365_username,g", f"{TENANT_A},Alpha,,,,TRUE")
+@pytest.mark.parametrize("column", ["m365_username", "m365_gdap_access"])
+def test_the_username_and_gdap_access_columns_are_not_groups(tmp_path: Path, column: str) -> None:
+    path = _write(tmp_path / "t.csv", f"{M365},{column},g", f"{TENANT_A},Alpha,,,,TRUE")
     tenant_file = TenantFile.load(path)
     assert tenant_file.groups == ["g"]
-    with pytest.raises(TenantFileError, match="no group column 'm365_username'"):
-        tenant_file.members("m365_username")
+    with pytest.raises(TenantFileError, match=f"no group column '{column}'"):
+        tenant_file.members(column)
+
+
+def test_members_reads_the_optional_gdap_access_column(tmp_path: Path) -> None:
+    # Only FALSE turns the partner sign-in off; blank, like a missing column, leaves it on.
+    path = _write(
+        tmp_path / "t.csv",
+        f"{M365},m365_gdap_access,g",
+        f"{TENANT_A},Alpha,,, false ,TRUE",
+        f"{TENANT_B},beta corp,,,TRUE,TRUE",
+        f"{TENANT_C},Gamma,,,,TRUE",
+    )
+    assert [row.gdap_access for row in TenantFile.load(path).members("g")] == [False, True, True]
+
+
+@pytest.mark.parametrize("cell", ["no", "0", "maybe"])
+def test_members_rejects_a_gdap_access_that_is_not_true_or_false(tmp_path: Path, cell: str) -> None:
+    path = _write(
+        tmp_path / "t.csv", f"{M365},m365_gdap_access,g", f"{TENANT_A},Alpha,,,{cell},TRUE"
+    )
+    with pytest.raises(
+        TenantFileError,
+        match=f"row 2: '{cell}' in column 'm365_gdap_access' is not TRUE, FALSE or blank",
+    ):
+        TenantFile.load(path).members("g")
 
 
 def test_members_skips_a_marked_row_with_no_m365_tenant(tmp_path: Path) -> None:
@@ -318,6 +343,7 @@ def test_sync_appends_unknown_tenants_and_fills_blank_clouds(csv_path: Path) -> 
         "m365_domain": "",
         "m365_cloud": "USGov",
         "m365_username": "",
+        "m365_gdap_access": "",
         "patching": "",
         "pilot": "",
         "cw_company_id": "",
@@ -339,10 +365,10 @@ def test_sync_with_nothing_to_do_changes_nothing_and_looks_nothing_up(tmp_path: 
 
     path = _write(
         tmp_path / "t.csv",
-        f"{M365},m365_username,g",
-        f"{TENANT_A},Alpha,,Commercial,,TRUE",
-        f"{TENANT_C},Gamma,,USGov,,TRUE",
-        ",Acme,,,,TRUE",
+        f"{M365},m365_username,m365_gdap_access,g",
+        f"{TENANT_A},Alpha,,Commercial,,,TRUE",
+        f"{TENANT_C},Gamma,,USGov,,,TRUE",
+        ",Acme,,,,,TRUE",
     )
     tenant_file = TenantFile.load(path)
     before = [dict(row) for row in tenant_file.rows]
@@ -355,21 +381,23 @@ def test_save_round_trips_other_tools_data_and_appended_rows(csv_path: Path) -> 
     tenant_file = TenantFile.load(csv_path)
     tenant_file.sync([ALPHA, BETA, DELTA], commercial)
     tenant_file.save()
-    # The file predates m365_username, so the column is added after m365_cloud.
+    # The file predates m365_username and m365_gdap_access, so they are added after
+    # m365_cloud.
     assert csv_path.read_text(encoding="utf-8-sig").splitlines() == [
-        f"{M365},m365_username,patching,pilot,cw_company_id,notes",
-        f"{TENANT_A},Alpha,alpha.example,Commercial,,TRUE,FALSE,1001,first one",
-        f"{TENANT_B},beta corp,beta.example,Commercial,,TRUE,TRUE,1002,",
-        f"{TENANT_C},Gamma,,Commercial,,FALSE,,1003,gone from GDAP",
-        ",,,,,TRUE,TRUE,1004,no M365 tenant",
-        f"{DELTA.tenant_id},Delta,,Commercial,,,,,",
+        f"{M365},m365_username,m365_gdap_access,patching,pilot,cw_company_id,notes",
+        f"{TENANT_A},Alpha,alpha.example,Commercial,,,TRUE,FALSE,1001,first one",
+        f"{TENANT_B},beta corp,beta.example,Commercial,,,TRUE,TRUE,1002,",
+        f"{TENANT_C},Gamma,,Commercial,,,FALSE,,1003,gone from GDAP",
+        ",,,,,,TRUE,TRUE,1004,no M365 tenant",
+        f"{DELTA.tenant_id},Delta,,Commercial,,,,,,",
     ]
     assert csv_path.read_bytes().startswith(b"\xef\xbb\xbf")  # BOM for spreadsheets
     assert [p.name for p in csv_path.parent.iterdir()] == [csv_path.name]  # no temp file left
 
 
 def test_sync_adds_missing_columns_after_the_last_m365_column(tmp_path: Path) -> None:
-    # The m365_ columns out of order, among another tool's, and without m365_username.
+    # The m365_ columns out of order, among another tool's, and without m365_username or
+    # m365_gdap_access.
     path = _write(
         tmp_path / "t.csv",
         "my_name,m365_tenant_name,m365_domain,m365_tenant_id,m365_cloud,exclude",
@@ -377,11 +405,16 @@ def test_sync_adds_missing_columns_after_the_last_m365_column(tmp_path: Path) ->
     )
     tenant_file = TenantFile.load(path)
     report = tenant_file.sync([ALPHA], commercial)
-    assert (report.columns_added, report.added, report.changed) == (["m365_username"], [], True)
+    assert (report.columns_added, report.added, report.changed) == (
+        ["m365_username", "m365_gdap_access"],
+        [],
+        True,
+    )
     tenant_file.save()
     assert path.read_text(encoding="utf-8-sig").splitlines() == [
-        "my_name,m365_tenant_name,m365_domain,m365_tenant_id,m365_cloud,m365_username,exclude",
-        f"Alpha Inc,Alpha,,{TENANT_A},Commercial,,TRUE",
+        "my_name,m365_tenant_name,m365_domain,m365_tenant_id,m365_cloud,m365_username,"
+        "m365_gdap_access,exclude",
+        f"Alpha Inc,Alpha,,{TENANT_A},Commercial,,,TRUE",
     ]
 
 
@@ -393,8 +426,8 @@ def test_sync_adds_every_m365_column_at_the_end_of_a_file_without_them(tmp_path:
     tenant_file.save()
     assert path.read_text(encoding="utf-8-sig").splitlines() == [
         f"my_name,pilot,{','.join(OWN_COLUMNS)}",
-        "Acme,TRUE,,,,,",
-        f",,{TENANT_A},Alpha,,Commercial,",
+        "Acme,TRUE,,,,,,",
+        f",,{TENANT_A},Alpha,,Commercial,,",
     ]
 
 
@@ -404,8 +437,8 @@ def test_save_creates_the_file_and_its_directory(tmp_path: Path) -> None:
     tenant_file.sync([ALPHA], commercial)
     tenant_file.save()
     assert path.read_text(encoding="utf-8-sig").splitlines() == [
-        f"{M365},m365_username",
-        f"{TENANT_A},Alpha,,Commercial,",
+        f"{M365},m365_username,m365_gdap_access",
+        f"{TENANT_A},Alpha,,Commercial,,",
     ]
 
 
@@ -428,16 +461,16 @@ def test_extra_tenants_are_the_rows_gdap_does_not_list(tmp_path: Path) -> None:
     ]
 
 
-def test_details_take_the_cloud_and_username_from_the_row(tmp_path: Path) -> None:
+def test_details_take_the_cloud_username_and_gdap_access_from_the_row(tmp_path: Path) -> None:
     path = _write(
         tmp_path / "t.csv",
-        f"{M365},m365_username",
-        f"{TENANT_A},Alpha,,,",
-        f"{TENANT_C},Gamma,,usgov,admin@gamma.example",
+        f"{M365},m365_username,m365_gdap_access",
+        f"{TENANT_A},Alpha,,,,",
+        f"{TENANT_C},Gamma,,usgov,admin@gamma.example,FALSE",
     )
     tenant_file = TenantFile.load(path)
     assert tenant_file.details(GAMMA, default_cloud="Commercial") == Tenant(
-        TENANT_C, "Gamma", "USGov", "admin@gamma.example"
+        TENANT_C, "Gamma", "USGov", "admin@gamma.example", gdap_access=False
     )
     # A blank cloud, or no row at all, is the partner's cloud, and no username.
     assert tenant_file.details(ALPHA, default_cloud="Commercial") == Tenant(

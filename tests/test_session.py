@@ -302,10 +302,35 @@ def test_check_access_signs_in_directly_where_the_partner_sign_in_fails(
     assert fake_msal.interactive_tenants() == [PARTNER_TENANT, TENANT_B]
 
 
+def test_check_access_never_tries_the_partner_sign_in_where_gdap_access_is_false(
+    fake_msal: FakeMsal, caplog: pytest.LogCaptureFixture
+) -> None:
+    # The partner sign-in would reach beta corp; the tenants file says not to try.
+    beta = Tenant(TENANT_B, "beta corp", "Commercial", BETA_ADMIN, gdap_access=False)
+    session = _signed_in(["graph"])
+    with caplog.at_level(logging.INFO, logger="m365_gdap_runner.session"):
+        session.check_access([ALPHA, beta], scopes=["User.Read.All"])
+    assert fake_msal.silent_calls(TENANT_B) == []
+    assert fake_msal.interactive_tenants() == [PARTNER_TENANT, TENANT_B]
+    assert (
+        f"Signing in to beta corp directly as {BETA_ADMIN}: its m365_gdap_access is FALSE"
+        in caplog.text
+    )
+    with session.context_for(beta, scopes=["User.Read.All"]) as context:
+        assert (context.auth.is_sibling, context.auth.username) == (False, BETA_ADMIN)
+
+
 @pytest.mark.regression
 @pytest.mark.parametrize(
     ("tenant", "reason"),
-    [(BETA, "AADSTS65001"), (Tenant(TENANT_C, "Gamma", "USGov"), "Gamma is in the USGov cloud")],
+    [
+        (BETA, "AADSTS65001"),
+        (Tenant(TENANT_C, "Gamma", "USGov"), "Gamma is in the USGov cloud"),
+        (
+            Tenant(TENANT_B, "beta corp", "Commercial", gdap_access=False),
+            "beta corp's m365_gdap_access is FALSE",
+        ),
+    ],
 )
 def test_check_access_never_signs_in_directly_as_the_partner_account(
     fake_msal: FakeMsal, tenant: Tenant, reason: str

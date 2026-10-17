@@ -3,8 +3,8 @@
 Graph says which customer tenants have a GDAP relationship (see ``session.py``). The tenants
 file says which tenants belong to which group: a CSV edited in a spreadsheet, one row per
 customer, with the columns ``m365_tenant_id``, ``m365_tenant_name``, ``m365_domain``,
-``m365_cloud`` and ``m365_username``, and one column per group holding TRUE or FALSE.
-``--group NAME`` runs the tenants marked TRUE in column ``NAME``.
+``m365_cloud``, ``m365_username`` and ``m365_gdap_access``, and one column per group holding
+TRUE or FALSE. ``--group NAME`` runs the tenants marked TRUE in column ``NAME``.
 
 The file may be shared with tools that describe the same customers on other platforms, so
 the columns this package owns carry the ``m365_`` prefix, every other column is left alone
@@ -17,6 +17,12 @@ cloud is filled in by OpenID Connect discovery (:meth:`TenantFile.sync`). A row 
 has no GDAP relationship, or lives in another Microsoft cloud, can still be selected: the
 runner signs in to it directly, as the account in ``m365_username``. A blank cell means no
 direct sign-in.
+
+GDAP can list a customer whose tenant it gives no access to. FALSE in ``m365_gdap_access``
+says so: the runner never tries the partner sign-in there, and goes straight to the direct
+sign-in. With ``m365_username`` blank too, the tenant has no way in, and a run leaves it
+out: that marks a customer with no access at all that cannot be removed from Partner Center.
+A blank cell, or TRUE, tries the partner sign-in first.
 """
 
 from __future__ import annotations
@@ -42,7 +48,15 @@ NAME_COLUMN = "m365_tenant_name"
 DOMAIN_COLUMN = "m365_domain"
 CLOUD_COLUMN = "m365_cloud"
 USERNAME_COLUMN = "m365_username"
-OWN_COLUMNS = (ID_COLUMN, NAME_COLUMN, DOMAIN_COLUMN, CLOUD_COLUMN, USERNAME_COLUMN)
+GDAP_ACCESS_COLUMN = "m365_gdap_access"
+OWN_COLUMNS = (
+    ID_COLUMN,
+    NAME_COLUMN,
+    DOMAIN_COLUMN,
+    CLOUD_COLUMN,
+    USERNAME_COLUMN,
+    GDAP_ACCESS_COLUMN,
+)
 
 # File name in the config directory when the ``tenants_file`` setting is empty.
 TENANTS_FILE_NAME = "tenants.csv"
@@ -72,12 +86,15 @@ class Tenant:
             selects; empty for one only listed.
         username: The account to sign in with when the partner sign-in cannot reach it; empty
             for no direct sign-in.
+        gdap_access: False when the tenants file says the partner sign-in cannot reach it, so
+            it is never tried.
     """
 
     tenant_id: str
     display_name: str
     cloud: str = ""
     username: str = ""
+    gdap_access: bool = True
 
 
 @dataclass(frozen=True)
@@ -89,12 +106,15 @@ class TenantRow:
         display_name: The ``m365_tenant_name`` cell; may be empty.
         cloud: The ``m365_cloud`` cell as azure-auth spells the cloud's name, or empty.
         username: The ``m365_username`` cell, or empty when blank or the column is absent.
+        gdap_access: False when the ``m365_gdap_access`` cell is FALSE; True when it is TRUE,
+            blank, or the column is absent.
     """
 
     tenant_id: str
     display_name: str
     cloud: str
     username: str = ""
+    gdap_access: bool = True
 
 
 @dataclass(frozen=True)
@@ -267,7 +287,8 @@ class TenantFile:
 
         Raises:
             TenantFileError: If there is no such column, a cell in it is not TRUE, FALSE or
-                blank, or a marked row's ``m365_cloud`` names no known cloud.
+                blank, or a marked row's ``m365_cloud`` names no known cloud or its
+                ``m365_gdap_access`` is not TRUE, FALSE or blank.
         """
         column = self._group_column(group)
         chosen: list[TenantRow] = []
@@ -294,11 +315,12 @@ class TenantFile:
             number: The row's number in the spreadsheet, for error messages.
 
         Returns:
-            The row's tenant ID, display name, cloud and username, stripped; the cloud
-            spelled as azure-auth names it.
+            The row's tenant ID, display name, cloud, username and GDAP access, stripped; the
+            cloud spelled as azure-auth names it.
 
         Raises:
-            TenantFileError: If ``m365_cloud`` is filled but names no known cloud.
+            TenantFileError: If ``m365_cloud`` is filled but names no known cloud, or
+                ``m365_gdap_access`` is not TRUE, FALSE or blank.
         """
         cell = row.get(CLOUD_COLUMN, "").strip()
         cloud = ""
@@ -311,11 +333,19 @@ class TenantFile:
                     f"{self.path} row {number}: {cell!r} in column {CLOUD_COLUMN!r} is not a "
                     f"cloud. Use {names}, or blank."
                 ) from None
+        access = row.get(GDAP_ACCESS_COLUMN, "")
+        if access.strip().casefold() not in TRUE_VALUES | FALSE_VALUES:
+            raise TenantFileError(
+                f"{self.path} row {number}: {access!r} in column {GDAP_ACCESS_COLUMN!r} is not "
+                "TRUE, FALSE or blank."
+            )
         return TenantRow(
             row.get(ID_COLUMN, "").strip(),
             row.get(NAME_COLUMN, "").strip(),
             cloud,
             row.get(USERNAME_COLUMN, "").strip(),
+            # Unlike a group's, a blank cell here counts as TRUE: try the partner sign-in.
+            gdap_access=access.strip().casefold() != "false",
         )
 
     def extra_tenants(self, gdap: Sequence[Tenant]) -> list[Tenant]:
@@ -337,7 +367,7 @@ class TenantFile:
         return extra
 
     def details(self, tenant: Tenant, *, default_cloud: str) -> Tenant:
-        """Return *tenant* with the cloud and sign-in account its row gives.
+        """Return *tenant* with the cloud, sign-in account and GDAP access its row gives.
 
         Args:
             tenant: A selected tenant.
@@ -347,13 +377,19 @@ class TenantFile:
             The tenant, with ``cloud`` always filled in.
 
         Raises:
-            TenantFileError: If the row's ``m365_cloud`` names no known cloud.
+            TenantFileError: If the row's ``m365_cloud`` names no known cloud, or its
+                ``m365_gdap_access`` is not TRUE, FALSE or blank.
         """
         key = tenant.tenant_id.lower()
         for number, row in enumerate(self.rows, start=2):
             if row.get(ID_COLUMN, "").strip().lower() == key:
                 found = self._row(row, number)
-                return replace(tenant, cloud=found.cloud or default_cloud, username=found.username)
+                return replace(
+                    tenant,
+                    cloud=found.cloud or default_cloud,
+                    username=found.username,
+                    gdap_access=found.gdap_access,
+                )
         return replace(tenant, cloud=default_cloud)
 
     def _add_missing_columns(self) -> list[str]:

@@ -11,9 +11,10 @@ signed in to Windows without asking. Other systems ignore the setting.
 
 A tenant the partner sign-in cannot reach (no GDAP relationship, missing consent, a policy
 that wants a fresh sign-in, or another Microsoft cloud) gets a direct sign-in instead: a
-context of its own, in its own cloud, as the tenant's own account. A tenant with no account
-of its own gets none. All of that happens in :meth:`PartnerSession.check_access`, before the
-loop, so the loop never opens a browser.
+context of its own, in its own cloud, as the tenant's own account. So does a tenant the
+tenants file marks as having no GDAP access, without trying the partner sign-in first. A
+tenant with no account of its own gets none. All of that happens in
+:meth:`PartnerSession.check_access`, before the loop, so the loop never opens a browser.
 
 Why sign in per client: Microsoft's first-party apps differ per resource (Graph PowerShell,
 Exchange Online PowerShell, Azure PowerShell) and a refresh token belongs to one app, so a
@@ -244,9 +245,10 @@ class PartnerSession:
 
         A tenant in the partner's cloud is checked first through the partner sign-in, silently
         and the way the run will use it: every client the script uses must get a token
-        (:meth:`TenantContext.probe`). A tenant that fails that check, for whatever reason,
-        and a tenant in another cloud, then get a direct sign-in: a context of their own, in
-        their own cloud, as their ``username``, signed in once per client. One with no
+        (:meth:`TenantContext.probe`). A tenant that fails that check, for whatever reason, a
+        tenant in another cloud, and a tenant whose ``gdap_access`` is False, which is never
+        checked, then get a direct sign-in: a context of their own, in their own cloud, as
+        their ``username``, signed in once per client. One with no
         ``username`` gets none, and no prompt. A sign-in window opens only where no cached
         sign-in will do. Direct sign-ins run one at a time, on this thread. While the silent
         checks run, a log line every 30 seconds says how many are done and about how long the
@@ -264,7 +266,11 @@ class PartnerSession:
             jobs: How many silent checks run at once.
         """
         partner_cloud = self.cloud_name.lower()
-        nearby = [t for t in tenants if (t.cloud or self.cloud_name).lower() == partner_cloud]
+        nearby = [
+            t
+            for t in tenants
+            if t.gdap_access and (t.cloud or self.cloud_name).lower() == partner_cloud
+        ]
         logger.info("Checking access to %d tenant(s)", len(tenants))
         checked: dict[str, AuthContext | Exception] = {}
         started = last = monotonic()
@@ -295,7 +301,13 @@ class PartnerSession:
             if isinstance(route, AuthContext):
                 self._routes[key] = route
                 continue
-            if route is None:
+            if route is None and not tenant.gdap_access:
+                why = "its m365_gdap_access is FALSE"
+                route = AuthError(
+                    f"{tenant.display_name}'s m365_gdap_access is FALSE, so the partner sign-in "
+                    "was not tried; it needs a direct sign-in."
+                )
+            elif route is None:
                 why = f"it is in the {tenant.cloud} cloud"
                 route = AuthError(
                     f"{tenant.display_name} is in the {tenant.cloud} cloud, which the partner "
