@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -95,6 +96,9 @@ _LIBRARY_LOGGERS = (
 
 # Debug log lines: the full date, and the logger each record came from.
 _DEBUG_LOG_FORMAT = "%(asctime)s %(levelname)s [%(tenant)s] %(name)s: %(message)s"
+
+# The debug log's file name when ``debug_log_path`` names a folder.
+_DEBUG_LOG_NAME = "m365_gdap_runner_debug.log"
 
 # Settings a flag can override, with the flag's metavar.
 _SETTING_FLAGS = (
@@ -317,6 +321,24 @@ def configure_logging(verbosity: int) -> None:
         logging.getLogger(name).setLevel(library_level)
 
 
+def _debug_log_file(setting: str) -> Path:
+    """Return the file a ``debug_log_path`` setting names.
+
+    A setting that names a folder, one that exists or one ending in a path separator, means
+    :data:`_DEBUG_LOG_NAME` in that folder.
+
+    Args:
+        setting: The ``debug_log_path`` setting; not empty.
+
+    Returns:
+        The debug log's path, with ``~`` expanded.
+    """
+    path = Path(setting).expanduser()
+    if path.is_dir() or setting.endswith(tuple(sep for sep in (os.sep, os.altsep) if sep)):
+        return path / _DEBUG_LOG_NAME
+    return path
+
+
 def _start_debug_log(settings: Settings) -> None:
     """Append every log record, at every level, to the ``debug_log_path`` file, when set.
 
@@ -329,7 +351,7 @@ def _start_debug_log(settings: Settings) -> None:
     """
     if not settings.debug_log_path:
         return
-    path = Path(settings.debug_log_path).expanduser()
+    path = _debug_log_file(settings.debug_log_path)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         handler = logging.FileHandler(path, mode="a", encoding="utf-8")

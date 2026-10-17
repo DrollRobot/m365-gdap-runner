@@ -562,9 +562,40 @@ def test_a_debug_log_that_cannot_be_opened_is_a_warning_not_an_error(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    monkeypatch.setenv(ENV_PREFIX + "DEBUG_LOG_PATH", str(tmp_path))  # a folder, not a file
+    (tmp_path / "file").write_text("", encoding="utf-8")
+    path = tmp_path / "file" / "debug.log"  # its folder is a file
+    monkeypatch.setenv(ENV_PREFIX + "DEBUG_LOG_PATH", str(path))
     assert _list_tenants() == 0
-    assert f"Could not open debug log {tmp_path}" in caplog.text
+    assert f"Could not open debug log {path}" in caplog.text
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("trailing", ["", os.sep], ids=["existing", "new-with-separator"])
+def test_a_debug_log_path_naming_a_folder_writes_the_default_file_name_in_it(
+    fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, trailing: str
+) -> None:
+    folder = tmp_path / "logs"
+    if not trailing:
+        folder.mkdir()
+    monkeypatch.setenv(ENV_PREFIX + "DEBUG_LOG_PATH", str(folder) + trailing)
+    with _restoring_loggers():
+        assert _list_tenants() == 0
+    assert "Debug log started" in (folder / cli._DEBUG_LOG_NAME).read_text(encoding="utf-8")
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("setting", "expected"),
+    [
+        ("{tmp}", "{tmp}/m365_gdap_runner_debug.log"),
+        ("{tmp}/new/", "{tmp}/new/m365_gdap_runner_debug.log"),
+        ("{tmp}/new", "{tmp}/new"),
+        ("{tmp}/debug.log", "{tmp}/debug.log"),
+    ],
+    ids=["existing-folder", "trailing-separator", "no-suffix-is-a-file", "file"],
+)
+def test_debug_log_file(tmp_path: Path, setting: str, expected: str) -> None:
+    assert cli._debug_log_file(setting.format(tmp=tmp_path)) == Path(expected.format(tmp=tmp_path))
 
 
 @pytest.mark.unit

@@ -167,7 +167,7 @@ class Settings:
         default_value="",
         help=(
             "File every log record is appended to, debug and library ones included, for "
-            "development; empty writes none"
+            "development; a folder means m365_gdap_runner_debug.log in it; empty writes none"
         ),
     )
 
