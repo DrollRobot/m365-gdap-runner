@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+from itertools import count
 from types import SimpleNamespace
 from typing import Any
 
@@ -258,6 +260,32 @@ def test_check_access_reaches_gdap_tenants_through_the_partner_sign_in(
     assert fake_msal.silent_calls(TENANT_B) == [
         (GRAPH_CLI_CLIENT_ID, ("https://graph.microsoft.com/User.Read.All",))
     ]
+
+
+@pytest.mark.parametrize(
+    ("seconds_per_check", "lines"),
+    [
+        (60, ["Checked 1 of 2 tenant(s), about 1 min left"]),
+        (40, ["Checked 1 of 2 tenant(s), under a minute left"]),
+        (10, []),
+    ],
+    ids=["minutes-left", "under-a-minute", "too-soon"],
+)
+def test_check_access_logs_progress_every_30_seconds(
+    fake_msal: FakeMsal,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    seconds_per_check: int,
+    lines: list[str],
+) -> None:
+    ticks = count(0, seconds_per_check)
+    monkeypatch.setattr("m365_gdap_runner.session.monotonic", lambda: float(next(ticks)))
+    session = _signed_in(["graph"])
+    with caplog.at_level(logging.INFO, logger="m365_gdap_runner.session"):
+        # Gamma is in another cloud, so it gets no silent check to count.
+        session.check_access([ALPHA, BETA, GAMMA_GOV], scopes=["User.Read.All"], direct=False)
+    # Nothing after the last check: the lines that follow say how it went.
+    assert [r.getMessage() for r in caplog.records if r.msg.startswith("Checked")] == lines
 
 
 def test_check_access_signs_in_directly_where_the_partner_sign_in_fails(

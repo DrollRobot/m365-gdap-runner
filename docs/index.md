@@ -151,7 +151,8 @@ with no GDAP relationship, a tenant in another cloud (the partner sign-in reache
 cloud only), and a GDAP tenant where consent is missing or a policy wants a fresh sign-in.
 
 Before the first `run()`, every selected tenant in the partner's cloud is checked silently
-through the partner sign-in. Each tenant that fails that check, and each tenant in another
+through the partner sign-in; every 30 seconds, a log line says how many are done and about how
+long the rest will take. Each tenant that fails that check, and each tenant in another
 cloud, then gets a sign-in of its own, in its own cloud, as the account in its
 `m365_username` cell. That is one sign-in per client in `CLIENTS`, one tenant at a
 time, all before the loop starts, so `--jobs` runs never prompt. With `--cache disk`, later

@@ -26,7 +26,8 @@ from __future__ import annotations
 import logging
 import sys
 from collections.abc import Iterable, Sequence
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from time import monotonic
 from typing import Literal, cast
 
 import azure_auth
@@ -49,6 +50,9 @@ CACHE_KINDS = ("memory", "disk")
 
 SIGN_IN_KINDS = ("browser", "broker")
 
+# Seconds between progress lines while check_access() checks tenants.
+_PROGRESS_EVERY = 30.0
+
 
 def _use_broker(sign_in: str) -> bool:
     """Decide whether sign-ins go through the Windows broker.
@@ -66,6 +70,20 @@ def _use_broker(sign_in: str) -> bool:
         logger.debug("sign_in is broker, which is Windows only; signing in through the browser")
         return False
     return True
+
+
+def _time_left(seconds: float) -> str:
+    """Say roughly how long the rest of the access check will take.
+
+    Args:
+        seconds: The estimate.
+
+    Returns:
+        ``about N min left``, or ``under a minute left``.
+    """
+    if seconds < 60:
+        return "under a minute left"
+    return f"about {round(seconds / 60)} min left"
 
 
 def _partner_tenant(name: str, cloud: Cloud) -> azure_auth.Tenant:
@@ -230,7 +248,9 @@ class PartnerSession:
         and a tenant in another cloud, then get a direct sign-in: a context of their own, in
         their own cloud, as their ``username``, signed in once per client. One with no
         ``username`` gets none, and no prompt. A sign-in window opens only where no cached
-        sign-in will do. Direct sign-ins run one at a time, on this thread.
+        sign-in will do. Direct sign-ins run one at a time, on this thread. While the silent
+        checks run, a log line every 30 seconds says how many are done and about how long the
+        rest will take.
 
         :meth:`context_for` then hands out what was found, and raises the reason for a tenant
         that could not be reached.
@@ -246,16 +266,29 @@ class PartnerSession:
         partner_cloud = self.cloud_name.lower()
         nearby = [t for t in tenants if (t.cloud or self.cloud_name).lower() == partner_cloud]
         logger.info("Checking access to %d tenant(s)", len(tenants))
+        checked: dict[str, AuthContext | Exception] = {}
+        started = last = monotonic()
         with ThreadPoolExecutor(
             max_workers=max(1, min(jobs, len(nearby))), thread_name_prefix="check"
         ) as pool:
-            checked = dict(
-                zip(
-                    (t.tenant_id.lower() for t in nearby),
-                    pool.map(lambda t: self._through_partner(t, scopes, clients), nearby),
-                    strict=True,
-                )
-            )
+            futures = {
+                pool.submit(self._through_partner, t, scopes, clients): t.tenant_id.lower()
+                for t in nearby
+            }
+            try:
+                for done, future in enumerate(as_completed(futures), start=1):
+                    checked[futures[future]] = future.result()
+                    now = monotonic()
+                    if done < len(nearby) and now - last >= _PROGRESS_EVERY:
+                        last = now
+                        left = (now - started) / done * (len(nearby) - done)
+                        logger.info(
+                            "Checked %d of %d tenant(s), %s", done, len(nearby), _time_left(left)
+                        )
+            finally:
+                # On Ctrl+C, the checks not yet started never start.
+                for future in futures:
+                    future.cancel()
         for tenant in tenants:
             key = tenant.tenant_id.lower()
             route = checked.get(key)
