@@ -653,13 +653,13 @@ def test_tenants_file_setting_locates_the_file(
     assert not (tmp_path / "config" / "tenants.csv").exists()
 
 
-def _gamma_csv(tmp_path: Path, cloud: str = "Commercial") -> Path:
+def _gamma_csv(tmp_path: Path, cloud: str = "Commercial", username: str = GAMMA_ADMIN) -> Path:
     """A tenants file whose pilot group holds Alpha and Gamma, which has no GDAP relationship."""
     return _tenants_csv(
         tmp_path / "tenants.csv",
         "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,pilot",
         f"{TENANT_A},Alpha,,Commercial,,TRUE",
-        f"{TENANT_C},Gamma,,{cloud},{GAMMA_ADMIN},TRUE",
+        f"{TENANT_C},Gamma,,{cloud},{username},TRUE",
     )
 
 
@@ -715,13 +715,34 @@ def test_a_tenant_in_another_cloud_is_signed_in_to_there(
 @pytest.mark.integration
 @pytest.mark.acceptance
 def test_a_gdap_tenant_missing_consent_gets_a_sign_in_of_its_own(
-    fake_msal: FakeMsal, recorder: ModuleType
+    fake_msal: FakeMsal, tmp_path: Path, recorder: ModuleType
 ) -> None:
     fake_msal.tenant_errors[TENANT_B] = CONSENT_REQUIRED
-    assert _main(recorder, "--all") == 0
+    path = _tenants_csv(
+        tmp_path / "tenants.csv",
+        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username",
+        f"{TENANT_B},beta corp,,Commercial,admin@beta.example",
+    )
+    assert _main(recorder, "--all", "--tenants-file", str(path)) == 0
     assert [r.status for r in _reported(recorder)] == ["ok", "ok"]
-    # The browser opens at beta corp itself, as the partner account, where consent is given.
+    # The browser opens at beta corp itself, as its own account, where consent is given.
     assert fake_msal.interactive_tenants() == [PARTNER_TENANT, TENANT_B]
+
+
+@pytest.mark.integration
+@pytest.mark.regression
+def test_a_blank_username_fails_the_tenant_without_a_sign_in_as_the_partner_account(
+    fake_msal: FakeMsal, tmp_path: Path, recorder: ModuleType
+) -> None:
+    fake_msal.tenant_errors[TENANT_C] = NOT_IN_TENANT  # the partner account is not in Gamma
+    path = _gamma_csv(tmp_path, username="")
+    assert _main(recorder, "--group", "pilot", "--tenants-file", str(path)) == 1
+    alpha, gamma = _reported(recorder)
+    assert (alpha.status, gamma.status) == ("ok", "auth_failed")
+    assert gamma.error is not None
+    assert "AADSTS50020" in gamma.error
+    assert "No direct sign-in to Gamma: its m365_username is blank." in gamma.error
+    assert fake_msal.interactive_tenants() == [PARTNER_TENANT]
 
 
 @pytest.mark.integration

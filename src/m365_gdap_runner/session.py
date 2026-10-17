@@ -7,8 +7,9 @@ they redeem the home sign-in's refresh token in the customer tenant.
 
 A tenant the partner sign-in cannot reach (no GDAP relationship, missing consent, a policy
 that wants a fresh sign-in, or another Microsoft cloud) gets a direct sign-in instead: a
-context of its own, in its own cloud, as the tenant's own account. All of that happens in
-:meth:`PartnerSession.check_access`, before the loop, so the loop never opens a browser.
+context of its own, in its own cloud, as the tenant's own account. A tenant with no account
+of its own gets none. All of that happens in :meth:`PartnerSession.check_access`, before the
+loop, so the loop never opens a browser.
 
 Why sign in per client: Microsoft's first-party apps differ per resource (Graph PowerShell,
 Exchange Online PowerShell, Azure PowerShell) and a refresh token belongs to one app, so a
@@ -195,9 +196,9 @@ class PartnerSession:
         and the way the run will use it: every client the script uses must get a token
         (:meth:`TenantContext.probe`). A tenant that fails that check, for whatever reason,
         and a tenant in another cloud, then get a direct sign-in: a context of their own, in
-        their own cloud, as their ``username`` or else the partner account, signed in once per
-        client. The browser opens only where no cached sign-in will do. Direct sign-ins run
-        one at a time, on this thread.
+        their own cloud, as their ``username``, signed in once per client. One with no
+        ``username`` gets none, and no prompt. The browser opens only where no cached sign-in
+        will do. Direct sign-ins run one at a time, on this thread.
 
         :meth:`context_for` then hands out what was found, and raises the reason for a tenant
         that could not be reached.
@@ -241,9 +242,19 @@ class PartnerSession:
                 logger.warning("Skipping %s: %s", tenant.display_name, why)
                 self._routes[key] = route
                 continue
-            username = tenant.username or self._settings.username
-            logger.info("Signing in to %s directly as %s: %s", tenant.display_name, username, why)
-            self._routes[key] = self._sign_in_directly(tenant, username, scopes, clients)
+            if not tenant.username:
+                logger.warning(
+                    "Skipping %s: %s, and its m365_username is blank", tenant.display_name, why
+                )
+                self._routes[key] = AuthError(
+                    f"{route} No direct sign-in to {tenant.display_name}: its m365_username is "
+                    "blank."
+                )
+                continue
+            logger.info(
+                "Signing in to %s directly as %s: %s", tenant.display_name, tenant.username, why
+            )
+            self._routes[key] = self._sign_in_directly(tenant, scopes, clients)
 
     def _through_partner(
         self, tenant: Tenant, scopes: Sequence[str], clients: Sequence[str]
@@ -270,13 +281,12 @@ class PartnerSession:
         return auth
 
     def _sign_in_directly(
-        self, tenant: Tenant, username: str, scopes: Sequence[str], clients: Sequence[str]
+        self, tenant: Tenant, scopes: Sequence[str], clients: Sequence[str]
     ) -> AuthContext | Exception:
-        """Sign in to a tenant on its own, once per client the script uses.
+        """Sign in to a tenant on its own, as its own account, once per client the script uses.
 
         Args:
-            tenant: The tenant, with its cloud filled in.
-            username: The account to sign in as.
+            tenant: The tenant, with its cloud and username filled in.
             scopes: The script's Graph scopes.
             clients: The script's ``CLIENTS``.
 
@@ -287,7 +297,7 @@ class PartnerSession:
             cloud = get_cloud(tenant.cloud or self.cloud_name)
             auth = AuthContext(
                 azure_auth.Tenant(tenant.tenant_id, cloud),
-                username=username,
+                username=tenant.username,
                 client_id=self._settings.client_id or None,
                 cache=cast(Literal["memory", "disk"], self._settings.cache),
             )
@@ -295,7 +305,9 @@ class PartnerSession:
                 with build_client(kind, auth, scopes=scopes, transport=self._transport) as client:
                     client.login()
         except Exception as exc:
-            logger.warning("Could not sign in to %s as %s: %s", tenant.display_name, username, exc)
+            logger.warning(
+                "Could not sign in to %s as %s: %s", tenant.display_name, tenant.username, exc
+            )
             return exc
         return auth
 

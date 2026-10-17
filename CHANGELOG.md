@@ -39,9 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tenants.csv` in the config directory).
 - Tenants the partner sign-in cannot reach: before the first `run()`, every selected tenant
   is checked silently through the partner sign-in, and each one that fails, or lives in
-  another cloud, gets a sign-in of its own, in its own cloud, as its `m365_username` (the
-  partner account when blank), one client at a time, so the loop never prompts.
-  `--gdap-only` leaves those tenants `auth_failed` instead.
+  another cloud, gets a sign-in of its own, in its own cloud, as its `m365_username`, one
+  client at a time, so the loop never prompts. Where `m365_username` is blank, or under
+  `--gdap-only`, those tenants are left `auth_failed` instead.
 - Example scripts, each with the header `uv run` builds its environment from:
   `examples/licensed_users.py` (Graph; its `report()` prints every tenant's users as JSON),
   `examples/audit_disabled.py` (Exchange Online; no `report()`, its log is the report),

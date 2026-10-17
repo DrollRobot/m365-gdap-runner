@@ -439,7 +439,7 @@ def test_details_take_the_cloud_and_username_from_the_row(tmp_path: Path) -> Non
     assert tenant_file.details(GAMMA, default_cloud="Commercial") == Tenant(
         TENANT_C, "Gamma", "USGov", "admin@gamma.example"
     )
-    # A blank cloud, or no row at all, is the partner's cloud and the partner account.
+    # A blank cloud, or no row at all, is the partner's cloud, and no username.
     assert tenant_file.details(ALPHA, default_cloud="Commercial") == Tenant(
         TENANT_A, "Alpha", "Commercial"
     )

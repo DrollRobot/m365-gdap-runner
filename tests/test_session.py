@@ -21,7 +21,6 @@ from tests._gdap_fakes import (
     TENANT_A,
     TENANT_B,
     TENANT_C,
-    USER,
     FakeMsal,
     bearer_tenant,
     customers_body,
@@ -190,6 +189,7 @@ def test_cloud_of_is_blank_when_discovery_fails(
 ALPHA = Tenant(TENANT_A, "Alpha", "Commercial")
 BETA = Tenant(TENANT_B, "beta corp", "Commercial")
 GAMMA_GOV = Tenant(TENANT_C, "Gamma", "USGov", GAMMA_ADMIN)
+BETA_ADMIN = "admin@beta.example"
 
 
 def _signed_in(clients: list[str]) -> PartnerSession:
@@ -215,13 +215,31 @@ def test_check_access_signs_in_directly_where_the_partner_sign_in_fails(
     fake_msal: FakeMsal,
 ) -> None:
     fake_msal.tenant_errors[TENANT_B] = CONSENT_REQUIRED
+    beta_with_admin = Tenant(TENANT_B, "beta corp", "Commercial", BETA_ADMIN)
     session = _signed_in(["graph"])
-    session.check_access([ALPHA, BETA], scopes=["User.Read.All"])
-    with session.context_for(BETA, scopes=["User.Read.All"]) as beta:
+    session.check_access([ALPHA, beta_with_admin], scopes=["User.Read.All"])
+    with session.context_for(beta_with_admin, scopes=["User.Read.All"]) as beta:
         assert not beta.auth.is_sibling
-        assert (beta.auth.tenant.id, beta.auth.username) == (TENANT_B, USER)
+        assert (beta.auth.tenant.id, beta.auth.username) == (TENANT_B, BETA_ADMIN)
         assert bearer_tenant(beta.graph.request("GET", "/users").request) == TENANT_B
     assert fake_msal.interactive_tenants() == [PARTNER_TENANT, TENANT_B]
+
+
+@pytest.mark.regression
+@pytest.mark.parametrize(
+    ("tenant", "reason"),
+    [(BETA, "AADSTS65001"), (Tenant(TENANT_C, "Gamma", "USGov"), "Gamma is in the USGov cloud")],
+)
+def test_check_access_never_signs_in_directly_as_the_partner_account(
+    fake_msal: FakeMsal, tenant: Tenant, reason: str
+) -> None:
+    fake_msal.tenant_errors[TENANT_B] = CONSENT_REQUIRED
+    session = _signed_in(["graph"])
+    session.check_access([tenant], scopes=["User.Read.All"])
+    with pytest.raises(AuthError, match="m365_username is blank") as info:
+        session.context_for(tenant, scopes=["User.Read.All"])
+    assert reason in str(info.value)
+    assert fake_msal.interactive_tenants() == [PARTNER_TENANT]
 
 
 def test_check_access_signs_in_to_another_cloud_once_per_client_as_its_account(

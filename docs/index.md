@@ -149,10 +149,13 @@ cloud only), and a GDAP tenant where consent is missing or a policy wants a fres
 Before the first `run()`, every selected tenant in the partner's cloud is checked silently
 through the partner sign-in. Each tenant that fails that check, and each tenant in another
 cloud, then gets a sign-in of its own, in its own cloud, as the account in its
-`m365_username` cell, or the partner account when the cell is blank. That is one browser
-sign-in per client in `CLIENTS`, one tenant at a time, all before the loop starts, so
-`--jobs` runs never prompt. With `--cache disk` and an `m365_username`, later runs are silent.
-A sign-in that fails or is cancelled leaves that tenant `auth_failed`; the rest run.
+`m365_username` cell. That is one browser sign-in per client in `CLIENTS`, one tenant at a
+time, all before the loop starts, so `--jobs` runs never prompt. With `--cache disk`, later
+runs are silent. A sign-in that fails or is cancelled leaves that tenant `auth_failed`; the
+rest run.
+
+A tenant whose `m365_username` cell is blank gets no sign-in of its own: it is `auth_failed`,
+with the reason, and no browser opens for it.
 
 `--gdap-only` turns this off, for unattended runs: a tenant the partner sign-in cannot reach
 is `auth_failed`, with the reason, and no browser opens for it.

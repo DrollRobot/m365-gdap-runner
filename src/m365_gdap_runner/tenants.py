@@ -15,8 +15,8 @@ Tenants are matched by ID only; the name and domain columns are for the person e
 file. A column the file lacks is added, a GDAP tenant with no row is appended, and a blank
 cloud is filled in by OpenID Connect discovery (:meth:`TenantFile.sync`). A row whose tenant
 has no GDAP relationship, or lives in another Microsoft cloud, can still be selected: the
-runner signs in to it directly, as the account in ``m365_username`` (the partner account when
-blank).
+runner signs in to it directly, as the account in ``m365_username``. A blank cell means no
+direct sign-in.
 """
 
 from __future__ import annotations
@@ -71,7 +71,7 @@ class Tenant:
         cloud: The cloud it lives in, as azure-auth spells it. Filled in for a tenant a run
             selects; empty for one only listed.
         username: The account to sign in with when the partner sign-in cannot reach it; empty
-            for the partner account.
+            for no direct sign-in.
     """
 
     tenant_id: str
