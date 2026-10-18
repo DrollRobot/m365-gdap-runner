@@ -113,9 +113,9 @@ def _tenant_ids(script: ModuleType) -> list[str]:
 
 @pytest.mark.unit
 def test_add_arguments_defaults() -> None:
-    args = _args("--all")
+    args = _args("--include", "all")
     assert (args.jobs, args.continue_on_error) == (1, None)
-    assert (args.tenant, args.group, args.exclude, args.all) == (None, None, None, True)
+    assert (args.include, args.exclude) == (["all"], None)
     assert (args.partner_tenant_id, args.username, args.client_id, args.cache, args.cloud) == (
         None,
         None,
@@ -140,7 +140,7 @@ def test_add_arguments_defaults() -> None:
 )
 def test_the_parser_refuses_bad_values(argv: list[str]) -> None:
     with pytest.raises(SystemExit) as info:
-        _args("--all", *argv)
+        _args("--include", "all", *argv)
     assert info.value.code == 2
 
 
@@ -148,7 +148,7 @@ def test_the_parser_refuses_bad_values(argv: list[str]) -> None:
 def test_the_parser_main_builds_is_described_by_the_scripts_docstring() -> None:
     parser = cli._parser(LICENSED_USERS)
     assert parser.description == "Example script: licensed users in each tenant."
-    assert "--group" in parser.format_help()
+    assert "--include" in parser.format_help()
 
 
 @pytest.mark.unit
@@ -157,7 +157,7 @@ def test_main_returns_130_on_interrupt(monkeypatch: pytest.MonkeyPatch) -> None:
         raise KeyboardInterrupt
 
     monkeypatch.setattr(cli, "_run", interrupted)
-    assert cli.main(LICENSED_USERS, _args("--all")) == 130
+    assert cli.main(LICENSED_USERS, _args("--include", "all")) == 130
 
 
 @contextlib.contextmanager
@@ -226,7 +226,8 @@ def test_settings_flags_override_config() -> None:
         "USGov",
         "--tenants-file",
         "C:/msp/tenants.csv",
-        "--all",
+        "--include",
+        "all",
     )
     settings = cli.settings_from_args(args)
     assert (
@@ -256,7 +257,7 @@ def test_settings_flags_override_config() -> None:
 def test_main_reads_the_command_line_when_the_script_brings_no_parser(
     fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, recorder: ModuleType
 ) -> None:
-    monkeypatch.setattr(sys, "argv", ["script.py", "--tenant", "Alpha"])
+    monkeypatch.setattr(sys, "argv", ["script.py", "--include", "Alpha"])
     assert cli.main(recorder, transport=httpx.MockTransport(fake_services)) == 0
     assert _tenant_ids(recorder) == [TENANT_A]
 
@@ -266,7 +267,12 @@ def test_main_finds_the_script_by_module_name(
     fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, recorder: ModuleType
 ) -> None:
     monkeypatch.setitem(sys.modules, "__main__", recorder)
-    assert cli.main("__main__", _args("--all"), transport=httpx.MockTransport(fake_services)) == 0
+    assert (
+        cli.main(
+            "__main__", _args("--include", "all"), transport=httpx.MockTransport(fake_services)
+        )
+        == 0
+    )
     assert _tenant_ids(recorder) == [TENANT_A, TENANT_B]
 
 
@@ -291,9 +297,9 @@ def test_a_script_adds_flags_of_its_own(fake_msal: FakeMsal, tmp_path: Path) -> 
     parser.add_argument("--label", default="none")
     cli.add_arguments(parser)
     assert "--label" in parser.format_help()
-    assert "--group" in parser.format_help()
+    assert "--include" in parser.format_help()
 
-    args = parser.parse_args(["--label", "weekly", "--tenant", "Alpha"])
+    args = parser.parse_args(["--label", "weekly", "--include", "Alpha"])
     script.__dict__["LABEL"] = args.label  # what the script's __main__ block does with it
     assert cli.main(script, args, transport=httpx.MockTransport(fake_services)) == 0
     assert [result.result for result in _reported(script)] == [{"label": "weekly"}]
@@ -305,17 +311,17 @@ def test_main_requires_a_tenant_selection(
     fake_msal: FakeMsal, caplog: pytest.LogCaptureFixture
 ) -> None:
     assert _main(LICENSED_USERS) == 2
-    assert "Choose tenants with --group, --tenant or --all." in caplog.text
+    assert "Choose tenants with --include: a tenant, a group, or all." in caplog.text
     assert fake_msal.interactive_calls == 0
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("other", [["--tenant", "Alpha"], ["--group", "pilot"]])
-def test_main_refuses_all_with_a_narrower_selection(
-    fake_msal: FakeMsal, caplog: pytest.LogCaptureFixture, other: list[str]
+def test_main_refuses_exclude_all_before_sign_in(
+    fake_msal: FakeMsal, caplog: pytest.LogCaptureFixture
 ) -> None:
-    assert _main(LICENSED_USERS, "--all", *other) == 2
-    assert "--all cannot be combined with --tenant or --group." in caplog.text
+    assert _main(LICENSED_USERS, "--include", "Alpha", "--exclude", " ALL ") == 2
+    assert "--exclude all would leave no tenant to run." in caplog.text
+    assert fake_msal.interactive_calls == 0
 
 
 # --- report() --------------------------------------------------------------------------
@@ -327,7 +333,7 @@ def test_report_gets_every_tenant_in_order_failures_included(
     fake_msal: FakeMsal, recorder: ModuleType, capsys: pytest.CaptureFixture[str]
 ) -> None:
     fake_msal.tenant_errors[TENANT_B] = CONSENT_REQUIRED
-    assert _main(recorder, "--all", "--gdap-only") == 1
+    assert _main(recorder, "--include", "all") == 1
     (alpha, beta) = _reported(recorder)
     assert (alpha.tenant.tenant_id, alpha.status, alpha.result) == (
         TENANT_A,
@@ -347,7 +353,7 @@ def test_a_script_without_report_runs_and_writes_nothing(
     fake_msal: FakeMsal, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     script = _script(tmp_path, 'SCOPES = ["User.Read.All"]\n\ndef run(ctx):\n    return 1\n')
-    assert _main(script, "--all") == 0
+    assert _main(script, "--include", "all") == 0
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "Summary: ok=2, auth_failed=0, error=0, skipped=0" in captured.err
@@ -374,7 +380,7 @@ def test_exit_2_when_report_fails(
         """,
         name="audit",
     )
-    assert _main(script, "--all") == 2
+    assert _main(script, "--include", "all") == 2
     assert "audit's report() failed" in caplog.text
     assert "RuntimeError: disk full" in caplog.text
     assert "Summary: ok=2, auth_failed=0, error=0, skipped=0" in capsys.readouterr().err
@@ -400,7 +406,7 @@ def test_interrupt_skips_report(
             REPORTED.append(results)
         """,
     )
-    assert _main(script, "--all") == 130
+    assert _main(script, "--include", "all") == 130
     assert script.__dict__["REPORTED"] == []
     assert "Summary: ok=1, auth_failed=0, error=1, skipped=0" in capsys.readouterr().err
 
@@ -412,7 +418,7 @@ def test_interrupt_skips_report(
 def test_runs_the_graph_example_and_its_report(
     fake_msal: FakeMsal, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    assert _main(LICENSED_USERS, "--all", "--jobs", "2") == 0
+    assert _main(LICENSED_USERS, "--include", "all", "--jobs", "2") == 0
     rows = json.loads(capsys.readouterr().out)
     assert [(r["tenantId"], r["tenant"], r["status"]) for r in rows] == [
         (TENANT_A, "Alpha", "ok"),
@@ -433,7 +439,7 @@ def test_runs_the_exchange_example_whose_log_is_the_report(
     fake_msal: FakeMsal, capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.INFO)
-    assert _main(AUDIT_DISABLED, "--all") == 0
+    assert _main(AUDIT_DISABLED, "--include", "all") == 0
     assert capsys.readouterr().out == ""
     warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
     assert warnings == ["Mailbox auditing is off tenant-wide (AuditDisabled is True)"]
@@ -442,7 +448,7 @@ def test_runs_the_exchange_example_whose_log_is_the_report(
 
 @pytest.mark.integration
 def test_tenant_filters(fake_msal: FakeMsal, recorder: ModuleType) -> None:
-    assert _main(recorder, "--all", "--exclude", "BETA CORP") == 0
+    assert _main(recorder, "--include", "all", "--exclude", "BETA CORP") == 0
     assert _tenant_ids(recorder) == [TENANT_A]
 
 
@@ -454,7 +460,7 @@ def test_exit_2_on_unknown_tenant_before_running_the_script(fake_msal: FakeMsal)
         seen.append(request.url.path)
         return fake_services(request)
 
-    assert _main(LICENSED_USERS, "--tenant", "Contoso", handler=handler) == 2
+    assert _main(LICENSED_USERS, "--include", "Contoso", handler=handler) == 2
     assert "/v1.0/users" not in seen
 
 
@@ -463,7 +469,7 @@ def test_exit_2_on_invalid_script_before_sign_in(
     fake_msal: FakeMsal, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     script = _script(tmp_path, "def run(ctx):\n    return None\n")
-    assert _main(script, "--all") == 2
+    assert _main(script, "--include", "all") == 2
     assert "Script 'script' must define SCOPES" in caplog.text
     assert fake_msal.interactive_calls == 0
 
@@ -473,14 +479,14 @@ def test_exit_2_on_missing_config(
     fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     monkeypatch.delenv(ENV_PREFIX + "USERNAME")
-    assert _main(LICENSED_USERS, "--all") == 2
+    assert _main(LICENSED_USERS, "--include", "all") == 2
     assert "username" in caplog.text
 
 
 @pytest.mark.integration
 def test_exit_2_on_failed_sign_in(fake_msal: FakeMsal) -> None:
     fake_msal.interactive_result = {"error": "access_denied", "error_description": "cancelled"}
-    assert _main(LICENSED_USERS, "--all") == 2
+    assert _main(LICENSED_USERS, "--include", "all") == 2
 
 
 # A script whose run() fails in Alpha, the first tenant, and works in beta corp.
@@ -515,7 +521,7 @@ def test_an_error_in_run_stops_the_run_unless_the_script_or_a_flag_says_go_on(
     fake_msal: FakeMsal, tmp_path: Path, setting: str, flags: list[str], beta: str
 ) -> None:
     script = _script(tmp_path, FAILS_IN_ALPHA + "\n    " + setting + "\n")
-    assert _main(script, "--all", *flags) == 1
+    assert _main(script, "--include", "all", *flags) == 1
     assert [r.status for r in _reported(script)] == ["error", beta]
 
 
@@ -534,7 +540,7 @@ def test_undeclared_client_is_a_tenant_error(fake_msal: FakeMsal, tmp_path: Path
             REPORTED.append(results)
         """,
     )
-    assert _main(script, "--tenant", "Alpha") == 1
+    assert _main(script, "--include", "Alpha") == 1
     (result,) = _reported(script)
     assert result.status == "error"
     assert result.error is not None
@@ -557,9 +563,9 @@ def test_list_tenants_creates_the_tenants_file_and_prints_the_tenants(
     assert capsys.readouterr().out.splitlines() == [f"{TENANT_A}\tAlpha", f"{TENANT_B}\tbeta corp"]
     path = tmp_path / "config" / "tenants.csv"
     assert path.read_text(encoding="utf-8-sig").splitlines() == [
-        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,m365_gdap_access",
-        f"{TENANT_A},Alpha,,Commercial,,",
-        f"{TENANT_B},beta corp,,Commercial,,",
+        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,m365_gdap",
+        f"{TENANT_A},Alpha,,Commercial,,TRUE",
+        f"{TENANT_B},beta corp,,Commercial,,TRUE",
     ]
     assert f"Created tenants file {path} with 2 tenant(s)" in caplog.text
     assert fake_msal.interactive_calls == 1
@@ -654,9 +660,9 @@ def test_debug_log_file(tmp_path: Path, setting: str, expected: str) -> None:
 @pytest.mark.unit
 def test_list_tenants_takes_no_selection_flags(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as info:
-        cli.list_tenants(["--all"])
+        cli.list_tenants(["--include", "all"])
     assert info.value.code == 2
-    assert "unrecognized arguments: --all" in capsys.readouterr().err
+    assert "unrecognized arguments: --include all" in capsys.readouterr().err
 
 
 # --- tenants file ----------------------------------------------------------------------
@@ -678,12 +684,13 @@ def test_run_appends_tenants_the_file_lacks_and_warns(
         "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,pilot,notes",
         f"{TENANT_A},Alpha,alpha.example,Commercial,,TRUE,keep me",
     )
-    assert _main(LICENSED_USERS, "--tenant", "Alpha", "--tenants-file", str(path)) == 0
+    assert _main(LICENSED_USERS, "--include", "Alpha", "--tenants-file", str(path)) == 0
+    # m365_gdap is new to the file, so it is TRUE for every GDAP tenant.
     assert path.read_text(encoding="utf-8-sig").splitlines() == [
-        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,m365_gdap_access,"
+        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,m365_gdap,"
         "pilot,notes",
-        f"{TENANT_A},Alpha,alpha.example,Commercial,,,TRUE,keep me",
-        f"{TENANT_B},beta corp,,Commercial,,,,",
+        f"{TENANT_A},Alpha,alpha.example,Commercial,,TRUE,TRUE,keep me",
+        f"{TENANT_B},beta corp,,Commercial,,TRUE,,",
     ]
     assert f"Added 1 tenant(s) to {path}; they are in no group yet: beta corp" in caplog.text
 
@@ -700,7 +707,7 @@ def test_group_runs_only_the_marked_tenants(
         f"{TENANT_B},beta corp,,Commercial,TRUE",
         f"{TENANT_C},Gamma,,,FALSE",  # no GDAP relationship: harmless while unselected
     )
-    assert _main(recorder, "--group", "pilot", "--tenants-file", str(path)) == 0
+    assert _main(recorder, "--include", "pilot", "--tenants-file", str(path)) == 0
     assert _tenant_ids(recorder) == [TENANT_B]
 
 
@@ -715,11 +722,11 @@ def test_groups_and_tenants_add_up_and_exclude_applies(
         f"{TENANT_B},beta corp,,Commercial,FALSE,TRUE",
     )
     file_flag = ["--tenants-file", str(path)]
-    assert _main(recorder, "--group", "pilot", "--group", "PATCHING", *file_flag) == 0
+    assert _main(recorder, "--include", "pilot", "--include", "PATCHING", *file_flag) == 0
     assert _tenant_ids(recorder) == [TENANT_A, TENANT_B]
-    assert _main(recorder, "--group", "pilot", "--tenant", "beta corp", *file_flag) == 0
+    assert _main(recorder, "--include", "pilot", "--include", "beta corp", *file_flag) == 0
     assert _tenant_ids(recorder) == [TENANT_A, TENANT_B]
-    assert _main(recorder, "--group", "pilot", "--exclude", "Alpha", *file_flag) == 0
+    assert _main(recorder, "--include", "pilot", "--exclude", "Alpha", *file_flag) == 0
     assert _tenant_ids(recorder) == []
 
 
@@ -733,21 +740,20 @@ def test_tenants_file_setting_locates_the_file(
         f"{TENANT_A},Alpha,,Commercial,TRUE",
     )
     monkeypatch.setenv(ENV_PREFIX + "TENANTS_FILE", str(path))
-    assert _main(recorder, "--group", "pilot") == 0
+    assert _main(recorder, "--include", "pilot") == 0
     assert _tenant_ids(recorder) == [TENANT_A]
     assert not (tmp_path / "config" / "tenants.csv").exists()
 
 
 def _gamma_csv(
-    tmp_path: Path, cloud: str = "Commercial", username: str = GAMMA_ADMIN, gdap_access: str = ""
+    tmp_path: Path, cloud: str = "Commercial", username: str = GAMMA_ADMIN, gdap: str = ""
 ) -> Path:
     """A tenants file whose pilot group holds Alpha and Gamma, which has no GDAP relationship."""
     return _tenants_csv(
         tmp_path / "tenants.csv",
-        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,m365_gdap_access,"
-        "pilot",
-        f"{TENANT_A},Alpha,,Commercial,,,TRUE",
-        f"{TENANT_C},Gamma,,{cloud},{username},{gdap_access},TRUE",
+        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,m365_gdap,pilot",
+        f"{TENANT_A},Alpha,,Commercial,,TRUE,TRUE",
+        f"{TENANT_C},Gamma,,{cloud},{username},{gdap},TRUE",
     )
 
 
@@ -757,7 +763,6 @@ def test_a_group_member_without_gdap_gets_a_sign_in_of_its_own(
     fake_msal: FakeMsal, tmp_path: Path, recorder: ModuleType, caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.INFO, logger="m365_gdap_runner.session")
-    fake_msal.tenant_errors[TENANT_C] = NOT_IN_TENANT  # the partner account is not in Gamma
     seen: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -765,15 +770,18 @@ def test_a_group_member_without_gdap_gets_a_sign_in_of_its_own(
         return fake_services(request)
 
     path = _gamma_csv(tmp_path)
-    assert _main(recorder, "--group", "pilot", "--tenants-file", str(path), handler=handler) == 0
+    assert _main(recorder, "--include", "pilot", "--tenants-file", str(path), handler=handler) == 0
     assert [(r.tenant.tenant_id, r.status) for r in _reported(recorder)] == [
         (TENANT_A, "ok"),
         (TENANT_C, "ok"),
     ]
     # One browser sign-in for the partner, one for Gamma as its own account; none for Alpha.
     assert fake_msal.interactive_tenants() == [PARTNER_TENANT, TENANT_C]
-    assert f"Signing in to Gamma directly as {GAMMA_ADMIN}" in caplog.text
-    assert "AADSTS50020" in caplog.text
+    # Gamma's blank m365_gdap means the partner sign-in is never tried there.
+    assert fake_msal.silent_calls(TENANT_C) == []
+    assert f"Signing in to Gamma directly as {GAMMA_ADMIN}: its m365_gdap is not TRUE" in (
+        caplog.text
+    )
     users = [bearer_tenant(r) for r in seen if r.url.path == "/v1.0/users"]
     assert sorted(users) == [TENANT_A, TENANT_C]
 
@@ -790,7 +798,7 @@ def test_a_tenant_in_another_cloud_is_signed_in_to_there(
         return fake_services(request)
 
     path = _gamma_csv(tmp_path, cloud="USGov")
-    assert _main(recorder, "--tenant", "Gamma", "--tenants-file", str(path), handler=handler) == 0
+    assert _main(recorder, "--include", "Gamma", "--tenants-file", str(path), handler=handler) == 0
     (gamma,) = _reported(recorder)
     assert (gamma.tenant.tenant_id, gamma.tenant.cloud, gamma.status) == (TENANT_C, "USGov", "ok")
     # Straight to the US Government sign-in: the commercial partner sign-in was never tried.
@@ -811,7 +819,7 @@ def test_a_gdap_tenant_missing_consent_gets_a_sign_in_of_its_own(
         "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username",
         f"{TENANT_B},beta corp,,Commercial,admin@beta.example",
     )
-    assert _main(recorder, "--all", "--tenants-file", str(path)) == 0
+    assert _main(recorder, "--include", "all", "--tenants-file", str(path)) == 0
     assert [r.status for r in _reported(recorder)] == ["ok", "ok"]
     # The browser opens at beta corp itself, as its own account, where consent is given.
     assert fake_msal.interactive_tenants() == [PARTNER_TENANT, TENANT_B]
@@ -819,17 +827,17 @@ def test_a_gdap_tenant_missing_consent_gets_a_sign_in_of_its_own(
 
 @pytest.mark.integration
 @pytest.mark.acceptance
-def test_a_gdap_tenant_without_gdap_access_skips_the_partner_sign_in(
+def test_a_gdap_tenant_marked_false_in_m365_gdap_skips_the_partner_sign_in(
     fake_msal: FakeMsal, tmp_path: Path, recorder: ModuleType
 ) -> None:
     row = f"{TENANT_B},beta corp,,Commercial,admin@beta.example,FALSE"
     path = _tenants_csv(
         tmp_path / "tenants.csv",
-        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,m365_gdap_access",
+        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,m365_gdap",
         row,
     )
-    assert _main(recorder, "--all", "--tenants-file", str(path)) == 0
-    # beta corp is still a GDAP tenant, so --all runs it, but only as its own account.
+    assert _main(recorder, "--include", "all", "--tenants-file", str(path)) == 0
+    # beta corp is still a GDAP tenant, so all runs it, but only as its own account.
     assert [(r.tenant.tenant_id, r.status) for r in _reported(recorder)] == [
         (TENANT_A, "ok"),
         (TENANT_B, "ok"),
@@ -841,19 +849,19 @@ def test_a_gdap_tenant_without_gdap_access_skips_the_partner_sign_in(
 
 @pytest.mark.integration
 @pytest.mark.acceptance
-def test_a_tenant_with_no_gdap_access_and_no_username_is_left_out_with_a_warning(
+def test_a_tenant_with_no_gdap_and_no_username_is_left_out_with_a_warning(
     fake_msal: FakeMsal, tmp_path: Path, recorder: ModuleType, caplog: pytest.LogCaptureFixture
 ) -> None:
     # How a customer with no access at all, that Partner Center still lists, is marked.
     path = _tenants_csv(
         tmp_path / "tenants.csv",
-        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,m365_gdap_access",
+        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,m365_gdap",
         f"{TENANT_B},beta corp,,Commercial,,FALSE",
     )
-    assert _main(recorder, "--all", "--tenants-file", str(path)) == 0
+    assert _main(recorder, "--include", "all", "--tenants-file", str(path)) == 0
     assert [(r.tenant.tenant_id, r.status) for r in _reported(recorder)] == [(TENANT_A, "ok")]
     assert (
-        "Skipping 1 tenant(s) with m365_gdap_access FALSE and a blank m365_username: beta corp"
+        "Skipping 1 tenant(s) with neither m365_gdap TRUE nor an m365_username: beta corp"
         in caplog.text
     )
     assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
@@ -867,8 +875,8 @@ def test_a_blank_username_fails_the_tenant_without_a_sign_in_as_the_partner_acco
     fake_msal: FakeMsal, tmp_path: Path, recorder: ModuleType
 ) -> None:
     fake_msal.tenant_errors[TENANT_C] = NOT_IN_TENANT  # the partner account is not in Gamma
-    path = _gamma_csv(tmp_path, username="")
-    assert _main(recorder, "--group", "pilot", "--tenants-file", str(path)) == 1
+    path = _gamma_csv(tmp_path, username="", gdap="TRUE")
+    assert _main(recorder, "--include", "pilot", "--tenants-file", str(path)) == 1
     alpha, gamma = _reported(recorder)
     assert (alpha.status, gamma.status) == ("ok", "auth_failed")
     assert gamma.error is not None
@@ -879,40 +887,36 @@ def test_a_blank_username_fails_the_tenant_without_a_sign_in_as_the_partner_acco
 
 @pytest.mark.integration
 @pytest.mark.acceptance
-@pytest.mark.parametrize(
-    ("cloud", "gdap_access", "reason"),
-    [
-        ("Commercial", "", "AADSTS50020"),
-        ("USGov", "", "Gamma is in the USGov cloud"),
-        ("Commercial", "FALSE", "Gamma's m365_gdap_access is FALSE"),
-    ],
-)
-def test_gdap_only_leaves_unreachable_tenants_failed(
-    fake_msal: FakeMsal,
-    tmp_path: Path,
-    recorder: ModuleType,
-    cloud: str,
-    gdap_access: str,
-    reason: str,
+def test_include_m365_gdap_runs_only_the_tenants_it_marks(
+    fake_msal: FakeMsal, tmp_path: Path, recorder: ModuleType
 ) -> None:
-    fake_msal.tenant_errors[TENANT_C] = NOT_IN_TENANT
-    path = _gamma_csv(tmp_path, cloud=cloud, gdap_access=gdap_access)
-    assert _main(recorder, "--group", "pilot", "--gdap-only", "--tenants-file", str(path)) == 1
-    alpha, gamma = _reported(recorder)
-    assert (alpha.status, gamma.status) == ("ok", "auth_failed")
-    assert gamma.error is not None
-    assert reason in gamma.error
+    # Alpha is TRUE and Gamma blank; beta corp is appended, with TRUE.
+    path = _gamma_csv(tmp_path)
+    assert _main(recorder, "--include", "m365_gdap", "--tenants-file", str(path)) == 0
+    assert _tenant_ids(recorder) == [TENANT_A, TENANT_B]
     assert fake_msal.interactive_tenants() == [PARTNER_TENANT]
+
+
+@pytest.mark.integration
+def test_exit_2_when_a_name_is_both_a_tenant_and_a_group(
+    fake_msal: FakeMsal, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    path = _tenants_csv(
+        tmp_path / "tenants.csv",
+        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,Alpha",
+        f"{TENANT_A},Alpha,,Commercial,TRUE",
+    )
+    assert _main(LICENSED_USERS, "--include", "alpha", "--tenants-file", str(path)) == 2
+    assert f"'alpha' could mean tenant Alpha ({TENANT_A}) or group column 'Alpha'" in caplog.text
 
 
 @pytest.mark.integration
 def test_a_failed_direct_sign_in_fails_that_tenant_only(
     fake_msal: FakeMsal, tmp_path: Path, recorder: ModuleType
 ) -> None:
-    fake_msal.tenant_errors[TENANT_C] = NOT_IN_TENANT
     fake_msal.interactive_errors[TENANT_C] = {"error": "access_denied", "error_description": "no"}
     path = _gamma_csv(tmp_path)
-    assert _main(recorder, "--group", "pilot", "--tenants-file", str(path)) == 1
+    assert _main(recorder, "--include", "pilot", "--tenants-file", str(path)) == 1
     assert [r.status for r in _reported(recorder)] == ["ok", "auth_failed"]
 
 
@@ -921,7 +925,7 @@ def test_all_runs_gdap_tenants_only(
     fake_msal: FakeMsal, tmp_path: Path, recorder: ModuleType
 ) -> None:
     path = _gamma_csv(tmp_path)
-    assert _main(recorder, "--all", "--tenants-file", str(path)) == 0
+    assert _main(recorder, "--include", "all", "--tenants-file", str(path)) == 0
     assert _tenant_ids(recorder) == [TENANT_A, TENANT_B]
 
 
@@ -934,8 +938,8 @@ def test_exit_2_when_the_groups_select_nothing(
         "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,pilot",
         f"{TENANT_A},Alpha,,Commercial,FALSE",
     )
-    assert _main(LICENSED_USERS, "--group", "pilot", "--tenants-file", str(path)) == 2
-    assert "No tenant is marked TRUE in group(s) pilot." in caplog.text
+    assert _main(LICENSED_USERS, "--include", "pilot", "--tenants-file", str(path)) == 2
+    assert "--include pilot selects no tenant." in caplog.text
 
 
 @pytest.mark.integration
@@ -950,12 +954,11 @@ def test_run_fills_in_blank_clouds_by_discovery(
         f"{TENANT_B},beta corp,,,,FALSE",
         f"{TENANT_C},Gamma,,,,FALSE",  # no GDAP relationship, but a tenant all the same
     )
-    assert _main(LICENSED_USERS, "--group", "pilot", "--tenants-file", str(path)) == 0
+    assert _main(LICENSED_USERS, "--include", "pilot", "--tenants-file", str(path)) == 0
     assert path.read_text(encoding="utf-8-sig").splitlines() == [
-        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,m365_gdap_access,"
-        "pilot",
-        f"{TENANT_A},Alpha,,Commercial,,,TRUE",
-        f"{TENANT_B},beta corp,,Commercial,,,FALSE",
+        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,m365_gdap,pilot",
+        f"{TENANT_A},Alpha,,Commercial,,TRUE,TRUE",
+        f"{TENANT_B},beta corp,,Commercial,,TRUE,FALSE",
         f"{TENANT_C},Gamma,,Commercial,,,FALSE",
     ]
     assert f"Filled in the cloud of 3 tenant(s) in {path}: Alpha, beta corp, Gamma" in caplog.text
@@ -973,15 +976,14 @@ def test_run_adds_the_columns_the_file_lacks(
         f"{TENANT_A},Alpha,TRUE",
         f"{TENANT_B},beta corp,FALSE",
     )
-    assert _main(LICENSED_USERS, "--group", "pilot", "--tenants-file", str(path)) == 0
+    assert _main(LICENSED_USERS, "--include", "pilot", "--tenants-file", str(path)) == 0
     assert path.read_text(encoding="utf-8-sig").splitlines() == [
-        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,m365_gdap_access,"
-        "pilot",
-        f"{TENANT_A},Alpha,,Commercial,,,TRUE",
-        f"{TENANT_B},beta corp,,Commercial,,,FALSE",
+        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,m365_gdap,pilot",
+        f"{TENANT_A},Alpha,,Commercial,,TRUE,TRUE",
+        f"{TENANT_B},beta corp,,Commercial,,TRUE,FALSE",
     ]
     assert (
-        f"Added column(s) m365_domain, m365_cloud, m365_username, m365_gdap_access to {path}"
+        f"Added column(s) m365_domain, m365_cloud, m365_username, m365_gdap to {path}"
         in caplog.text
     )
 
@@ -992,7 +994,7 @@ def test_run_adds_the_columns_the_file_lacks(
     [
         (
             ("m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud", f"{TENANT_A},Alpha,,"),
-            "has no group column 'pilot'",
+            "No tenant or group matches 'pilot'.",
         ),
         (
             (
@@ -1018,7 +1020,7 @@ def test_exit_2_on_a_bad_tenants_file(
     message: str,
 ) -> None:
     path = _tenants_csv(tmp_path / "tenants.csv", *lines)
-    assert _main(LICENSED_USERS, "--group", "pilot", "--tenants-file", str(path)) == 2
+    assert _main(LICENSED_USERS, "--include", "pilot", "--tenants-file", str(path)) == 2
     assert message in caplog.text
 
 
@@ -1033,7 +1035,7 @@ def test_unwritable_tenants_file_is_a_warning_not_an_error(
         raise PermissionError("held open by a spreadsheet")
 
     monkeypatch.setattr(TenantFile, "save", refuse)
-    assert _main(LICENSED_USERS, "--all") == 0
+    assert _main(LICENSED_USERS, "--include", "all") == 0
     assert "Could not write tenants file" in caplog.text
     assert "held open by a spreadsheet" in caplog.text
     assert not (tmp_path / "config" / "tenants.csv").exists()

@@ -10,11 +10,11 @@ Sets "Enabled for users to sign-in?" to No on the app in each tenant, which is
 ``accountEnabled`` false on its service principal. Try it first with ``--dry-run``, which
 reads every tenant and changes nothing::
 
-    uv run disable_connectwise_backup_sign_in.py --group pilot --dry-run
+    uv run disable_connectwise_backup_sign_in.py --include pilot --dry-run
 
 then without it::
 
-    uv run disable_connectwise_backup_sign_in.py --group pilot
+    uv run disable_connectwise_backup_sign_in.py --include pilot
 
 A dry run keeps going after a tenant's error, so it shows every tenant; a real run stops at
 the first, rather than repeat a broken change.

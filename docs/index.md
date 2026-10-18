@@ -55,8 +55,8 @@ if __name__ == "__main__":
 Run it across a group of tenants, or against one:
 
 ```bash
-uv run users.py --group pilot --jobs 5
-uv run users.py --tenant Contoso
+uv run users.py --include pilot --jobs 5
+uv run users.py --include Contoso
 ```
 
 The runner signs in once per client in `CLIENTS` at the partner tenant (each uses a
@@ -117,19 +117,23 @@ if __name__ == "__main__":
 
 ## Choosing tenants
 
-A run has to say which tenants it is for; one that names none is refused. Pick them with:
+A run has to say which tenants it is for; one that includes none is refused. Pick them with
+`--include`, and take some back out with `--exclude`. Both are repeatable, and each takes:
 
-- `--group NAME`: the tenants marked TRUE in column `NAME` of the tenants file. Repeat it
-  to add groups together.
-- `--tenant NAME_OR_ID`: one tenant by display name or ID, a GDAP customer or a row of the
-  tenants file. Repeatable, and combines with `--group`.
-- `--all`: every tenant with a GDAP relationship.
+- a tenant, by display name or ID: a GDAP customer or a row of the tenants file.
+- a group: the tenants marked TRUE in that column of the tenants file.
+- `all`, for `--include` only: every tenant with a GDAP relationship.
 
-`--exclude NAME_OR_ID` drops tenants from any of these.
+Everything included adds up, and an exclusion always wins: `--include all --exclude pilot`
+runs every GDAP tenant outside the pilot group. Case does not matter. A name that matches
+nothing is an error, and so is one that could mean two things: a tenant and a group column
+with the same name, or a tenant or column named `all`. Name the tenant by its ID, or rename
+the column. `--include m365_gdap` runs the tenants the partner sign-in reaches (see
+[Tenants outside GDAP](#tenants-outside-gdap)).
 
 The tenants file is a CSV you edit in a spreadsheet, one row per customer. This package owns
 six columns, `m365_tenant_id`, `m365_tenant_name`, `m365_domain`, `m365_cloud`,
-`m365_username` and `m365_gdap_access`, and reads one more per `--group`:
+`m365_username` and `m365_gdap`, and reads one more per group a run names:
 a column holding TRUE or FALSE, where a blank cell counts as FALSE and anything else is an
 error. Every other column is left alone, so the same file can carry what other tools know
 about the same customers on other platforms. Tenants are matched by ID; the name and domain
@@ -137,8 +141,8 @@ columns are there for you. A row with no `m365_tenant_id` is a customer without 
 tenant and is skipped.
 
 ```csv
-m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,m365_gdap_access,pilot,patching,cw_company_id
-aaaaaaaa-0000-0000-0000-00000000000a,Alpha,alpha.example,Commercial,,,TRUE,FALSE,1001
+m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,m365_gdap,pilot,patching,cw_company_id
+aaaaaaaa-0000-0000-0000-00000000000a,Alpha,alpha.example,Commercial,,TRUE,TRUE,FALSE,1001
 bbbbbbbb-0000-0000-0000-00000000000b,beta corp,beta.example,USGov,admin@beta.us,,TRUE,TRUE,1002
 cccccccc-0000-0000-0000-00000000000c,Gamma,gamma.example,Commercial,admin@gamma.example,FALSE,FALSE,TRUE,1003
 ```
@@ -148,9 +152,10 @@ itself, by OpenID Connect discovery, when it appends a tenant or finds the cell 
 
 The file is `tenants.csv` in the config directory (`m365-gdap-runner-config path` shows
 where), unless the `tenants_file` setting or `--tenants-file` points elsewhere. Every run
-keeps it current. Any of the six `m365_` columns the file lacks is added, blank, after the
-`m365_` columns it has (or at the end when it has none). A GDAP tenant with no row is
-appended with its name, its cloud and every other column blank, and a warning names it. The `m365-gdap-runner` command does that, lists
+keeps it current. Any of the six `m365_` columns the file lacks is added after the `m365_`
+columns it has (or at the end when it has none), blank, except that `m365_gdap` is TRUE for
+every tenant GDAP lists. A GDAP tenant with no row is appended with its name, its cloud, TRUE
+in `m365_gdap` and every other column blank, and a warning names it. The `m365-gdap-runner` command does that, lists
 the tenants and runs nothing, so run it once to create the file, then add group columns. Rows
 for tenants without a GDAP relationship are yours to add and keep.
 
@@ -172,15 +177,16 @@ rest run.
 A tenant whose `m365_username` cell is blank gets no sign-in of its own: it is `auth_failed`,
 with the reason, and no sign-in window opens for it.
 
-GDAP can list a customer whose tenant it gives you no access to. Put FALSE in that row's
-`m365_gdap_access` cell and the partner sign-in is never tried there: the tenant goes straight
-to a sign-in of its own. With `m365_username` blank as well, the tenant is left out of the
-run, with a warning, instead of failing: that marks a customer you cannot reach at all but
-cannot remove from Partner Center. A blank `m365_gdap_access` cell, which every appended row
-has, or TRUE tries the partner sign-in first. Anything else is an error.
+The `m365_gdap` column says which tenants the partner sign-in reaches. TRUE, which every
+appended row gets, tries the partner sign-in first. FALSE or blank never tries it: the tenant
+goes straight to a sign-in of its own. GDAP can list a customer whose tenant it gives you no
+access to; put FALSE in that row's cell. With `m365_username` blank as well, the tenant is
+left out of the run, with a warning, instead of failing: that marks a customer you cannot
+reach at all but cannot remove from Partner Center. Anything else in the cell is an error.
 
-`--gdap-only` turns this off, for unattended runs: a tenant the partner sign-in cannot reach
-is `auth_failed`, with the reason, and no sign-in window opens for it.
+`m365_gdap` is a group like any other, so `--include m365_gdap` runs only the tenants marked
+TRUE. A tenant there whose partner sign-in fails still gets a sign-in of its own when its
+`m365_username` is filled in.
 
 `ctx.auth` is the azure-auth context for the tenant. Hand it to any azure-auth client, or to
 an Azure SDK client as `credential=`, for resources the four properties do not cover.

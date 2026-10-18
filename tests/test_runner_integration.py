@@ -70,7 +70,7 @@ def test_graph_example_runs_through_session_and_azure_auth(fake_msal: FakeMsal) 
     session = PartnerSession(make_settings(), transport=httpx.MockTransport(handler))
     session.login(payload.clients)
     tenants = session.list_tenants()
-    session.check_access(tenants, scopes=payload.scopes, clients=payload.clients, direct=False)
+    session.check_access(tenants, scopes=payload.scopes, clients=payload.clients)
     results = run_payload(session, payload, tenants)
 
     assert [t.tenant_id for t in tenants] == [TENANT_A, TENANT_B]
@@ -202,7 +202,7 @@ def test_mailbox_audit_example_writes_a_workbook_per_tenant_and_a_summary(
 
     parser = argparse.ArgumentParser()
     cli.add_arguments(parser)
-    args = parser.parse_args(["--all", "--jobs", "2"])
+    args = parser.parse_args(["--include", "all", "--jobs", "2"])
     assert cli.main(mailbox_audit_gaps, args, transport=httpx.MockTransport(handler)) == 0
 
     today = datetime.date.today().isoformat()
@@ -341,7 +341,7 @@ def test_unified_audit_log_example_writes_one_workbook_for_every_tenant(
 
     parser = argparse.ArgumentParser()
     cli.add_arguments(parser)
-    args = parser.parse_args(["--all"])
+    args = parser.parse_args(["--include", "all"])
     assert cli.main(unified_audit_log, args, transport=httpx.MockTransport(_ual_services)) == 0
 
     (path,) = (tmp_path / "reports").iterdir()
@@ -428,7 +428,7 @@ def _connectwise_services(
 
 @pytest.fixture
 def connectwise(monkeypatch: pytest.MonkeyPatch) -> Any:
-    """The example, run through ``main()`` with ``--all``, as its own parser would."""
+    """The example, run through ``main()`` with ``--include all``, as its own parser would."""
     monkeypatch.setenv(ENV_PREFIX + "PARTNER_TENANT_ID", PARTNER_TENANT)
     monkeypatch.setenv(ENV_PREFIX + "USERNAME", USER)
     monkeypatch.setattr(cli, "configure_logging", lambda verbosity: None)
@@ -438,7 +438,7 @@ def connectwise(monkeypatch: pytest.MonkeyPatch) -> Any:
 def _run_all(module: Any, transport: httpx.MockTransport) -> int:
     parser = argparse.ArgumentParser()
     cli.add_arguments(parser)
-    return cli.main(module, parser.parse_args(["--all"]), transport=transport)
+    return cli.main(module, parser.parse_args(["--include", "all"]), transport=transport)
 
 
 def test_connectwise_dry_run_changes_nothing_and_says_what_would_change(

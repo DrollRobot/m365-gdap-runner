@@ -11,7 +11,7 @@
 After the last tenant, ``report()`` writes one workbook with a row per tenant, failed ones
 included, in the folder ``--out`` names::
 
-    uv run unified_audit_log.py --all --out reports
+    uv run unified_audit_log.py --include all --out reports
 
 ``Get-AdminAuditLogConfig`` reaches Exchange here, because this script declares no Security &
 Compliance client. That matters: the Security & Compliance version of the cmdlet always

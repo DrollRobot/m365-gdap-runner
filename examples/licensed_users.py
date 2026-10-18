@@ -11,11 +11,11 @@ script needs, so ``uv run`` builds its environment. ``run()`` collects one tenan
 ``report()`` prints every tenant's as JSON once the last is done. Run it across a group of
 tenants, keeping the report::
 
-    uv run licensed_users.py --group pilot > users.json
+    uv run licensed_users.py --include pilot > users.json
 
 or against one tenant::
 
-    uv run licensed_users.py --tenant Contoso
+    uv run licensed_users.py --include Contoso
 
 In this repository, ``uv run python examples/licensed_users.py ...`` runs it against the
 working copy instead of the release the header names.

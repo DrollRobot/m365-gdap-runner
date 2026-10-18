@@ -282,8 +282,10 @@ def test_check_access_logs_progress_every_30_seconds(
     monkeypatch.setattr("m365_gdap_runner.session.monotonic", lambda: float(next(ticks)))
     session = _signed_in(["graph"])
     with caplog.at_level(logging.INFO, logger="m365_gdap_runner.session"):
-        # Gamma is in another cloud, so it gets no silent check to count.
-        session.check_access([ALPHA, BETA, GAMMA_GOV], scopes=["User.Read.All"], direct=False)
+        # Gamma is in another cloud, so it gets no silent check to count, and with no
+        # m365_username, no sign-in of its own either.
+        gamma = Tenant(TENANT_C, "Gamma", "USGov")
+        session.check_access([ALPHA, BETA, gamma], scopes=["User.Read.All"])
     # Nothing after the last check: the lines that follow say how it went.
     assert [r.getMessage() for r in caplog.records if r.msg.startswith("Checked")] == lines
 
@@ -302,18 +304,18 @@ def test_check_access_signs_in_directly_where_the_partner_sign_in_fails(
     assert fake_msal.interactive_tenants() == [PARTNER_TENANT, TENANT_B]
 
 
-def test_check_access_never_tries_the_partner_sign_in_where_gdap_access_is_false(
+def test_check_access_never_tries_the_partner_sign_in_where_gdap_is_false(
     fake_msal: FakeMsal, caplog: pytest.LogCaptureFixture
 ) -> None:
     # The partner sign-in would reach beta corp; the tenants file says not to try.
-    beta = Tenant(TENANT_B, "beta corp", "Commercial", BETA_ADMIN, gdap_access=False)
+    beta = Tenant(TENANT_B, "beta corp", "Commercial", BETA_ADMIN, gdap=False)
     session = _signed_in(["graph"])
     with caplog.at_level(logging.INFO, logger="m365_gdap_runner.session"):
         session.check_access([ALPHA, beta], scopes=["User.Read.All"])
     assert fake_msal.silent_calls(TENANT_B) == []
     assert fake_msal.interactive_tenants() == [PARTNER_TENANT, TENANT_B]
     assert (
-        f"Signing in to beta corp directly as {BETA_ADMIN}: its m365_gdap_access is FALSE"
+        f"Signing in to beta corp directly as {BETA_ADMIN}: its m365_gdap is not TRUE"
         in caplog.text
     )
     with session.context_for(beta, scopes=["User.Read.All"]) as context:
@@ -327,8 +329,8 @@ def test_check_access_never_tries_the_partner_sign_in_where_gdap_access_is_false
         (BETA, "AADSTS65001"),
         (Tenant(TENANT_C, "Gamma", "USGov"), "Gamma is in the USGov cloud"),
         (
-            Tenant(TENANT_B, "beta corp", "Commercial", gdap_access=False),
-            "beta corp's m365_gdap_access is FALSE",
+            Tenant(TENANT_B, "beta corp", "Commercial", gdap=False),
+            "beta corp's m365_gdap is not TRUE",
         ),
     ],
 )
@@ -362,19 +364,6 @@ def test_check_access_signs_in_to_another_cloud_once_per_client_as_its_account(
     ) as gamma:
         assert (gamma.auth.tenant.cloud.name, gamma.auth.username) == ("USGov", GAMMA_ADMIN)
         assert gamma.graph.request("GET", "/users").request.url.host == "graph.microsoft.us"
-
-
-def test_check_access_without_direct_sign_ins_leaves_the_reason_for_context_for(
-    fake_msal: FakeMsal,
-) -> None:
-    fake_msal.tenant_errors[TENANT_B] = CONSENT_REQUIRED
-    session = _signed_in(["graph"])
-    session.check_access([ALPHA, BETA, GAMMA_GOV], scopes=["User.Read.All"], direct=False)
-    with pytest.raises(ConsentRequired):
-        session.context_for(BETA, scopes=["User.Read.All"])
-    with pytest.raises(AuthError, match="Gamma is in the USGov cloud"):
-        session.context_for(GAMMA_GOV, scopes=["User.Read.All"])
-    assert fake_msal.interactive_tenants() == [PARTNER_TENANT]
 
 
 def test_a_failed_direct_sign_in_is_what_context_for_raises(fake_msal: FakeMsal) -> None:

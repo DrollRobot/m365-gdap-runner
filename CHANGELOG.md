@@ -32,24 +32,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   included, is appended to that file, or to `m365_gdap_runner_debug.log` in it when it names
   a folder. The terminal shows what it did without it.
 - Tenant selection from a tenants file: a CSV with `m365_tenant_id`, `m365_tenant_name`,
-  `m365_domain`, `m365_cloud`, `m365_username`, `m365_gdap_access`, and one TRUE/FALSE
-  column per group; other tools may keep their own columns in the same file. Any of the
-  `m365_` columns the file lacks is added, and a blank cloud is filled in by OpenID Connect discovery. `--group NAME` runs the tenants marked in that column
-  (repeatable, combines with `--tenant`), `--all` runs every GDAP tenant, and a run that
-  names neither `--group`, `--tenant` nor `--all` is refused. `--group` and `--tenant` may
-  pick rows without a GDAP relationship, in any cloud. Every run appends the GDAP tenants the
-  file lacks and warns which; the `m365-gdap-runner` command creates or refreshes the file and
-  lists the tenants. Setting `tenants_file` and flag `--tenants-file` locate the file (default
-  `tenants.csv` in the config directory).
+  `m365_domain`, `m365_cloud`, `m365_username`, `m365_gdap`, and one TRUE/FALSE column per
+  group; other tools may keep their own columns in the same file. Any of the `m365_` columns
+  the file lacks is added, and a blank cloud is filled in by OpenID Connect discovery.
+  `--include` runs a tenant (display name or ID), a group (the tenants marked TRUE in that
+  column) or `all` (every GDAP tenant); `--exclude` takes tenants and groups back out, and
+  always wins. Both are repeatable, and a run that includes nothing is refused. A name that
+  matches nothing is an error, and so is one that could mean two things: a tenant and a
+  group, or `all` and either. A tenant or group may pick rows without a GDAP relationship,
+  in any cloud. Every run appends the GDAP tenants the file lacks and warns which; the
+  `m365-gdap-runner` command creates or refreshes the file and lists the tenants. Setting
+  `tenants_file` and flag `--tenants-file` locate the file (default `tenants.csv` in the
+  config directory).
 - Tenants the partner sign-in cannot reach: before the first `run()`, every selected tenant
   is checked silently through the partner sign-in, and each one that fails, or lives in
   another cloud, gets a sign-in of its own, in its own cloud, as its `m365_username`, one
-  client at a time, so the loop never prompts. Where `m365_username` is blank, or under
-  `--gdap-only`, those tenants are left `auth_failed` instead. A tenant marked FALSE in
-  `m365_gdap_access`, one GDAP lists but cannot reach, skips the silent check and goes
-  straight to its own sign-in, or, with `m365_username` blank too, is left out of the run
-  with a warning. While the silent checks run, a log line every 30 seconds says
-  how many are done and about how long the rest will take.
+  client at a time, so the loop never prompts. Where `m365_username` is blank, those tenants
+  are left `auth_failed` instead. `m365_gdap` marks the tenants the partner sign-in reaches:
+  TRUE, which appended rows get, tries it first. FALSE or blank, as for a tenant GDAP lists
+  but cannot reach, skips the silent check and goes straight to its own sign-in, or, with
+  `m365_username` blank too, leaves the tenant out of the run with a warning. It is also a
+  group, so `--include m365_gdap` runs only the tenants it marks. While the silent checks
+  run, a log line every 30 seconds says how many are done and about how long the rest will
+  take.
 - Script setting `CONTINUE_ON_ERROR`: an error in `run()` stops the run unless the script sets
   it True, as the example reports do and the ConnectWise example does under `--dry-run`.
   `--continue-on-error` and the new `--no-continue-on-error` override it.

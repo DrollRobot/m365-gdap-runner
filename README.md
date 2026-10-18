@@ -57,15 +57,16 @@ if __name__ == "__main__":
 ```bash
 m365-gdap-runner-config init           # partner tenant and sign-in name
 m365-gdap-runner                       # creates tenants.csv; add TRUE/FALSE group columns
-uv run users.py --group pilot
+uv run users.py --include pilot
 ```
 
-Tenants are chosen with `--group` (a column of the tenants CSV), `--tenant` or `--all`, less
-`--exclude`. A tenant the partner sign-in cannot reach, including one without GDAP or in
-another cloud, gets a sign-in of its own before the run, as the account in its row's
-`m365_username` cell; `--gdap-only` turns that off. FALSE in its `m365_gdap_access` cell
-skips the partner sign-in for a tenant GDAP lists but cannot reach; with `m365_username`
-blank too, the tenant is left out of the run. The library writes no output of its own: `run()` writes any per-tenant report,
+Tenants are chosen with `--include`, less `--exclude`. Each takes a tenant (display name or
+ID) or a group (a TRUE/FALSE column of the tenants CSV), and `--include all` means every GDAP
+tenant. A tenant the partner sign-in cannot reach, including one without GDAP or in another
+cloud, gets a sign-in of its own before the run, as the account in its row's `m365_username`
+cell. The `m365_gdap` column marks the tenants the partner sign-in reaches, so
+`--include m365_gdap` runs only those. FALSE or blank there skips the partner sign-in; with
+`m365_username` blank too, the tenant is left out of the run. The library writes no output of its own: `run()` writes any per-tenant report,
 `report()` the run's. A script with flags of its own adds the library's to its parser with
 `add_arguments()`. `ctx` also offers `exchange`, `ipps` and `azure` clients when declared in
 `CLIENTS`, and `ctx.auth`, the azure-auth context, for anything else. See

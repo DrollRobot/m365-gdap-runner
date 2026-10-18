@@ -28,10 +28,11 @@ A script is a ``.py`` file with ``run(ctx)``, the Graph ``SCOPES`` it needs, and
 
         raise SystemExit(main(__name__))
 
-Run it with ``uv run my_script.py --group pilot``, where ``pilot`` is a TRUE/FALSE column of
-the tenants file (see ``tenants.py``); ``--tenant`` and ``--all`` are the other ways to choose
-tenants. A script with flags of its own adds the library's to its parser with
-:func:`add_arguments` and passes the parsed result to :func:`main`.
+Run it with ``uv run my_script.py --include pilot``, where ``pilot`` is a TRUE/FALSE column
+of the tenants file (see ``tenants.py``); ``--include`` also takes a tenant, or ``all``, and
+``--exclude`` takes tenants and groups out. A script with flags of its own adds the
+library's to its parser with :func:`add_arguments` and passes the parsed result to
+:func:`main`.
 """
 
 from __future__ import annotations

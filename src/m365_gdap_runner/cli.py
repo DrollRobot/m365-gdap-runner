@@ -9,21 +9,21 @@ calls the script's ``run(ctx)`` for each selected tenant::
 
         raise SystemExit(main(__name__))
 
-then ``uv run audit.py --group pilot``. A script with flags of its own builds the parser,
+then ``uv run audit.py --include pilot``. A script with flags of its own builds the parser,
 adds the library's flags with :func:`add_arguments`, and passes what it parsed to ``main()``.
 
 The library writes no output of its own. ``run()`` writes any per-tenant report; after the
 last tenant, the script's ``report(results)``, when it has one, gets every tenant's result and
 writes the run's.
 
-Tenants are chosen with ``--group`` (a TRUE/FALSE column of the tenants file, see
-``tenants.py``), ``--tenant`` or ``--all``, less ``--exclude``; a run that names none is
-refused. ``--group`` and ``--tenant`` may pick tenants without a GDAP relationship, or in
-another cloud, from the tenants file; before the loop, every tenant the partner sign-in
-cannot reach gets a sign-in of its own, unless ``--gdap-only`` is given. A tenant marked
-FALSE in ``m365_gdap_access`` with a blank ``m365_username`` is left out. Every run adds the
-columns and GDAP tenants the file lacks. The ``m365-gdap-runner`` command (:func:`list_tenants`)
-does only that, and prints the list.
+Tenants are chosen with ``--include``, less ``--exclude``: each takes a tenant, a group (a
+TRUE/FALSE column of the tenants file, see ``tenants.py``), and ``--include`` also ``all``,
+every GDAP tenant. A run that includes nothing is refused. A tenant or group may pick tenants
+without a GDAP relationship, or in another cloud, from the tenants file; before the loop,
+every tenant the partner sign-in cannot reach gets a sign-in of its own. A tenant whose
+``m365_gdap`` is not TRUE and whose ``m365_username`` is blank is left out. Every run adds
+the columns and GDAP tenants the file lacks. The ``m365-gdap-runner`` command
+(:func:`list_tenants`) does only that, and prints the list.
 
 Configuration comes from the config system (see ``src/m365_gdap_runner/config/``);
 ``--partner-tenant-id``, ``--username``, ``--client-id``, ``--cache``, ``--sign-in``,
@@ -58,6 +58,7 @@ from m365_gdap_runner.runner import (
 )
 from m365_gdap_runner.session import CACHE_KINDS, SIGN_IN_KINDS, PartnerSession
 from m365_gdap_runner.tenants import (
+    ALL,
     Tenant,
     TenantFile,
     TenantFileError,
@@ -195,40 +196,21 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     """
     tenants = parser.add_argument_group("m365-gdap-runner tenants")
     tenants.add_argument(
-        "--group",
+        "--include",
         action="append",
         default=None,
-        metavar="NAME",
+        metavar="TENANT_OR_GROUP",
         help=(
-            "Run the tenants marked TRUE in this column of the tenants file "
-            "(repeatable; groups add up)."
+            "Run this tenant (display name or ID), the tenants marked TRUE in this column of "
+            "the tenants file, or all, every GDAP tenant (repeatable; they add up)."
         ),
     )
-    tenants.add_argument(
-        "--tenant",
-        action="append",
-        default=None,
-        metavar="NAME_OR_ID",
-        help=(
-            "Run this tenant, by display name or ID: a GDAP customer or a row of the tenants "
-            "file (repeatable)."
-        ),
-    )
-    tenants.add_argument("--all", action="store_true", help="Run every GDAP tenant.")
     tenants.add_argument(
         "--exclude",
         action="append",
         default=None,
-        metavar="NAME_OR_ID",
-        help="Skip this tenant (repeatable).",
-    )
-    tenants.add_argument(
-        "--gdap-only",
-        action="store_true",
-        help=(
-            "Reach tenants through the partner sign-in only: a tenant it cannot reach is "
-            "auth_failed instead of getting a sign-in of its own."
-        ),
+        metavar="TENANT_OR_GROUP",
+        help="Skip this tenant or group, even where --include names it (repeatable).",
     )
     run = parser.add_argument_group("m365-gdap-runner run")
     run.add_argument(
@@ -278,7 +260,7 @@ def settings_from_args(args: argparse.Namespace) -> Settings:
 
 
 def _selection_error(args: argparse.Namespace) -> str | None:
-    """Check that the flags choose tenants, and do so one way.
+    """Check that the flags choose tenants, before any sign-in.
 
     Args:
         args: Parsed arguments.
@@ -286,11 +268,10 @@ def _selection_error(args: argparse.Namespace) -> str | None:
     Returns:
         What is wrong, or None when the selection is usable.
     """
-    picked = args.tenant or args.group
-    if args.all and picked:
-        return "--all cannot be combined with --tenant or --group."
-    if not (args.all or picked):
-        return "Choose tenants with --group, --tenant or --all."
+    if not args.include:
+        return "Choose tenants with --include: a tenant, a group, or all."
+    if any(value.strip().casefold() == ALL for value in args.exclude or ()):
+        return "--exclude all would leave no tenant to run."
     return None
 
 
@@ -453,49 +434,39 @@ def _sync_tenant_file(
 def _select_tenants(
     args: argparse.Namespace, tenants: Sequence[Tenant], tenant_file: TenantFile, cloud: str
 ) -> list[Tenant]:
-    """Apply ``--all``, ``--group``, ``--tenant`` and ``--exclude``.
+    """Apply ``--include`` and ``--exclude`` (see :func:`~m365_gdap_runner.tenants.select`).
 
-    ``--all`` means every GDAP tenant. ``--group`` and ``--tenant`` may also pick a row of the
-    tenants file that GDAP does not list.
+    ``all`` means every GDAP tenant. A tenant or group may also pick a row of the tenants file
+    that GDAP does not list.
 
     Args:
-        args: Parsed arguments that passed :func:`_selection_error`, so one of ``--all``,
-            ``--group`` or ``--tenant`` was given.
+        args: Parsed arguments that passed :func:`_selection_error`, so ``--include`` was
+            given.
         tenants: The GDAP tenants.
         tenant_file: The tenants file.
         cloud: Name of the partner's cloud, for a tenant whose row names none.
 
     Returns:
         The tenants to run, GDAP tenants first, each with its cloud and sign-in account. A
-        tenant marked FALSE in ``m365_gdap_access`` with a blank ``m365_username`` has no way
-        in, by design: it is left out, with a warning.
+        tenant whose ``m365_gdap`` is not TRUE and whose ``m365_username`` is blank has no
+        way in, by design: it is left out, with a warning.
 
     Raises:
-        TenantFileError: If a group has no column, a cell in it is not TRUE, FALSE or blank,
-            or a selected tenant's cloud is not a known one.
-        TenantSelectionError: If a value names no tenant, or the groups select none.
+        TenantFileError: If a group named holds a cell that is not TRUE, FALSE or blank, or
+            a selected tenant's cloud is not a known one.
+        TenantSelectionError: If a value names nothing or could mean two things, or
+            ``--include`` selects no tenant.
     """
-    known = [*tenants, *tenant_file.extra_tenants(tenants)]
-    if args.all:
-        gdap = {tenant.tenant_id for tenant in tenants}
-        chosen = [t for t in select(known, exclude=args.exclude) if t.tenant_id in gdap]
-    else:
-        include = list(args.tenant or ())
-        for group in args.group or ():
-            include += [row.tenant_id for row in tenant_file.members(group)]
-        if not include:
-            groups = ", ".join(args.group or ())
-            raise TenantSelectionError(f"No tenant is marked TRUE in group(s) {groups}.")
-        chosen = select(known, include=include, exclude=args.exclude)
+    chosen = select(tenants, tenant_file, args.include, args.exclude or ())
     detailed = [tenant_file.details(tenant, default_cloud=cloud) for tenant in chosen]
-    no_access = [tenant for tenant in detailed if not (tenant.gdap_access or tenant.username)]
+    no_access = [tenant for tenant in detailed if not (tenant.gdap or tenant.username)]
     if no_access:
         logger.warning(
-            "Skipping %d tenant(s) with m365_gdap_access FALSE and a blank m365_username: %s",
+            "Skipping %d tenant(s) with neither m365_gdap TRUE nor an m365_username: %s",
             len(no_access),
             ", ".join(tenant.display_name for tenant in no_access),
         )
-    return [tenant for tenant in detailed if tenant.gdap_access or tenant.username]
+    return [tenant for tenant in detailed if tenant.gdap or tenant.username]
 
 
 def _script_name(module: ModuleType) -> str:
@@ -584,7 +555,6 @@ def _run(
         selected,
         scopes=payload.scopes,
         clients=payload.clients,
-        direct=not args.gdap_only,
         jobs=args.jobs,
     )
     logger.info("Running %s against %d tenant(s)", payload.name, len(selected))

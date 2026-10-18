@@ -9,11 +9,11 @@
 Shows a script that uses Exchange Online instead of Graph, and one with no ``report()``: each
 tenant's log line is the report, so a tenant with auditing off stands out as a warning::
 
-    uv run audit_disabled.py --all
+    uv run audit_disabled.py --include all
 
 or against one tenant::
 
-    uv run audit_disabled.py --tenant Contoso
+    uv run audit_disabled.py --include Contoso
 """
 
 from __future__ import annotations

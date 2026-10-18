@@ -166,8 +166,8 @@ class Settings:
     tenants_file: str = option(
         default_value="",
         help=(
-            "CSV of customer tenants with one TRUE/FALSE column per group, used by --group; "
-            "empty uses tenants.csv in the config directory"
+            "CSV of customer tenants with one TRUE/FALSE column per group, used by --include and "
+            "--exclude; empty uses tenants.csv in the config directory"
         ),
     )
     debug_log_path: str = option(

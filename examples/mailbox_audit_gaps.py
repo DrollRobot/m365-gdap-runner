@@ -13,7 +13,7 @@ actions, and the audit bypass associations. After the last tenant, ``report()`` 
 summary workbook: a row per tenant, failed ones included, and every tenant's gaps on one
 sheet. ``--out`` is the script's own flag, beside the library's::
 
-    uv run mailbox_audit_gaps.py --group pilot --out reports
+    uv run mailbox_audit_gaps.py --include pilot --out reports
 
 The reference action set per logon type (Admin, Delegate, Owner) is derived from the
 mailboxes still enrolled in Microsoft's managed defaults, then every mailbox that left a
