@@ -62,12 +62,27 @@ uv run users.py --include Contoso
 The runner signs in once per client in `CLIENTS` at the partner tenant (each uses a
 different Microsoft app), then, before the first `run()`, checks every selected tenant
 silently through that sign-in. A tenant it cannot reach that way gets a sign-in of its own
-(see [Tenants outside GDAP](#tenants-outside-gdap)). With `--cache disk` later runs skip the
-sign-in.
+(see [Tenants outside GDAP](#tenants-outside-gdap)).
 
-Sign-ins open the browser. On Windows, the `sign_in` setting or `--sign-in` set to `broker`
-uses the Windows sign-in window instead, and when Windows is signed in as the partner
-account, the partner sign-in needs no window at all. Other systems ignore it.
+Sign-ins open the browser. The Windows sign-in window (the broker) is not offered: GDAP does
+not work through it.
+
+## Keeping sign-ins between runs
+
+Sign-ins are kept in memory and end with the run. To keep them, opt in to the disk cache:
+the `cache` setting, or `--cache`, set to `disk` keeps them in an encrypted file, and later
+runs skip the sign-in. That includes each tenant's own sign-in: a tenant the partner sign-in
+cannot reach uses its cached sign-in, and opens the browser only when there is none.
+
+The file holds refresh tokens, which sign in without a password. Two settings help keep
+track of it:
+
+- `cache_path`: the file to keep it in. Empty uses azure-auth's file in the per-user cache
+  directory.
+- `cache_reminder_path`: a folder in plain sight, such as the Desktop. Every run with the
+  disk cache puts `M365-GDAP-RUNNER_MSAL_CACHE_DELETEME` there, a link to the folder that
+  holds the cache: a `.url` shortcut on Windows, a symbolic link elsewhere. It holds only a
+  path, so it is safe in a synced folder; the cache itself is not.
 
 ## Reports
 

@@ -24,10 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checked in the customer tenant before the first `run()` starts.
 - Settings `partner_tenant_id`, `username`, `client_id`, `cache` (`memory`, or `disk` for
   an encrypted file) and `cloud`, with matching `--partner-tenant-id`, `--username`,
-  `--client-id`, `--cache` and `--cloud` flags.
-- Setting `sign_in` and flag `--sign-in`: `browser` (the default), or `broker` for the Windows
-  sign-in window, which can sign in the account already signed in to Windows without asking.
-  Other systems ignore it.
+  `--client-id`, `--cache` and `--cloud` flags. Sign-ins open the browser; the Windows broker
+  is not offered, since GDAP does not work through it.
+- Settings `cache_path`, the file the disk cache is kept in (default: azure-auth's), and
+  `cache_reminder_path`, a folder in plain sight where every run with the disk cache puts
+  `M365-GDAP-RUNNER_MSAL_CACHE_DELETEME`, a link to the cache's folder, so the file is not
+  forgotten.
 - Setting `debug_log_path`, for development: every log record, debug and library ones
   included, is appended to that file, or to `m365_gdap_runner_debug.log` in it when it names
   a folder. The terminal shows what it did without it.

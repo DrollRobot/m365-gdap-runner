@@ -3,19 +3,21 @@
 from __future__ import annotations
 
 import logging
+import os
 from itertools import count
-from types import SimpleNamespace
-from typing import Any
+from pathlib import Path
 
 import httpx
 import pytest
-from azure_auth import AuthContext, AuthError, ConsentRequired, TenantNotFound
+from azure_auth import AuthError, ConsentRequired, TenantNotFound
+from azure_auth.auth import cache as azure_auth_cache
 from azure_auth.constants import (
     AZURE_POWERSHELL_CLIENT_ID,
     EXCHANGE_POWERSHELL_CLIENT_ID,
     GRAPH_CLI_CLIENT_ID,
 )
 
+from m365_gdap_runner.cache_reminder import reminder_path
 from m365_gdap_runner.config import ConfigError
 from m365_gdap_runner.session import PartnerSession
 from m365_gdap_runner.tenants import Tenant
@@ -26,6 +28,7 @@ from tests._gdap_fakes import (
     TENANT_A,
     TENANT_B,
     TENANT_C,
+    USER,
     FakeMsal,
     bearer_tenant,
     customers_body,
@@ -141,11 +144,10 @@ def test_partner_tenant_id_is_the_guid(fake_msal: FakeMsal) -> None:
     ("field", "value", "message"),
     [
         ("cache", "plaintext", "cache must be one of"),
-        ("sign_in", "wam", "sign_in must be one of"),
         ("cloud", "Mars", "Unknown cloud 'Mars'"),
     ],
 )
-def test_bad_cache_sign_in_or_cloud_is_a_config_error(
+def test_bad_cache_or_cloud_is_a_config_error(
     fake_msal: FakeMsal, field: str, value: str, message: str
 ) -> None:
     with pytest.raises(ConfigError, match=message):
@@ -210,48 +212,6 @@ def _signed_in(clients: list[str]) -> PartnerSession:
     return session
 
 
-@pytest.fixture
-def brokers(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
-    """The ``broker`` argument of every ``AuthContext`` built during the test, in order."""
-    built: list[bool] = []
-    original = AuthContext.__init__
-
-    def init(self: AuthContext, *args: Any, **kwargs: Any) -> None:
-        built.append(kwargs.get("broker", False))
-        original(self, *args, **kwargs)
-
-    monkeypatch.setattr(AuthContext, "__init__", init)
-    return built
-
-
-@pytest.mark.parametrize(
-    ("sign_in", "platform", "broker"),
-    [
-        ("broker", "win32", True),
-        ("broker", "linux", False),
-        ("broker", "darwin", False),
-        ("browser", "win32", False),
-    ],
-)
-def test_the_broker_signs_in_on_windows_only(
-    fake_msal: FakeMsal,
-    brokers: list[bool],
-    monkeypatch: pytest.MonkeyPatch,
-    sign_in: str,
-    platform: str,
-    broker: bool,
-) -> None:
-    # Only the runner is told the platform; azure-auth checks the real one for itself.
-    monkeypatch.setattr("m365_gdap_runner.session.sys", SimpleNamespace(platform=platform))
-    fake_msal.tenant_errors[TENANT_B] = CONSENT_REQUIRED
-    beta_with_admin = Tenant(TENANT_B, "beta corp", "Commercial", BETA_ADMIN)
-    session = PartnerSession(make_settings(sign_in=sign_in), transport=TRANSPORT)
-    session.login(["graph"])
-    session.check_access([beta_with_admin], scopes=["User.Read.All"])
-    # The partner sign-in, then beta corp's own.
-    assert brokers == [broker, broker]
-
-
 def test_check_access_reaches_gdap_tenants_through_the_partner_sign_in(
     fake_msal: FakeMsal,
 ) -> None:
@@ -306,6 +266,30 @@ def test_check_access_signs_in_directly_where_the_partner_sign_in_fails(
         assert (beta.auth.tenant.id, beta.auth.username) == (TENANT_B, BETA_ADMIN)
         assert bearer_tenant(beta.graph.request("GET", "/users").request) == TENANT_B
     assert fake_msal.interactive_tenants() == [PARTNER_TENANT, TENANT_B]
+
+
+@pytest.mark.acceptance
+def test_check_access_tries_the_partner_sign_in_then_a_cached_direct_one(
+    fake_msal: FakeMsal,
+    cache_files: list[tuple[str, Path | None]],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # beta corp's own account signed in on an earlier run, and the disk cache kept it.
+    fake_msal.sign_in(GRAPH_CLI_CLIENT_ID, BETA_ADMIN)
+    fake_msal.account_errors[(TENANT_B, USER)] = CONSENT_REQUIRED
+    beta_with_admin = Tenant(TENANT_B, "beta corp", "Commercial", BETA_ADMIN)
+    session = PartnerSession(make_settings(cache="disk"), transport=TRANSPORT)
+    session.login(["graph"])
+    with caplog.at_level(logging.INFO, logger="m365_gdap_runner.session"):
+        session.check_access([beta_with_admin], scopes=["User.Read.All"])
+    assert (
+        f"Signing in to beta corp directly as {BETA_ADMIN}: the partner sign-in cannot reach it"
+        in caplog.text
+    )
+    # Only the partner sign-in opened a window; beta corp's own came from the cache.
+    assert fake_msal.interactive_tenants() == [PARTNER_TENANT]
+    with session.context_for(beta_with_admin, scopes=["User.Read.All"]) as beta:
+        assert (beta.auth.home is beta.auth, beta.auth.username) == (True, BETA_ADMIN)
 
 
 def test_check_access_never_tries_the_partner_sign_in_where_gdap_is_false(
@@ -376,3 +360,102 @@ def test_a_failed_direct_sign_in_is_what_context_for_raises(fake_msal: FakeMsal)
     session.check_access([GAMMA_GOV], scopes=["User.Read.All"])
     with pytest.raises(AuthError, match="access_denied"):
         session.context_for(GAMMA_GOV, scopes=["User.Read.All"])
+
+
+# --- the disk cache --------------------------------------------------------------------
+
+
+@pytest.fixture
+def cache_files(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, Path | None]]:
+    """The cache kind and file every ``AuthContext`` built during the test asks for, in order.
+
+    Each gets an empty cache in memory instead, so a disk cache needs no encryption here. The
+    fake msal keeps every sign-in in one place, as a disk cache shared by every context does.
+    """
+    asked: list[tuple[str, Path | None]] = []
+
+    def build_cache(kind: str, cache_path: str | Path | None = None) -> object:
+        asked.append((kind, None if cache_path is None else Path(cache_path)))
+        return azure_auth_cache.build_cache("memory")
+
+    monkeypatch.setattr("azure_auth.auth.context.build_cache", build_cache)
+    return asked
+
+
+def _points_at(link: Path, folder: Path) -> bool:
+    """Say whether a reminder opens ``folder``: a ``.url`` file on Windows, else a link."""
+    if os.name == "nt":
+        return f"URL={folder.resolve().as_uri()}/" in link.read_text(encoding="utf-8")
+    return link.resolve() == folder.resolve()
+
+
+@pytest.mark.parametrize(
+    ("overrides", "asked"),
+    [
+        ({}, ("memory", None)),
+        ({"cache": "disk"}, ("disk", None)),
+        ({"cache": "disk", "cache_path": "~/tokens.bin"}, ("disk", Path.home() / "tokens.bin")),
+    ],
+    ids=["memory-by-default", "disk-in-azure-auths-file", "disk-in-cache-path"],
+)
+def test_the_partner_and_direct_sign_ins_use_the_cache_settings(
+    fake_msal: FakeMsal,
+    cache_files: list[tuple[str, Path | None]],
+    overrides: dict[str, str],
+    asked: tuple[str, Path | None],
+) -> None:
+    fake_msal.tenant_errors[TENANT_B] = CONSENT_REQUIRED
+    beta_with_admin = Tenant(TENANT_B, "beta corp", "Commercial", BETA_ADMIN)
+    session = PartnerSession(make_settings(**overrides), transport=TRANSPORT)
+    session.login(["graph"])
+    session.check_access([beta_with_admin], scopes=["User.Read.All"])
+    # The partner sign-in, then beta corp's own.
+    assert cache_files == [asked, asked]
+
+
+def test_a_disk_cache_leaves_the_reminder_pointing_at_its_folder(
+    fake_msal: FakeMsal, cache_files: list[tuple[str, Path | None]], tmp_path: Path
+) -> None:
+    cache_file = tmp_path / "cache" / "tokens.bin"
+    desktop = tmp_path / "desktop"
+    PartnerSession(
+        make_settings(cache="disk", cache_path=str(cache_file), cache_reminder_path=str(desktop))
+    )
+    assert _points_at(reminder_path(desktop), cache_file.parent)
+
+
+def test_the_reminder_finds_azure_auths_file_without_a_cache_path(
+    fake_msal: FakeMsal, cache_files: list[tuple[str, Path | None]], tmp_path: Path
+) -> None:
+    desktop = tmp_path / "desktop"
+    PartnerSession(make_settings(cache="disk", cache_reminder_path=str(desktop)))
+    assert _points_at(reminder_path(desktop), azure_auth_cache.default_cache_path().parent)
+
+
+def test_the_memory_cache_leaves_no_reminder(
+    fake_msal: FakeMsal, cache_files: list[tuple[str, Path | None]], tmp_path: Path
+) -> None:
+    desktop = tmp_path / "desktop"
+    PartnerSession(make_settings(cache_reminder_path=str(desktop)))
+    assert not desktop.exists()
+
+
+def test_a_reminder_that_cannot_be_placed_is_a_warning(
+    fake_msal: FakeMsal,
+    cache_files: list[tuple[str, Path | None]],
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    desktop = tmp_path / "desktop"
+    # A folder in the reminder's place is someone's, and is left alone.
+    reminder_path(desktop).mkdir(parents=True)
+    with caplog.at_level(logging.WARNING, logger="m365_gdap_runner.session"):
+        session = PartnerSession(
+            make_settings(
+                cache="disk",
+                cache_path=str(tmp_path / "tokens.bin"),
+                cache_reminder_path=str(desktop),
+            )
+        )
+    assert session.partner_tenant_id == PARTNER_TENANT
+    assert f"Could not put the token cache reminder in {desktop}" in caplog.text

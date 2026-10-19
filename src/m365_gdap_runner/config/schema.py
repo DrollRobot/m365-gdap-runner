@@ -149,11 +149,18 @@ class Settings:
             "later runs skip the sign-in"
         ),
     )
-    sign_in: str = option(
-        default_value="browser",
+    cache_path: str = option(
+        default_value="",
         help=(
-            "How the partner account signs in: 'browser', or 'broker', the Windows sign-in "
-            "window, which can use the account signed in to Windows; ignored on other systems"
+            "File the 'disk' cache is kept in; empty uses azure-auth's file in the per-user "
+            "cache directory"
+        ),
+    )
+    cache_reminder_path: str = option(
+        default_value="",
+        help=(
+            "Folder in plain sight, such as the Desktop, where a run with the 'disk' cache puts "
+            "M365-GDAP-RUNNER_MSAL_CACHE_DELETEME, a link to the cache's folder; empty puts none"
         ),
     )
     cloud: str = option(

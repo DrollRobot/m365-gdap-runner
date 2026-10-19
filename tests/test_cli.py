@@ -123,7 +123,7 @@ def test_add_arguments_defaults() -> None:
         None,
         None,
     )
-    assert (args.sign_in, args.tenants_file, args.profile, args.verbose) == (None, None, None, 0)
+    assert (args.tenants_file, args.profile, args.verbose) == (None, None, 0)
 
 
 @pytest.mark.unit
@@ -133,7 +133,8 @@ def test_add_arguments_defaults() -> None:
         ["--jobs", "0"],
         ["--jobs", "two"],
         ["--cache", "plaintext"],
-        ["--sign-in", "wam"],
+        # The Windows broker is gone, and the flag that chose it with it.
+        ["--sign-in", "broker"],
         ["--format", "json"],
     ],
     ids=str,
@@ -220,8 +221,6 @@ def test_settings_flags_override_config() -> None:
         "custom",
         "--cache",
         "disk",
-        "--sign-in",
-        "broker",
         "--cloud",
         "USGov",
         "--tenants-file",
@@ -235,7 +234,6 @@ def test_settings_flags_override_config() -> None:
         settings.username,
         settings.client_id,
         settings.cache,
-        settings.sign_in,
         settings.cloud,
         settings.tenants_file,
     ) == (
@@ -243,7 +241,6 @@ def test_settings_flags_override_config() -> None:
         "someone@other.example",
         "custom",
         "disk",
-        "broker",
         "USGov",
         "C:/msp/tenants.csv",
     )

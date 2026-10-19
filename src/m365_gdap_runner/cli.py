@@ -26,8 +26,8 @@ the columns and GDAP tenants the file lacks. The ``m365-gdap-runner`` command
 (:func:`list_tenants`) does only that, and prints the list.
 
 Configuration comes from the config system (see ``src/m365_gdap_runner/config/``);
-``--partner-tenant-id``, ``--username``, ``--client-id``, ``--cache``, ``--sign-in``,
-``--cloud`` and ``--tenants-file`` override it. Progress and the summary go to stderr; stdout is the
+``--partner-tenant-id``, ``--username``, ``--client-id``, ``--cache``, ``--cloud`` and
+``--tenants-file`` override it. Progress and the summary go to stderr; stdout is the
 script's. The ``debug_log_path`` setting also appends every log record to a file.
 
 Exit codes: 0 all tenants ok; 1 any tenant not ok; 2 usage, configuration, script, sign-in,
@@ -56,7 +56,7 @@ from m365_gdap_runner.runner import (
     run_payload,
     summarize,
 )
-from m365_gdap_runner.session import CACHE_KINDS, SIGN_IN_KINDS, PartnerSession
+from m365_gdap_runner.session import CACHE_KINDS, PartnerSession
 from m365_gdap_runner.tenants import (
     ALL,
     Tenant,
@@ -170,13 +170,6 @@ def _add_settings_arguments(parser: argparse.ArgumentParser) -> None:
         "skip the sign-in.",
     )
     group.add_argument(
-        "--sign-in",
-        choices=SIGN_IN_KINDS,
-        default=None,
-        help="Sign in through the browser (default) or the Windows broker, which can use the "
-        "account signed in to Windows. Ignored outside Windows.",
-    )
-    group.add_argument(
         "-v",
         "--verbose",
         action="count",
@@ -254,8 +247,6 @@ def settings_from_args(args: argparse.Namespace) -> Settings:
             overrides[name] = value
     if args.cache is not None:
         overrides["cache"] = args.cache
-    if args.sign_in is not None:
-        overrides["sign_in"] = args.sign_in
     return load_settings(profile=args.profile, overrides=overrides)
 
 

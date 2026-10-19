@@ -118,9 +118,6 @@ class Call:
 class FakeApp:
     """Fake ``PublicClientApplication`` bound to one client id and one tenant authority."""
 
-    # azure-auth hands it to a sign-in through the broker.
-    CONSOLE_WINDOW_HANDLE = object()
-
     def __init__(
         self, module: FakeMsal, client_id: str, authority: str, token_cache: object
     ) -> None:
@@ -145,7 +142,9 @@ class FakeApp:
         # for both yet means MSAL finds nothing to redeem, whatever the tenant.
         if (self.client_id, account["username"].lower()) not in self.module.signed_in:
             return None
-        error = self.module.tenant_errors.get(self.tenant_id.lower())
+        error = self.module.account_errors.get(
+            (self.tenant_id.lower(), account["username"].lower())
+        ) or self.module.tenant_errors.get(self.tenant_id.lower())
         if error is not None:
             return dict(error)
         return {"access_token": fake_access(self.tenant_id), "expires_in": 3600}
@@ -173,6 +172,8 @@ class FakeMsal:
 
     Attributes:
         tenant_errors: Tenant id to the MSAL error result its silent requests return.
+        account_errors: ``(tenant id, username)``, lower-cased, to the MSAL error result that
+            account's silent requests in that tenant return, ahead of ``tenant_errors``.
         interactive_result: When set, what every interactive sign-in returns (a failure).
         interactive_errors: Tenant id to the MSAL error result its interactive sign-ins return.
         accounts: Cached accounts, shared by every application.
@@ -182,6 +183,7 @@ class FakeMsal:
     """
 
     tenant_errors: dict[str, dict[str, Any]] = field(default_factory=dict)
+    account_errors: dict[tuple[str, str], dict[str, Any]] = field(default_factory=dict)
     interactive_result: dict[str, Any] | None = None
     interactive_errors: dict[str, dict[str, Any]] = field(default_factory=dict)
     accounts: list[dict[str, Any]] = field(default_factory=list)

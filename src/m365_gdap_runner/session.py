@@ -5,9 +5,8 @@ sign-in per client id the script uses, all at the partner (home) tenant, before 
 starts. Customer tenants are reached through contexts from azure-auth's ``get_tenant_context()``,
 which never prompt; they redeem the home sign-in's refresh token in the customer tenant.
 
-The partner signs in through the browser or, with ``sign_in = "broker"`` on Windows, through
-the Windows broker, which holds the refresh token itself and can sign in the account already
-signed in to Windows without asking. Other systems ignore the setting.
+Every sign-in opens the browser. The Windows broker is not offered: GDAP does not work
+through it.
 
 A tenant the partner sign-in cannot reach (no GDAP relationship, missing consent, a policy
 that wants a fresh sign-in, or another Microsoft cloud) gets a direct sign-in instead: a
@@ -18,25 +17,29 @@ tenant with no account of its own gets none. All of that happens in
 
 Why sign in per client: Microsoft's first-party apps differ per resource (Graph PowerShell,
 Exchange Online PowerShell, Azure PowerShell) and a refresh token belongs to one app, so a
-script that uses Graph and Exchange needs two home sign-ins. With an encrypted disk cache
-later runs are silent.
+script that uses Graph and Exchange needs two home sign-ins. With the encrypted disk cache,
+which is opt-in (``cache = "disk"``), later runs are silent. It is kept in azure-auth's file,
+or the ``cache_path`` setting's; ``cache_reminder_path`` leaves a link to it in plain sight
+(see ``cache_reminder.py``).
 """
 
 from __future__ import annotations
 
 import logging
-import sys
 from collections.abc import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 from time import monotonic
 from typing import Literal, cast
 
 import azure_auth
 import httpx
 from azure_auth import AuthContext, AuthError
+from azure_auth.auth.cache import default_cache_path
 from azure_auth.clouds import Cloud, get_cloud
 from azure_auth.sync import GraphClient
 
+from m365_gdap_runner.cache_reminder import place_reminder
 from m365_gdap_runner.config import ConfigError, Settings
 from m365_gdap_runner.context import CLIENT_KINDS, TenantContext, build_client
 from m365_gdap_runner.tenants import Tenant
@@ -49,28 +52,25 @@ PARTNER_SCOPES = ("DelegatedAdminRelationship.Read.All",)
 
 CACHE_KINDS = ("memory", "disk")
 
-SIGN_IN_KINDS = ("browser", "broker")
-
 # Seconds between progress lines while check_access() checks tenants.
 _PROGRESS_EVERY = 30.0
 
 
-def _use_broker(sign_in: str) -> bool:
-    """Decide whether sign-ins go through the Windows broker.
+def _place_cache_reminder(cache_file: Path, folder: str) -> None:
+    """Put the DELETEME reminder in a folder, pointing at the disk cache's folder.
+
+    A reminder that cannot be placed is reported, and the run goes on without it.
 
     Args:
-        sign_in: The ``sign_in`` setting.
-
-    Returns:
-        True for ``broker`` on Windows. The broker is Windows only, so elsewhere the setting
-        is ignored and the browser signs in.
+        cache_file: The disk cache file.
+        folder: The ``cache_reminder_path`` setting; not empty.
     """
-    if sign_in != "broker":
-        return False
-    if sys.platform != "win32":
-        logger.debug("sign_in is broker, which is Windows only; signing in through the browser")
-        return False
-    return True
+    try:
+        link = place_reminder(cache_file, Path(folder).expanduser())
+    except OSError as exc:
+        logger.warning("Could not put the token cache reminder in %s: %s", folder, exc)
+        return
+    logger.debug("Token cache reminder %s points at %s", link, cache_file.parent)
 
 
 def _time_left(seconds: float) -> str:
@@ -124,18 +124,13 @@ class PartnerSession:
             transport: Optional httpx transport for every client this session builds (tests).
 
         Raises:
-            ConfigError: If ``cache``, ``sign_in`` or ``cloud`` holds a value azure-auth does
-                not know.
+            ConfigError: If ``cache`` or ``cloud`` holds a value azure-auth does not know.
             azure_auth.AuthError: If the partner tenant cannot be looked up, or the disk
                 cache cannot be encrypted on this platform.
         """
         if settings.cache not in CACHE_KINDS:
             raise ConfigError(
                 f"cache must be one of {', '.join(CACHE_KINDS)}, not {settings.cache!r}."
-            )
-        if settings.sign_in not in SIGN_IN_KINDS:
-            raise ConfigError(
-                f"sign_in must be one of {', '.join(SIGN_IN_KINDS)}, not {settings.sign_in!r}."
             )
         tenant: str | azure_auth.Tenant = settings.partner_tenant_id
         if settings.cloud:
@@ -146,7 +141,8 @@ class PartnerSession:
             tenant = _partner_tenant(settings.partner_tenant_id, cloud)
         self._transport = transport
         self._settings = settings
-        self._broker = _use_broker(settings.sign_in)
+        # None keeps the disk cache in azure-auth's default file.
+        self._cache_path = Path(settings.cache_path).expanduser() if settings.cache_path else None
         # How check_access() found each tenant can be reached, by lower-cased tenant ID.
         self._routes: dict[str, AuthContext | Exception] = {}
         self.auth = AuthContext(
@@ -154,8 +150,12 @@ class PartnerSession:
             username=settings.username,
             client_id=settings.client_id or None,
             cache=cast(Literal["memory", "disk"], settings.cache),
-            broker=self._broker,
+            cache_path=self._cache_path,
         )
+        if settings.cache == "disk" and settings.cache_reminder_path:
+            _place_cache_reminder(
+                self._cache_path or default_cache_path(), settings.cache_reminder_path
+            )
 
     @property
     def partner_tenant_id(self) -> str:
@@ -368,7 +368,7 @@ class PartnerSession:
                 username=tenant.username,
                 client_id=self._settings.client_id or None,
                 cache=cast(Literal["memory", "disk"], self._settings.cache),
-                broker=self._broker,
+                cache_path=self._cache_path,
             )
             for kind in clients:
                 with build_client(kind, auth, scopes=scopes, transport=self._transport) as client:
