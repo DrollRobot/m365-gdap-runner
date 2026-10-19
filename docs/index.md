@@ -64,6 +64,11 @@ different Microsoft app), then, before the first `run()`, checks every selected 
 silently through that sign-in. A tenant it cannot reach that way gets a sign-in of its own
 (see [Tenants outside GDAP](#tenants-outside-gdap)).
 
+The check asks for exactly the scopes in `SCOPES`, so a tenant that has not granted one of
+them fails before `run()`. `SCOPES = []` asks for none in particular: Graph gets whatever
+the app holds in the tenant, and only a tenant where it holds nothing fails. That suits a
+script that reads what the app holds, with `ctx.graph.granted_scopes()`.
+
 Sign-ins open the system's default browser. The Windows sign-in window (the broker) is not
 offered: GDAP does not work through it. To use another browser, or another profile of it:
 

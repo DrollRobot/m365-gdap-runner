@@ -14,7 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   GDAP tenants, and runs its `run(ctx)` per tenant with consent checks, error isolation and
   `--jobs` parallelism. `add_arguments()` adds the library's flags to a script's own parser,
   for scripts with flags of their own.
-- Script contract: `run(ctx)`, the Graph `SCOPES` it needs, `CLIENTS` naming which of
+- Script contract: `run(ctx)`, the Graph `SCOPES` it needs (`[]` for none in particular,
+  which gets whatever the app holds in each tenant), `CLIENTS` naming which of
   `ctx.graph`, `ctx.exchange`, `ctx.ipps` and `ctx.arm` it uses (default `graph`), and an
   optional `report(results)`, called once after the last tenant with every tenant's
   `TenantResult`, failed ones included. The library writes no output of its own: `run()`

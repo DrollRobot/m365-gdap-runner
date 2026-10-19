@@ -8,7 +8,9 @@ A script defines ``run(ctx)`` and declares what it uses:
 - ``SCOPES``: the delegated Graph scopes it needs in each customer tenant. Required
   when ``graph`` is in ``CLIENTS``, not allowed otherwise. The runner requests exactly
   these scopes per tenant, so a scope missing consent fails the tenant before
-  ``run()`` starts; ``.default`` would bypass that check and is rejected.
+  ``run()`` starts; ``.default`` would bypass that check and is rejected. An empty list
+  needs no scope in particular: Graph then gets whatever the app holds in the tenant,
+  and only a tenant where it holds nothing fails.
 
 It may also define ``report(results)``, called once after the last tenant with every
 tenant's :class:`~m365_gdap_runner.runner.TenantResult`, failed ones included. The library
@@ -170,10 +172,10 @@ def validate_scopes(value: object, name: str, *, graph: bool = True) -> tuple[st
             allowed otherwise, because they only mean something to Graph.
 
     Returns:
-        The scopes, stripped, as a tuple; empty when *graph* is false.
+        The scopes, stripped, as a tuple; empty when *graph* is false or ``SCOPES`` is empty.
 
     Raises:
-        PayloadInvalid: If ``SCOPES`` is missing or empty, holds a non-string,
+        PayloadInvalid: If ``SCOPES`` is missing or not a list, holds a non-string,
             uses ``.default``, lists a scope MSAL reserves, or is given by a
             script that does not use Graph.
     """
@@ -184,9 +186,10 @@ def validate_scopes(value: object, name: str, *, graph: bool = True) -> tuple[st
                 "Add it, or remove SCOPES."
             )
         return ()
-    if not isinstance(value, list | tuple) or not value:
+    if not isinstance(value, list | tuple):
         raise PayloadInvalid(
-            f"Script {name!r} must define SCOPES, a non-empty list of delegated Graph scopes."
+            f"Script {name!r} must define SCOPES, a list of delegated Graph scopes "
+            "([] for none in particular)."
         )
     scopes: list[str] = []
     for scope in value:
@@ -198,7 +201,7 @@ def validate_scopes(value: object, name: str, *, graph: bool = True) -> tuple[st
         if scope == ".default" or scope.endswith("/.default"):
             raise PayloadInvalid(
                 f"Script {name!r}: SCOPES must not use {scope!r}; list specific scopes so "
-                "consent is checked in each tenant."
+                "consent is checked in each tenant, or use [] for none in particular."
             )
         if scope.lower() in RESERVED_SCOPES:
             raise PayloadInvalid(

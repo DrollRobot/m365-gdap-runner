@@ -71,6 +71,11 @@ def test_script_without_graph_needs_no_scopes() -> None:
     assert (payload.clients, payload.scopes) == (("exchange",), ())
 
 
+def test_empty_scopes_need_none_in_particular() -> None:
+    body = "SCOPES = []\n\ndef run(ctx):\n    return None\n"
+    assert payload_from_module(_module(body), "script").scopes == ()
+
+
 def test_run_with_optional_parameters_is_accepted() -> None:
     body = 'SCOPES = ("User.Read.All",)\n\ndef run(ctx, verbose=False):\n    return None\n'
     assert payload_from_module(_module(body), "script").scopes == ("User.Read.All",)
@@ -84,7 +89,6 @@ def test_run_with_optional_parameters_is_accepted() -> None:
         ('SCOPES = ["User.Read.All"]\ndef run():\n    pass\n', "one positional argument"),
         ('SCOPES = ["User.Read.All"]\ndef run(ctx, other):\n    pass\n', "one positional argument"),
         ("def run(ctx):\n    pass\n", "must define SCOPES"),
-        ("SCOPES = []\ndef run(ctx):\n    pass\n", "must define SCOPES"),
         ('SCOPES = "User.Read.All"\ndef run(ctx):\n    pass\n', "must define SCOPES"),
         ('SCOPES = ["User.Read.All", 1]\ndef run(ctx):\n    pass\n', "non-empty string"),
         ('SCOPES = [" "]\ndef run(ctx):\n    pass\n', "non-empty string"),

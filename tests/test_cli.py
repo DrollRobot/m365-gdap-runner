@@ -472,6 +472,21 @@ def test_exit_2_on_invalid_script_before_sign_in(
 
 
 @pytest.mark.integration
+def test_a_script_with_empty_scopes_gets_whatever_the_app_holds(
+    fake_msal: FakeMsal, tmp_path: Path
+) -> None:
+    body = RECORDER.replace('SCOPES = ["User.Read.All"]', "SCOPES = []")
+    script = _script(tmp_path, body)
+    fake_msal.tenant_errors[TENANT_B] = CONSENT_REQUIRED
+    assert _main(script, "--include", "all") == 1
+    (alpha, beta) = _reported(script)
+    assert (alpha.status, beta.status) == ("ok", "auth_failed")
+    assert {scopes for _, scopes in fake_msal.silent_calls(TENANT_A)} == {
+        ("https://graph.microsoft.com/.default",)
+    }
+
+
+@pytest.mark.integration
 def test_exit_2_on_missing_config(
     fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
