@@ -39,6 +39,8 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.cache_reminder_path == ""
     assert settings.browser_path == ""
     assert settings.browser_args == []
+    assert settings.pw_browser_path == ""
+    assert settings.pw_browser_args == []
     assert settings.browser_timeout == 120.0
     assert settings.jobs == 1
     assert settings.cloud == ""

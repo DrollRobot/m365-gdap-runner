@@ -436,6 +436,7 @@ def test_sync_appends_unknown_tenants_and_fills_blank_clouds(csv_path: Path) -> 
         "m365_cloud": "USGov",
         "m365_username": "",
         "m365_gdap": "TRUE",
+        "m365_pw_url": "",
         "patching": "",
         "pilot": "",
         "cw_company_id": "",
@@ -457,10 +458,10 @@ def test_sync_with_nothing_to_do_changes_nothing_and_looks_nothing_up(tmp_path: 
 
     path = _write(
         tmp_path / "t.csv",
-        f"{M365},m365_username,m365_gdap,g",
-        f"{TENANT_A},Alpha,,Commercial,,,TRUE",  # a blank m365_gdap is left blank
-        f"{TENANT_C},Gamma,,USGov,,,TRUE",
-        ",Acme,,,,,TRUE",
+        f"{M365},m365_username,m365_gdap,m365_pw_url,g",
+        f"{TENANT_A},Alpha,,Commercial,,,,TRUE",  # a blank m365_gdap is left blank
+        f"{TENANT_C},Gamma,,USGov,,,,TRUE",
+        ",Acme,,,,,,TRUE",
     )
     tenant_file = TenantFile.load(path)
     before = [dict(row) for row in tenant_file.rows]
@@ -473,22 +474,23 @@ def test_save_round_trips_other_tools_data_and_appended_rows(csv_path: Path) -> 
     tenant_file = TenantFile.load(csv_path)
     tenant_file.sync([ALPHA, BETA, DELTA], commercial)
     tenant_file.save()
-    # The file predates m365_username and m365_gdap, so they are added after m365_cloud.
+    # The file predates m365_username, m365_gdap and m365_pw_url, so they are added after
+    # m365_cloud.
     assert csv_path.read_text(encoding="utf-8-sig").splitlines() == [
-        f"{M365},m365_username,m365_gdap,patching,pilot,cw_company_id,notes",
-        f"{TENANT_A},Alpha,alpha.example,Commercial,,TRUE,TRUE,FALSE,1001,first one",
-        f"{TENANT_B},beta corp,beta.example,Commercial,,TRUE,TRUE,TRUE,1002,",
-        f"{TENANT_C},Gamma,,Commercial,,,FALSE,,1003,gone from GDAP",
-        ",,,,,,TRUE,TRUE,1004,no M365 tenant",
-        f"{DELTA.tenant_id},Delta,,Commercial,,TRUE,,,,",
+        f"{M365},m365_username,m365_gdap,m365_pw_url,patching,pilot,cw_company_id,notes",
+        f"{TENANT_A},Alpha,alpha.example,Commercial,,TRUE,,TRUE,FALSE,1001,first one",
+        f"{TENANT_B},beta corp,beta.example,Commercial,,TRUE,,TRUE,TRUE,1002,",
+        f"{TENANT_C},Gamma,,Commercial,,,,FALSE,,1003,gone from GDAP",
+        ",,,,,,,TRUE,TRUE,1004,no M365 tenant",
+        f"{DELTA.tenant_id},Delta,,Commercial,,TRUE,,,,,",
     ]
     assert csv_path.read_bytes().startswith(b"\xef\xbb\xbf")  # BOM for spreadsheets
     assert [p.name for p in csv_path.parent.iterdir()] == [csv_path.name]  # no temp file left
 
 
 def test_sync_adds_missing_columns_after_the_last_m365_column(tmp_path: Path) -> None:
-    # The m365_ columns out of order, among another tool's, and without m365_username or
-    # m365_gdap.
+    # The m365_ columns out of order, among another tool's, and without m365_username,
+    # m365_gdap or m365_pw_url.
     path = _write(
         tmp_path / "t.csv",
         "my_name,m365_tenant_name,m365_domain,m365_tenant_id,m365_cloud,exclude",
@@ -497,15 +499,15 @@ def test_sync_adds_missing_columns_after_the_last_m365_column(tmp_path: Path) ->
     tenant_file = TenantFile.load(path)
     report = tenant_file.sync([ALPHA], commercial)
     assert (report.columns_added, report.added, report.changed) == (
-        ["m365_username", "m365_gdap"],
+        ["m365_username", "m365_gdap", "m365_pw_url"],
         [],
         True,
     )
     tenant_file.save()
     assert path.read_text(encoding="utf-8-sig").splitlines() == [
         "my_name,m365_tenant_name,m365_domain,m365_tenant_id,m365_cloud,m365_username,"
-        "m365_gdap,exclude",
-        f"Alpha Inc,Alpha,,{TENANT_A},Commercial,,TRUE,TRUE",
+        "m365_gdap,m365_pw_url,exclude",
+        f"Alpha Inc,Alpha,,{TENANT_A},Commercial,,TRUE,,TRUE",
     ]
 
 
@@ -517,8 +519,8 @@ def test_sync_adds_every_m365_column_at_the_end_of_a_file_without_them(tmp_path:
     tenant_file.save()
     assert path.read_text(encoding="utf-8-sig").splitlines() == [
         f"my_name,pilot,{','.join(OWN_COLUMNS)}",
-        "Acme,TRUE,,,,,,",
-        f",,{TENANT_A},Alpha,,Commercial,,TRUE",
+        "Acme,TRUE,,,,,,,",
+        f",,{TENANT_A},Alpha,,Commercial,,TRUE,",
     ]
 
 
@@ -528,8 +530,8 @@ def test_save_creates_the_file_and_its_directory(tmp_path: Path) -> None:
     tenant_file.sync([ALPHA], commercial)
     tenant_file.save()
     assert path.read_text(encoding="utf-8-sig").splitlines() == [
-        f"{M365},m365_username,m365_gdap",
-        f"{TENANT_A},Alpha,,Commercial,,TRUE",
+        f"{M365},m365_username,m365_gdap,m365_pw_url",
+        f"{TENANT_A},Alpha,,Commercial,,TRUE,",
     ]
 
 
@@ -571,6 +573,39 @@ def test_details_take_the_cloud_username_and_gdap_from_the_row(tmp_path: Path) -
     assert tenant_file.details(BETA, default_cloud="Commercial") == Tenant(
         TENANT_B, "beta corp", "Commercial"
     )
+
+
+def test_details_take_the_password_page_from_the_row(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "t.csv",
+        f"{M365},m365_username,m365_pw_url",
+        f"{TENANT_A},Alpha,,,,",
+        f"{TENANT_C},Gamma,,USGov,admin@gamma.example, HTTPS://passwords.example/gamma ",
+    )
+    tenant_file = TenantFile.load(path)
+    assert tenant_file.details(GAMMA, default_cloud="Commercial").pw_url == (
+        "HTTPS://passwords.example/gamma"
+    )
+    # A blank cell is no password page.
+    assert tenant_file.details(ALPHA, default_cloud="Commercial").pw_url == ""
+
+
+@pytest.mark.parametrize(
+    "pw_url",
+    [r"C:\tools\setup.exe", "file:///C:/tools/setup.exe", "passwords.example/gamma", "https://"],
+    ids=["windows-path", "file-url", "no-scheme", "no-host"],
+)
+def test_a_password_page_that_is_not_a_web_address_is_an_error(tmp_path: Path, pw_url: str) -> None:
+    # Opened the way a web address is, a path would run the program it names.
+    path = _write(
+        tmp_path / "t.csv", f"{M365},m365_pw_url,g", f"{TENANT_C},Gamma,,USGov,{pw_url},TRUE"
+    )
+    tenant_file = TenantFile.load(path)
+    error = "row 2: .* in column 'm365_pw_url' is not a web address"
+    with pytest.raises(TenantFileError, match=error):
+        tenant_file.details(GAMMA, default_cloud="Commercial")
+    with pytest.raises(TenantFileError, match=error):
+        tenant_file.members("g")
 
 
 def test_details_reject_an_unknown_cloud_naming_the_row(tmp_path: Path) -> None:

@@ -691,9 +691,10 @@ def test_list_tenants_creates_the_tenants_file_and_prints_the_tenants(
     assert capsys.readouterr().out.splitlines() == [f"{TENANT_A}\tAlpha", f"{TENANT_B}\tbeta corp"]
     path = tmp_path / "config" / "tenants.csv"
     assert path.read_text(encoding="utf-8-sig").splitlines() == [
-        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,m365_gdap",
-        f"{TENANT_A},Alpha,,Commercial,,TRUE",
-        f"{TENANT_B},beta corp,,Commercial,,TRUE",
+        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,m365_gdap,"
+        "m365_pw_url",
+        f"{TENANT_A},Alpha,,Commercial,,TRUE,",
+        f"{TENANT_B},beta corp,,Commercial,,TRUE,",
     ]
     assert f"Created tenants file {path} with 2 tenant(s)" in caplog.text
     assert fake_msal.interactive_calls == 1
@@ -816,9 +817,9 @@ def test_run_appends_tenants_the_file_lacks_and_warns(
     # m365_gdap is new to the file, so it is TRUE for every GDAP tenant.
     assert path.read_text(encoding="utf-8-sig").splitlines() == [
         "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,m365_gdap,"
-        "pilot,notes",
-        f"{TENANT_A},Alpha,alpha.example,Commercial,,TRUE,TRUE,keep me",
-        f"{TENANT_B},beta corp,,Commercial,,TRUE,,",
+        "m365_pw_url,pilot,notes",
+        f"{TENANT_A},Alpha,alpha.example,Commercial,,TRUE,,TRUE,keep me",
+        f"{TENANT_B},beta corp,,Commercial,,TRUE,,,",
     ]
     assert f"Added 1 tenant(s) to {path}; they are in no group yet: beta corp" in caplog.text
 
@@ -958,10 +959,11 @@ def test_a_gdap_tenant_missing_consent_gets_a_sign_in_of_its_own(
 def test_a_gdap_tenant_marked_false_in_m365_gdap_skips_the_partner_sign_in(
     fake_msal: FakeMsal, tmp_path: Path, recorder: ModuleType
 ) -> None:
-    row = f"{TENANT_B},beta corp,,Commercial,admin@beta.example,FALSE"
+    row = f"{TENANT_B},beta corp,,Commercial,admin@beta.example,FALSE,"
     path = _tenants_csv(
         tmp_path / "tenants.csv",
-        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,m365_gdap",
+        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,m365_gdap,"
+        "m365_pw_url",
         row,
     )
     assert _main(recorder, "--include", "all", "--tenants-file", str(path)) == 0
@@ -973,6 +975,31 @@ def test_a_gdap_tenant_marked_false_in_m365_gdap_skips_the_partner_sign_in(
     assert fake_msal.silent_calls(TENANT_B) == []
     assert fake_msal.interactive_tenants() == [PARTNER_TENANT, TENANT_B]
     assert row in path.read_text(encoding="utf-8-sig").splitlines()
+
+
+@pytest.mark.integration
+@pytest.mark.acceptance
+def test_a_direct_sign_in_opens_the_password_page_in_the_tenants_file(
+    fake_msal: FakeMsal, tmp_path: Path, recorder: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opened: list[str] = []
+
+    def open_page(url: str, *args: Any, **kwargs: Any) -> bool:
+        opened.append(url)
+        return True
+
+    monkeypatch.setattr("webbrowser.open", open_page)
+    path = _tenants_csv(
+        tmp_path / "tenants.csv",
+        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,m365_gdap,"
+        "m365_pw_url",
+        f"{TENANT_A},Alpha,,Commercial,,TRUE,https://passwords.example/alpha",
+        f"{TENANT_B},beta corp,,Commercial,admin@beta.example,FALSE,https://passwords.example/beta",
+    )
+    assert _main(recorder, "--include", "all", "--tenants-file", str(path)) == 0
+    assert [r.status for r in _reported(recorder)] == ["ok", "ok"]
+    # Only beta corp signs in directly; Alpha is reached through the partner sign-in.
+    assert opened == ["https://passwords.example/beta"]
 
 
 @pytest.mark.integration
@@ -1084,10 +1111,11 @@ def test_run_fills_in_blank_clouds_by_discovery(
     )
     assert _main(LICENSED_USERS, "--include", "pilot", "--tenants-file", str(path)) == 0
     assert path.read_text(encoding="utf-8-sig").splitlines() == [
-        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,m365_gdap,pilot",
-        f"{TENANT_A},Alpha,,Commercial,,TRUE,TRUE",
-        f"{TENANT_B},beta corp,,Commercial,,TRUE,FALSE",
-        f"{TENANT_C},Gamma,,Commercial,,,FALSE",
+        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,m365_gdap,"
+        "m365_pw_url,pilot",
+        f"{TENANT_A},Alpha,,Commercial,,TRUE,,TRUE",
+        f"{TENANT_B},beta corp,,Commercial,,TRUE,,FALSE",
+        f"{TENANT_C},Gamma,,Commercial,,,,FALSE",
     ]
     assert f"Filled in the cloud of 3 tenant(s) in {path}: Alpha, beta corp, Gamma" in caplog.text
 
@@ -1106,13 +1134,14 @@ def test_run_adds_the_columns_the_file_lacks(
     )
     assert _main(LICENSED_USERS, "--include", "pilot", "--tenants-file", str(path)) == 0
     assert path.read_text(encoding="utf-8-sig").splitlines() == [
-        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,m365_gdap,pilot",
-        f"{TENANT_A},Alpha,,Commercial,,TRUE,TRUE",
-        f"{TENANT_B},beta corp,,Commercial,,TRUE,FALSE",
+        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,m365_gdap,"
+        "m365_pw_url,pilot",
+        f"{TENANT_A},Alpha,,Commercial,,TRUE,,TRUE",
+        f"{TENANT_B},beta corp,,Commercial,,TRUE,,FALSE",
     ]
     assert (
-        f"Added column(s) m365_domain, m365_cloud, m365_username, m365_gdap to {path}"
-        in caplog.text
+        "Added column(s) m365_domain, m365_cloud, m365_username, m365_gdap, m365_pw_url to "
+        f"{path}" in caplog.text
     )
 
 

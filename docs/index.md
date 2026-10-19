@@ -178,8 +178,8 @@ the column. `--include m365_gdap` runs the tenants the partner sign-in reaches (
 [Tenants outside GDAP](#tenants-outside-gdap)).
 
 The tenants file is a CSV you edit in a spreadsheet, one row per customer. This package owns
-six columns, `m365_tenant_id`, `m365_tenant_name`, `m365_domain`, `m365_cloud`,
-`m365_username` and `m365_gdap`, and reads one more per group a run names:
+seven columns, `m365_tenant_id`, `m365_tenant_name`, `m365_domain`, `m365_cloud`,
+`m365_username`, `m365_gdap` and `m365_pw_url`, and reads one more per group a run names:
 a column holding TRUE or FALSE, where a blank cell counts as FALSE and anything else is an
 error. Every other column is left alone, so the same file can carry what other tools know
 about the same customers on other platforms. Tenants are matched by ID; the name and domain
@@ -187,10 +187,10 @@ columns are there for you. A row with no `m365_tenant_id` is a customer without 
 tenant and is skipped.
 
 ```csv
-m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,m365_gdap,pilot,patching,cw_company_id
-aaaaaaaa-0000-0000-0000-00000000000a,Alpha,alpha.example,Commercial,,TRUE,TRUE,FALSE,1001
-bbbbbbbb-0000-0000-0000-00000000000b,beta corp,beta.example,USGov,admin@beta.us,,TRUE,TRUE,1002
-cccccccc-0000-0000-0000-00000000000c,Gamma,gamma.example,Commercial,admin@gamma.example,FALSE,FALSE,TRUE,1003
+m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,m365_gdap,m365_pw_url,pilot,patching,cw_company_id
+aaaaaaaa-0000-0000-0000-00000000000a,Alpha,alpha.example,Commercial,,TRUE,,TRUE,FALSE,1001
+bbbbbbbb-0000-0000-0000-00000000000b,beta corp,beta.example,USGov,admin@beta.us,,https://passwords.example/beta,TRUE,TRUE,1002
+cccccccc-0000-0000-0000-00000000000c,Gamma,gamma.example,Commercial,admin@gamma.example,FALSE,,FALSE,TRUE,1003
 ```
 
 `m365_cloud` is `Commercial`, `USGov`, `USGovDoD` or `China`. The runner fills the cell in
@@ -198,7 +198,7 @@ itself, by OpenID Connect discovery, when it appends a tenant or finds the cell 
 
 The file is `tenants.csv` in the config directory (`m365-gdap-runner-config path` shows
 where), unless the `tenants_file` setting or `--tenants-file` points elsewhere. Every run
-keeps it current. Any of the six `m365_` columns the file lacks is added after the `m365_`
+keeps it current. Any of the seven `m365_` columns the file lacks is added after the `m365_`
 columns it has (or at the end when it has none), blank, except that `m365_gdap` is TRUE for
 every tenant GDAP lists. A GDAP tenant with no row is appended with its name, its cloud, TRUE
 in `m365_gdap` and every other column blank, and a warning names it. The `m365-gdap-runner` command does that, lists
@@ -223,6 +223,13 @@ rest run.
 
 A tenant whose `m365_username` cell is blank gets no sign-in of its own: it is `auth_failed`,
 with the reason, and no sign-in window opens for it.
+
+`m365_pw_url` is optional: the address of the web page that holds that account's password,
+such as its entry in a password manager. When the tenant's own sign-in opens a window, the
+page opens right before it, once per tenant. It does not open when the sign-in comes from the
+cache. It opens in the system's default browser, or in `pw_browser_path`, started with
+`pw_browser_args`, such as `["--profile-directory=Default"]`; the address is added last.
+Only `http` and `https` addresses are accepted.
 
 The `m365_gdap` column says which tenants the partner sign-in reaches. TRUE, which every
 appended row gets, tries the partner sign-in first. FALSE or blank never tries it: the tenant

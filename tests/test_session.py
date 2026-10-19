@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import webbrowser
 from itertools import count
 from pathlib import Path
 from typing import Any
@@ -529,6 +530,118 @@ def test_the_partner_and_direct_sign_ins_wait_browser_timeout_seconds(
 def test_browser_args_without_a_browser_path_is_a_config_error(fake_msal: FakeMsal) -> None:
     with pytest.raises(ConfigError, match="browser_args needs browser_path"):
         PartnerSession(make_settings(browser_args=["--inprivate"]))
+
+
+# --- the password page -----------------------------------------------------------------
+
+PW_URL = "https://passwords.example/beta"
+BETA_WITH_PW_URL = Tenant(
+    TENANT_B, "beta corp", "Commercial", BETA_ADMIN, gdap=False, pw_url=PW_URL
+)
+
+PwPage = tuple[tuple[str, ...] | None, str, list[str]]
+
+
+@pytest.fixture
+def pw_pages(monkeypatch: pytest.MonkeyPatch, fake_msal: FakeMsal) -> list[PwPage]:
+    """Every password page opened, in order.
+
+    Each is the browser command (None for the system default), the address, and the tenant of
+    every sign-in window opened before it.
+    """
+    opened: list[PwPage] = []
+
+    def default(url: str, *args: Any, **kwargs: Any) -> bool:
+        opened.append((None, url, fake_msal.interactive_tenants()))
+        return True
+
+    def chosen(self: webbrowser.BackgroundBrowser, url: str, *args: Any, **kwargs: Any) -> bool:
+        opened.append(((self.name, *self.args), url, fake_msal.interactive_tenants()))
+        return True
+
+    monkeypatch.setattr("webbrowser.open", default)
+    monkeypatch.setattr("webbrowser.BackgroundBrowser.open", chosen)
+    return opened
+
+
+@pytest.mark.acceptance
+def test_a_direct_sign_in_opens_the_password_page_right_before_its_first_window(
+    fake_msal: FakeMsal, pw_pages: list[PwPage]
+) -> None:
+    session = _signed_in(["graph", "exchange"])
+    list(
+        session.check_access(
+            [BETA_WITH_PW_URL], scopes=["User.Read.All"], clients=["graph", "exchange"]
+        )
+    )
+    # A window per client at the partner tenant, then at beta corp; the page opens once.
+    assert fake_msal.interactive_tenants() == [PARTNER_TENANT, PARTNER_TENANT, TENANT_B, TENANT_B]
+    assert pw_pages == [(None, PW_URL, [PARTNER_TENANT, PARTNER_TENANT])]
+
+
+@pytest.mark.acceptance
+def test_a_direct_sign_in_from_the_cache_opens_no_password_page(
+    fake_msal: FakeMsal, pw_pages: list[PwPage]
+) -> None:
+    # beta corp's own account signed in on an earlier run, so its sign-in opens no window.
+    fake_msal.sign_in(GRAPH_CLI_CLIENT_ID, BETA_ADMIN)
+    session = _signed_in(["graph"])
+    list(session.check_access([BETA_WITH_PW_URL], scopes=["User.Read.All"]))
+    assert fake_msal.interactive_tenants() == [PARTNER_TENANT]
+    assert pw_pages == []
+
+
+def test_a_tenant_the_partner_sign_in_reaches_opens_no_password_page(
+    fake_msal: FakeMsal, pw_pages: list[PwPage]
+) -> None:
+    alpha = Tenant(TENANT_A, "Alpha", "Commercial", "admin@alpha.example", pw_url=PW_URL)
+    session = _signed_in(["graph"])
+    list(session.check_access([alpha], scopes=["User.Read.All"]))
+    assert pw_pages == []
+
+
+@pytest.mark.parametrize(
+    ("overrides", "browser"),
+    [
+        ({}, None),
+        ({"pw_browser_path": "~/chrome"}, (str(Path.home() / "chrome"), "%s")),
+        (
+            {"pw_browser_path": "chrome", "pw_browser_args": ["--profile-directory=Default"]},
+            ("chrome", "--profile-directory=Default", "%s"),
+        ),
+    ],
+    ids=["system-default", "pw-browser-path", "pw-browser-path-and-args"],
+)
+def test_the_password_page_opens_in_the_pw_browser_settings(
+    fake_msal: FakeMsal,
+    pw_pages: list[PwPage],
+    overrides: dict[str, Any],
+    browser: tuple[str, ...] | None,
+) -> None:
+    session = PartnerSession(make_settings(**overrides), transport=TRANSPORT)
+    session.login(["graph"])
+    list(session.check_access([BETA_WITH_PW_URL], scopes=["User.Read.All"]))
+    # "%s" is where webbrowser puts the address.
+    assert [(command, url) for command, url, _ in pw_pages] == [(browser, PW_URL)]
+
+
+def test_a_password_page_that_cannot_be_opened_is_a_warning(
+    fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr("webbrowser.open", lambda url, *args, **kwargs: False)
+    session = _signed_in(["graph"])
+    with caplog.at_level(logging.WARNING, logger="m365_gdap_runner.session"):
+        list(session.check_access([BETA_WITH_PW_URL], scopes=["User.Read.All"]))
+    assert f"Could not open beta corp's password page {PW_URL}" in caplog.text
+    # The sign-in goes on without it.
+    assert fake_msal.interactive_tenants() == [PARTNER_TENANT, TENANT_B]
+    with session.context_for(BETA_WITH_PW_URL, scopes=["User.Read.All"]) as beta:
+        assert beta.auth.username == BETA_ADMIN
+
+
+def test_pw_browser_args_without_a_pw_browser_path_is_a_config_error(fake_msal: FakeMsal) -> None:
+    with pytest.raises(ConfigError, match="pw_browser_args needs pw_browser_path"):
+        PartnerSession(make_settings(pw_browser_args=["--profile-directory=Default"]))
 
 
 # --- the disk cache --------------------------------------------------------------------

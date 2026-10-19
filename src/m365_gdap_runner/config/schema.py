@@ -177,6 +177,20 @@ class Settings:
             "address is added last"
         ),
     )
+    pw_browser_path: str = option(
+        default_value="",
+        help=(
+            "Browser a tenant's m365_pw_url opens in when its direct sign-in opens a window, as "
+            "a path (recommended) or a program on PATH; empty uses the system default"
+        ),
+    )
+    pw_browser_args: list[str] = option(  # noqa: RUF009  (option() returns a dataclass field)
+        default_factory=list,
+        help=(
+            "Arguments for pw_browser_path, such as --profile-directory=Default; the password "
+            "page's address is added last"
+        ),
+    )
     browser_timeout: float = option(
         default_value=120.0,
         help="Seconds a sign-in window waits to be completed before that sign-in fails",

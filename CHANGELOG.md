@@ -41,9 +41,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   included, is appended to that file, or to `m365_gdap_runner_debug.log` in it when it names
   a folder. The terminal shows what it did without it.
 - Tenant selection from a tenants file: a CSV with `m365_tenant_id`, `m365_tenant_name`,
-  `m365_domain`, `m365_cloud`, `m365_username`, `m365_gdap`, and one TRUE/FALSE column per
-  group; other tools may keep their own columns in the same file. Any of the `m365_` columns
-  the file lacks is added, and a blank cloud is filled in by OpenID Connect discovery.
+  `m365_domain`, `m365_cloud`, `m365_username`, `m365_gdap`, `m365_pw_url`, and one TRUE/FALSE
+  column per group; other tools may keep their own columns in the same file. Any of the `m365_`
+  columns the file lacks is added, and a blank cloud is filled in by OpenID Connect discovery.
   `--include` runs a tenant (display name or ID), a group (the tenants marked TRUE in that
   column) or `all` (every GDAP tenant); `--exclude` takes tenants and groups back out, and
   always wins. Both are repeatable, and a run that includes nothing is refused. A name that
@@ -66,6 +66,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   warning. It is also a group, so `--include m365_gdap` runs only the tenants it marks.
   While the silent checks run, a log line every 30 seconds says how many are done and about
   how long the rest will take.
+- Column `m365_pw_url`, optional: the web page that holds a tenant's own account's password.
+  When that tenant's own sign-in opens a window, the page opens right before it, once per
+  tenant, and not at all when the sign-in comes from the cache. Settings `pw_browser_path` and
+  `pw_browser_args` choose the browser it opens in (default: the system default).
 - Script setting `CONTINUE_ON_ERROR`: an error in `run()` stops the run unless the script sets
   it True, as the example reports and the service principal example do.
   `--continue-on-error` and the new `--no-continue-on-error` override it.

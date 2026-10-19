@@ -12,7 +12,9 @@ A tenant the partner sign-in cannot reach (no GDAP relationship, missing consent
 that wants a fresh sign-in, or another Microsoft cloud) gets a direct sign-in instead: a
 context of its own, in its own cloud, as the tenant's own account. So does a tenant whose
 ``m365_gdap`` cell in the tenants file is not TRUE, without trying the partner sign-in. A
-tenant with no account of its own gets none. All of that happens in
+tenant with no account of its own gets none. When a direct sign-in opens a window, the
+tenant's ``m365_pw_url``, if any, opens with it, once, in the ``pw_browser_path`` setting's
+browser, with ``pw_browser_args``, or the system default. All of that happens in
 :meth:`PartnerSession.check_access`, which hands each tenant to the run as soon as its way in
 is settled and opens every sign-in window itself, one at a time, so the tenants' ``run()``
 calls never open one.
@@ -28,8 +30,9 @@ or the ``cache_path`` setting's; ``cache_reminder_path`` leaves a link to it in 
 from __future__ import annotations
 
 import logging
+import webbrowser
 from collections import deque
-from collections.abc import Generator, Iterable, Sequence
+from collections.abc import Callable, Generator, Iterable, Sequence
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 from time import monotonic
@@ -76,24 +79,48 @@ def _place_cache_reminder(cache_file: Path, folder: str) -> None:
     logger.debug("Token cache reminder %s points at %s", link, cache_file.parent)
 
 
-def _browser(path: str, args: Sequence[str]) -> list[str] | None:
-    """Build azure-auth's ``browser`` argument from the browser settings.
+def _browser(path: str, args: Sequence[str], *, prefix: str = "") -> list[str] | None:
+    """Build a browser command from a pair of browser settings.
 
     Args:
-        path: The ``browser_path`` setting: a path, or a program on ``PATH``.
-        args: The ``browser_args`` setting.
+        path: The ``browser_path`` setting, or ``pw_browser_path``: a path, or a program on
+            ``PATH``.
+        args: The matching ``browser_args`` setting.
+        prefix: ``pw_`` for the password page's settings, which the error message names.
 
     Returns:
         The program followed by its arguments, or None for the system default.
 
     Raises:
-        ConfigError: If ``browser_args`` is set without ``browser_path``.
+        ConfigError: If the args setting is set without the path setting.
     """
     if not path:
         if args:
-            raise ConfigError("browser_args needs browser_path, the browser to pass them to.")
+            raise ConfigError(
+                f"{prefix}browser_args needs {prefix}browser_path, the browser to pass them to."
+            )
         return None
     return [str(Path(path).expanduser()), *args]
+
+
+def _open_pw_page(tenant: Tenant, browser: Sequence[str] | None) -> None:
+    """Open a tenant's password page, for the sign-in window about to open.
+
+    A page that cannot be opened is reported, and the sign-in goes on without it.
+
+    Args:
+        tenant: The tenant, with ``pw_url`` filled in.
+        browser: The ``pw_browser_path`` program followed by ``pw_browser_args``, or None for
+            the system default.
+    """
+    logger.debug("Opening %s's password page %s", tenant.display_name, tenant.pw_url)
+    if browser is None:
+        opened = webbrowser.open(tenant.pw_url)
+    else:
+        # "%s" is where webbrowser puts the address.
+        opened = webbrowser.BackgroundBrowser([*browser, "%s"]).open(tenant.pw_url)
+    if not opened:
+        logger.warning("Could not open %s's password page %s", tenant.display_name, tenant.pw_url)
 
 
 def _time_left(seconds: float) -> str:
@@ -148,8 +175,8 @@ class PartnerSession:
 
         Raises:
             ConfigError: If ``cache`` or ``cloud`` holds a value azure-auth does not know,
-                ``browser_args`` is set without ``browser_path``, or ``browser_timeout`` is
-                not more than 0.
+                ``browser_args`` is set without ``browser_path``, ``pw_browser_args`` without
+                ``pw_browser_path``, or ``browser_timeout`` is not more than 0.
             azure_auth.AuthError: If the partner tenant cannot be looked up, or the disk
                 cache cannot be encrypted on this platform.
         """
@@ -173,6 +200,9 @@ class PartnerSession:
         # None keeps the disk cache in azure-auth's default file.
         self._cache_path = Path(settings.cache_path).expanduser() if settings.cache_path else None
         self._browser = _browser(settings.browser_path, settings.browser_args)
+        self._pw_browser = _browser(
+            settings.pw_browser_path, settings.pw_browser_args, prefix="pw_"
+        )
         # How check_access() found each tenant can be reached, by lower-cased tenant ID. It
         # writes and context_for() reads, on different threads, but never for the same tenant
         # at once: check_access() hands a tenant out only after writing its route.
@@ -473,6 +503,7 @@ class PartnerSession:
                 cache_path=self._cache_path,
                 browser_timeout=self._settings.browser_timeout,
                 browser=self._browser,
+                before_browser_opens=self._pw_page_opener(tenant),
             )
             for kind in clients:
                 with build_client(kind, auth, scopes=scopes, transport=self._transport) as client:
@@ -483,6 +514,29 @@ class PartnerSession:
             )
             return exc
         return auth
+
+    def _pw_page_opener(self, tenant: Tenant) -> Callable[[], None] | None:
+        """Build what opens a tenant's password page with its first sign-in window.
+
+        Args:
+            tenant: The tenant, about to sign in directly.
+
+        Returns:
+            A function for azure-auth's ``before_browser_opens``, which opens the page the
+            first time a window opens and does nothing after, so a script with several clients
+            opens it once; or None when the tenant has no ``pw_url``.
+        """
+        if not tenant.pw_url:
+            return None
+        opened = False
+
+        def open_once() -> None:
+            nonlocal opened
+            if not opened:
+                opened = True
+                _open_pw_page(tenant, self._pw_browser)
+
+        return open_once
 
     def context_for(
         self, tenant: Tenant, *, scopes: Sequence[str] = (), clients: Sequence[str] = ("graph",)

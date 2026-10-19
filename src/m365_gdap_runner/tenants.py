@@ -3,8 +3,8 @@
 Graph says which customer tenants have a GDAP relationship (see ``session.py``). The tenants
 file says which tenants belong to which group: a CSV edited in a spreadsheet, one row per
 customer, with the columns ``m365_tenant_id``, ``m365_tenant_name``, ``m365_domain``,
-``m365_cloud``, ``m365_username`` and ``m365_gdap``, and one column per group holding TRUE
-or FALSE. ``--include NAME`` runs the tenants marked TRUE in column ``NAME``, and
+``m365_cloud``, ``m365_username``, ``m365_gdap`` and ``m365_pw_url``, and one column per group
+holding TRUE or FALSE. ``--include NAME`` runs the tenants marked TRUE in column ``NAME``, and
 ``--exclude NAME`` leaves them out (:func:`select`).
 
 The file may be shared with tools that describe the same customers on other platforms, so
@@ -17,7 +17,8 @@ file. A column the file lacks is added, a GDAP tenant with no row is appended, a
 cloud is filled in by OpenID Connect discovery (:meth:`TenantFile.sync`). A row whose tenant
 has no GDAP relationship, or lives in another Microsoft cloud, can still be selected: the
 runner signs in to it directly, as the account in ``m365_username``. A blank cell means no
-direct sign-in.
+direct sign-in. ``m365_pw_url``, when filled in, is the web page holding that account's
+password, which opens with the direct sign-in's window.
 
 ``m365_gdap`` says which tenants the partner sign-in reaches, and is a group like any other,
 so ``--include m365_gdap`` runs only those. TRUE tries the partner sign-in first. FALSE or
@@ -37,6 +38,7 @@ import tempfile
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from azure_auth.clouds import CLOUDS, get_cloud
 
@@ -52,6 +54,7 @@ DOMAIN_COLUMN = "m365_domain"
 CLOUD_COLUMN = "m365_cloud"
 USERNAME_COLUMN = "m365_username"
 GDAP_COLUMN = "m365_gdap"
+PW_URL_COLUMN = "m365_pw_url"
 OWN_COLUMNS = (
     ID_COLUMN,
     NAME_COLUMN,
@@ -59,7 +62,12 @@ OWN_COLUMNS = (
     CLOUD_COLUMN,
     USERNAME_COLUMN,
     GDAP_COLUMN,
+    PW_URL_COLUMN,
 )
+
+# Schemes an ``m365_pw_url`` may use. Anything else, such as a file path, is refused: opening
+# it the way a web address is opened would run it.
+PW_URL_SCHEMES = frozenset({"http", "https"})
 
 # File name in the config directory when the ``tenants_file`` setting is empty.
 TENANTS_FILE_NAME = "tenants.csv"
@@ -94,6 +102,8 @@ class Tenant:
             for no direct sign-in.
         gdap: False when the tenants file's ``m365_gdap`` cell is not TRUE, so the partner
             sign-in is never tried.
+        pw_url: The web page holding *username*'s password, opened with the direct sign-in's
+            window; empty for none.
     """
 
     tenant_id: str
@@ -101,6 +111,7 @@ class Tenant:
     cloud: str = ""
     username: str = ""
     gdap: bool = True
+    pw_url: str = ""
 
 
 @dataclass(frozen=True)
@@ -114,6 +125,7 @@ class TenantRow:
         username: The ``m365_username`` cell, or empty when blank or the column is absent.
         gdap: True when the ``m365_gdap`` cell is TRUE; False when it is FALSE, blank, or the
             column is absent.
+        pw_url: The ``m365_pw_url`` cell, or empty when blank or the column is absent.
     """
 
     tenant_id: str
@@ -121,6 +133,7 @@ class TenantRow:
     cloud: str
     username: str = ""
     gdap: bool = False
+    pw_url: str = ""
 
 
 @dataclass(frozen=True)
@@ -316,8 +329,9 @@ class TenantFile:
 
         Raises:
             TenantFileError: If there is no such column, a cell in it is not TRUE, FALSE or
-                blank, or a marked row's ``m365_cloud`` names no known cloud or its
-                ``m365_gdap`` is not TRUE, FALSE or blank.
+                blank, or a marked row's ``m365_cloud`` names no known cloud, its
+                ``m365_gdap`` is not TRUE, FALSE or blank, or its ``m365_pw_url`` is not a web
+                address.
         """
         column = self._group_column(group)
         chosen: list[TenantRow] = []
@@ -344,12 +358,13 @@ class TenantFile:
             number: The row's number in the spreadsheet, for error messages.
 
         Returns:
-            The row's tenant ID, display name, cloud, username and ``m365_gdap``, stripped;
-            the cloud spelled as azure-auth names it.
+            The row's tenant ID, display name, cloud, username, ``m365_gdap`` and
+            ``m365_pw_url``, stripped; the cloud spelled as azure-auth names it.
 
         Raises:
-            TenantFileError: If ``m365_cloud`` is filled but names no known cloud, or
-                ``m365_gdap`` is not TRUE, FALSE or blank.
+            TenantFileError: If ``m365_cloud`` is filled but names no known cloud,
+                ``m365_gdap`` is not TRUE, FALSE or blank, or ``m365_pw_url`` is filled but is
+                not an http or https address.
         """
         cell = row.get(CLOUD_COLUMN, "").strip()
         cloud = ""
@@ -368,12 +383,20 @@ class TenantFile:
                 f"{self.path} row {number}: {gdap!r} in column {GDAP_COLUMN!r} is not TRUE, "
                 "FALSE or blank."
             )
+        pw_url = row.get(PW_URL_COLUMN, "").strip()
+        address = urlsplit(pw_url)
+        if pw_url and (address.scheme.lower() not in PW_URL_SCHEMES or not address.netloc):
+            raise TenantFileError(
+                f"{self.path} row {number}: {pw_url!r} in column {PW_URL_COLUMN!r} is not a web "
+                "address. Use an http or https address, or blank."
+            )
         return TenantRow(
             row.get(ID_COLUMN, "").strip(),
             row.get(NAME_COLUMN, "").strip(),
             cloud,
             row.get(USERNAME_COLUMN, "").strip(),
             gdap=gdap.strip().casefold() in TRUE_VALUES,
+            pw_url=pw_url,
         )
 
     def extra_tenants(self, gdap: Sequence[Tenant]) -> list[Tenant]:
@@ -395,7 +418,7 @@ class TenantFile:
         return extra
 
     def details(self, tenant: Tenant, *, default_cloud: str) -> Tenant:
-        """Return *tenant* with the cloud, sign-in account and ``m365_gdap`` its row gives.
+        """Return *tenant* with the cloud, sign-in details and ``m365_gdap`` its row gives.
 
         Args:
             tenant: A selected tenant.
@@ -405,8 +428,9 @@ class TenantFile:
             The tenant, with ``cloud`` always filled in.
 
         Raises:
-            TenantFileError: If the row's ``m365_cloud`` names no known cloud, or its
-                ``m365_gdap`` is not TRUE, FALSE or blank.
+            TenantFileError: If the row's ``m365_cloud`` names no known cloud, its
+                ``m365_gdap`` is not TRUE, FALSE or blank, or its ``m365_pw_url`` is not a web
+                address.
         """
         key = tenant.tenant_id.lower()
         for number, row in enumerate(self.rows, start=2):
@@ -417,6 +441,7 @@ class TenantFile:
                     cloud=found.cloud or default_cloud,
                     username=found.username,
                     gdap=found.gdap,
+                    pw_url=found.pw_url,
                 )
         return replace(tenant, cloud=default_cloud)
 
