@@ -35,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `browser_args`, the arguments it is started with, such as a profile.
 - Setting `browser_timeout`: the seconds a sign-in window waits to be completed before that
   sign-in fails (default 120).
+- Ctrl+C during a tenant's own sign-in, then Enter, skips that tenant without waiting for
+  `browser_timeout`: it is `auth_failed` and the run goes on. Ctrl+C twice stops the run.
 - Setting `jobs`: how many tenants a run works on at once (default 1). `--jobs` overrides it
   for one run.
 - Setting `debug_log_path`, for development: every log record, debug and library ones

@@ -14,7 +14,8 @@ context of its own, in its own cloud, as the tenant's own account. So does a ten
 ``m365_gdap`` cell in the tenants file is not TRUE, without trying the partner sign-in. A
 tenant with no account of its own gets none. When a direct sign-in opens a window, the
 tenant's ``m365_pw_url``, if any, opens with it, once, in the ``pw_browser_path`` setting's
-browser, with ``pw_browser_args``, or the system default. All of that happens in
+browser, with ``pw_browser_args``, or the system default. Ctrl+C during a direct sign-in asks
+whether to skip that tenant or stop the run. All of that happens in
 :meth:`PartnerSession.check_access`, which hands each tenant to the run as soon as its way in
 is settled and opens every sign-in window itself, one at a time, so the tenants' ``run()``
 calls never open one.
@@ -30,6 +31,7 @@ or the ``cache_path`` setting's; ``cache_reminder_path`` leaves a link to it in 
 from __future__ import annotations
 
 import logging
+import sys
 import webbrowser
 from collections import deque
 from collections.abc import Callable, Generator, Iterable, Sequence
@@ -121,6 +123,31 @@ def _open_pw_page(tenant: Tenant, browser: Sequence[str] | None) -> None:
         opened = webbrowser.BackgroundBrowser([*browser, "%s"]).open(tenant.pw_url)
     if not opened:
         logger.warning("Could not open %s's password page %s", tenant.display_name, tenant.pw_url)
+
+
+def _ask_to_skip(tenant: Tenant) -> None:
+    """Ask, after Ctrl+C during a tenant's direct sign-in, whether to skip it or stop the run.
+
+    Enter skips the tenant. The question goes to stderr, with the logs, since stdout is the
+    script's.
+
+    Args:
+        tenant: The tenant whose sign-in was stopped.
+
+    Raises:
+        KeyboardInterrupt: On Ctrl+C at the question, or when nobody can answer it (stdin is
+            closed), to stop the run.
+    """
+    print(
+        f"Stopped the sign-in to {tenant.display_name}. Press Enter to skip it, "
+        "or Ctrl+C to stop the run.",
+        file=sys.stderr,
+        flush=True,
+    )
+    try:
+        input()
+    except EOFError:
+        raise KeyboardInterrupt from None
 
 
 def _time_left(seconds: float) -> str:
@@ -323,8 +350,10 @@ class PartnerSession:
         checked first, then each one whose check fails. Before each one, every tenant whose
         check has passed is handed out, so a sign-in window holds up no tenant that is ready.
         A log line every 30 seconds says how many checks are done and about how long the rest
-        will take. Stopping the iteration (``close()``) cancels the checks not yet started and
-        opens no more sign-in windows.
+        will take. Ctrl+C during a direct sign-in asks whether to skip that tenant, which
+        leaves it unreachable, or stop the run, which raises KeyboardInterrupt from here.
+        Stopping the iteration (``close()``) cancels the checks not yet started and opens no
+        more sign-in windows.
 
         :meth:`context_for` then hands out what was found, and raises the reason for a tenant
         that could not be reached.
@@ -485,6 +514,9 @@ class PartnerSession:
     ) -> AuthContext | Exception:
         """Sign in to a tenant on its own, as its own account, once per client the script uses.
 
+        Ctrl+C while it waits asks whether to skip the tenant or stop the run
+        (:func:`_ask_to_skip`).
+
         Args:
             tenant: The tenant, with its cloud and username filled in.
             scopes: The script's Graph scopes.
@@ -492,6 +524,9 @@ class PartnerSession:
 
         Returns:
             The tenant's own context, signed in to every client, else what went wrong.
+
+        Raises:
+            KeyboardInterrupt: When the person chooses to stop the run.
         """
         try:
             cloud = get_cloud(tenant.cloud or self.cloud_name)
@@ -508,6 +543,9 @@ class PartnerSession:
             for kind in clients:
                 with build_client(kind, auth, scopes=scopes, transport=self._transport) as client:
                     client.login()
+        except KeyboardInterrupt:
+            _ask_to_skip(tenant)
+            return AuthError(f"The sign-in to {tenant.display_name} was skipped with Ctrl+C.")
         except Exception as exc:
             logger.warning(
                 "Could not sign in to %s as %s: %s", tenant.display_name, tenant.username, exc

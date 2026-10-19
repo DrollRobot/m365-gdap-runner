@@ -161,6 +161,8 @@ class FakeApp:
         refused = self.module.interactive_errors.get(self.tenant_id.lower())
         if refused is not None:
             return dict(refused)
+        if self.tenant_id.lower() in self.module.interactive_interrupts:
+            raise KeyboardInterrupt
         # The person signs in as the account the page was pre-filled with.
         username = kwargs.get("login_hint") or USER
         self.module.sign_in(self.client_id, username)
@@ -181,6 +183,7 @@ class FakeMsal:
             account's silent requests in that tenant return, ahead of ``tenant_errors``.
         interactive_result: When set, what every interactive sign-in returns (a failure).
         interactive_errors: Tenant id to the MSAL error result its interactive sign-ins return.
+        interactive_interrupts: Tenant ids whose interactive sign-ins end in Ctrl+C.
         granted: Tenant id to the scopes it has granted, space-separated, which its tokens
             carry as their ``scp`` claim. A tenant not in it gets tokens with none.
         accounts: Cached accounts, shared by every application.
@@ -193,6 +196,7 @@ class FakeMsal:
     account_errors: dict[tuple[str, str], dict[str, Any]] = field(default_factory=dict)
     interactive_result: dict[str, Any] | None = None
     interactive_errors: dict[str, dict[str, Any]] = field(default_factory=dict)
+    interactive_interrupts: set[str] = field(default_factory=set)
     granted: dict[str, str] = field(default_factory=dict)
     accounts: list[dict[str, Any]] = field(default_factory=list)
     signed_in: set[tuple[str, str]] = field(default_factory=set)

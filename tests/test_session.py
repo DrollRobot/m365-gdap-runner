@@ -367,6 +367,42 @@ def test_a_failed_direct_sign_in_is_what_context_for_raises(fake_msal: FakeMsal)
         session.context_for(GAMMA_GOV, scopes=["User.Read.All"])
 
 
+@pytest.mark.acceptance
+def test_ctrl_c_then_enter_during_a_direct_sign_in_skips_that_tenant(
+    fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake_msal.interactive_interrupts.add(TENANT_B)
+    monkeypatch.setattr("builtins.input", lambda: "")
+    beta = Tenant(TENANT_B, "beta corp", "Commercial", BETA_ADMIN, gdap=False)
+    session = _signed_in(["graph"])
+    assert list(session.check_access([beta, GAMMA_GOV], scopes=["User.Read.All"])) == [
+        beta,
+        GAMMA_GOV,
+    ]
+    assert "Stopped the sign-in to beta corp. Press Enter to skip it" in capsys.readouterr().err
+    with pytest.raises(AuthError, match=r"sign-in to beta corp was skipped with Ctrl\+C"):
+        session.context_for(beta, scopes=["User.Read.All"])
+    # Gamma's sign-in still opened, after beta corp's.
+    assert fake_msal.interactive_tenants() == [PARTNER_TENANT, TENANT_B, TENANT_C]
+
+
+@pytest.mark.parametrize("answer", [KeyboardInterrupt, EOFError], ids=["ctrl-c", "stdin-closed"])
+def test_ctrl_c_during_a_direct_sign_in_stops_the_run_unless_enter_skips_it(
+    fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, answer: type[BaseException]
+) -> None:
+    def ask() -> str:
+        raise answer
+
+    fake_msal.interactive_interrupts.add(TENANT_B)
+    monkeypatch.setattr("builtins.input", ask)
+    beta = Tenant(TENANT_B, "beta corp", "Commercial", BETA_ADMIN, gdap=False)
+    session = _signed_in(["graph"])
+    with pytest.raises(KeyboardInterrupt):
+        list(session.check_access([beta, GAMMA_GOV], scopes=["User.Read.All"]))
+    # No sign-in window opened after beta corp's.
+    assert fake_msal.interactive_tenants() == [PARTNER_TENANT, TENANT_B]
+
+
 def test_check_access_hands_out_every_tenant_once(fake_msal: FakeMsal) -> None:
     fake_msal.tenant_errors[TENANT_B] = CONSENT_REQUIRED
     blank_gamma = Tenant(TENANT_C, "Gamma", "USGov")

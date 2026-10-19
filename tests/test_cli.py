@@ -1076,6 +1076,21 @@ def test_a_failed_direct_sign_in_fails_that_tenant_only(
 
 
 @pytest.mark.integration
+@pytest.mark.acceptance
+def test_ctrl_c_then_enter_during_a_direct_sign_in_skips_that_tenant_only(
+    fake_msal: FakeMsal, tmp_path: Path, recorder: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_msal.interactive_interrupts.add(TENANT_C)
+    monkeypatch.setattr("builtins.input", lambda: "")
+    path = _gamma_csv(tmp_path)
+    assert _main(recorder, "--include", "pilot", "--tenants-file", str(path)) == 1
+    assert [(r.status, r.error) for r in _reported(recorder)] == [
+        ("ok", None),
+        ("auth_failed", "The sign-in to Gamma was skipped with Ctrl+C."),
+    ]
+
+
+@pytest.mark.integration
 def test_all_runs_gdap_tenants_only(
     fake_msal: FakeMsal, tmp_path: Path, recorder: ModuleType
 ) -> None:

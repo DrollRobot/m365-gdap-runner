@@ -80,6 +80,9 @@ A sign-in window waits `browser_timeout` seconds (default 120) to be completed. 
 the sign-in fails: the partner sign-in ends the run, and a tenant's own leaves that tenant
 `auth_failed`.
 
+To give up on a tenant's own sign-in without waiting, press Ctrl+C, then Enter: that tenant
+is `auth_failed` and the run goes on. Ctrl+C twice stops the run.
+
 ## Keeping sign-ins between runs
 
 Sign-ins are kept in memory and end with the run. To keep them, opt in to the disk cache:
@@ -218,8 +221,8 @@ cloud, gets a sign-in of its own, in its own cloud, as the account in its `m365_
 cell: one sign-in per client in `CLIENTS`. Sign-in windows open one at a time, as soon as a
 tenant needs one, while the other checks go on. Each tenant's `run()` starts as soon as its
 access is settled, and never opens a sign-in window. With `--cache disk`, later runs are
-silent. A sign-in that fails, is cancelled or times out leaves that tenant `auth_failed`; the
-rest run.
+silent. A sign-in that fails, is cancelled, times out or is skipped with Ctrl+C then Enter
+leaves that tenant `auth_failed`; the rest run.
 
 A tenant whose `m365_username` cell is blank gets no sign-in of its own: it is `auth_failed`,
 with the reason, and no sign-in window opens for it.
