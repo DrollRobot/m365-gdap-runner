@@ -40,6 +40,7 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.browser_path == ""
     assert settings.browser_args == []
     assert settings.browser_timeout == 120.0
+    assert settings.jobs == 1
     assert settings.cloud == ""
     assert settings.tenants_file == ""
     assert settings.debug_log_path == ""
@@ -60,10 +61,11 @@ def test_env_vars_override_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(ENV_PREFIX + "CLIENT_ID", "custom-app")
     monkeypatch.setenv(ENV_PREFIX + "CACHE", "disk")
     monkeypatch.setenv(ENV_PREFIX + "CLOUD", "USGov")
+    monkeypatch.setenv(ENV_PREFIX + "JOBS", "8")
     monkeypatch.setenv(ENV_PREFIX + "BROWSER_TIMEOUT", "90")
     settings = load_settings()
     assert (settings.client_id, settings.cache, settings.cloud) == ("custom-app", "disk", "USGov")
-    assert settings.browser_timeout == 90.0
+    assert (settings.jobs, settings.browser_timeout) == (8, 90.0)
 
 
 def test_overrides_beat_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:

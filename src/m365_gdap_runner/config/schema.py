@@ -181,6 +181,10 @@ class Settings:
         default_value=120.0,
         help="Seconds a sign-in window waits to be completed before that sign-in fails",
     )
+    jobs: int = option(
+        default_value=1,
+        help="Tenants a run works on at once, unless --jobs says otherwise",
+    )
     cloud: str = option(
         default_value="",
         help=(

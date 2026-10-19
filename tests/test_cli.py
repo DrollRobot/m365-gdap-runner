@@ -15,6 +15,7 @@ import textwrap
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import httpx
 import pytest
@@ -22,7 +23,8 @@ import pytest
 from m365_gdap_runner import cli
 from m365_gdap_runner.config.paths import CONFIG_DIR_ENV
 from m365_gdap_runner.config.schema import ENV_PREFIX
-from m365_gdap_runner.runner import TenantResult
+from m365_gdap_runner.runner import TenantResult, run_payload
+from m365_gdap_runner.session import PartnerSession
 from m365_gdap_runner.tenants import TenantFile
 from tests._gdap_fakes import (
     CONSENT_REQUIRED,
@@ -117,7 +119,7 @@ def _tenant_ids(script: ModuleType) -> list[str]:
 @pytest.mark.unit
 def test_add_arguments_defaults() -> None:
     args = _args("--include", "all")
-    assert (args.jobs, args.continue_on_error, args.grant_when_possible) == (1, None, None)
+    assert (args.jobs, args.continue_on_error, args.grant_when_possible) == (None, None, None)
     assert (args.include, args.exclude) == (["all"], None)
     assert (args.partner_tenant_id, args.username, args.client_id, args.cache, args.cloud) == (
         None,
@@ -228,6 +230,8 @@ def test_settings_flags_override_config() -> None:
         "USGov",
         "--tenants-file",
         "C:/msp/tenants.csv",
+        "--jobs",
+        "3",
         "--include",
         "all",
     )
@@ -239,6 +243,7 @@ def test_settings_flags_override_config() -> None:
         settings.cache,
         settings.cloud,
         settings.tenants_file,
+        settings.jobs,
     ) == (
         "other.example",
         "someone@other.example",
@@ -246,6 +251,7 @@ def test_settings_flags_override_config() -> None:
         "disk",
         "USGov",
         "C:/msp/tenants.csv",
+        3,
     )
 
 
@@ -600,6 +606,51 @@ def test_an_error_in_run_stops_the_run_unless_the_script_or_a_flag_says_go_on(
     script = _script(tmp_path, FAILS_IN_ALPHA + "\n    " + setting + "\n")
     assert _main(script, "--include", "all", *flags) == 1
     assert [r.status for r in _reported(script)] == ["error", beta]
+
+
+@pytest.mark.integration
+@pytest.mark.acceptance
+@pytest.mark.parametrize(
+    ("env", "flags", "jobs"),
+    [("", [], 1), ("3", [], 3), ("3", ["--jobs", "2"], 2)],
+    ids=["default", "setting", "flag-over-setting"],
+)
+def test_jobs_come_from_the_setting_or_the_flag(
+    fake_msal: FakeMsal,
+    monkeypatch: pytest.MonkeyPatch,
+    recorder: ModuleType,
+    env: str,
+    flags: list[str],
+    jobs: int,
+) -> None:
+    if env:
+        monkeypatch.setenv(ENV_PREFIX + "JOBS", env)
+    asked: dict[str, int] = {}
+    check_access = PartnerSession.check_access
+
+    def checking(self: PartnerSession, *args: Any, **kwargs: Any) -> Any:
+        asked["checks"] = kwargs["jobs"]
+        return check_access(self, *args, **kwargs)
+
+    def running(*args: Any, **kwargs: Any) -> Any:
+        asked["runs"] = kwargs["jobs"]
+        return run_payload(*args, **kwargs)
+
+    monkeypatch.setattr(PartnerSession, "check_access", checking)
+    monkeypatch.setattr("m365_gdap_runner.cli.run_payload", running)
+    assert _main(recorder, "--include", "all", *flags) == 0
+    # The silent checks and the tenants' run() both work on that many at once.
+    assert asked == {"checks": jobs, "runs": jobs}
+
+
+@pytest.mark.integration
+def test_exit_2_when_the_jobs_setting_is_below_1(
+    fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv(ENV_PREFIX + "JOBS", "0")
+    assert _main(LICENSED_USERS, "--include", "all") == 2
+    assert "jobs must be at least 1, not 0." in caplog.text
+    assert fake_msal.interactive_calls == 0
 
 
 @pytest.mark.integration

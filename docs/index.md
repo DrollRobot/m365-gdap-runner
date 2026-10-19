@@ -122,6 +122,12 @@ going. `--continue-on-error` and `--no-continue-on-error` override the script.
 
 A tenant that could not be reached is `auth_failed` and never stops the run.
 
+## Tenants at once
+
+A run works on one tenant at a time. The `jobs` setting changes that, and `--jobs` changes
+it for one run; the silent checks before each `run()` use the same number. 5-8 suits
+read-only reports; keep 1 for scripts that write unless they are idempotent.
+
 ## Granting missing scopes
 
 A tenant whose grant lacks some of the script's `SCOPES` fails the check before the run. A

@@ -26,9 +26,9 @@ the columns and GDAP tenants the file lacks. The ``m365-gdap-runner`` command
 (:func:`list_tenants`) does only that, and prints the list.
 
 Configuration comes from the config system (see ``src/m365_gdap_runner/config/``);
-``--partner-tenant-id``, ``--username``, ``--client-id``, ``--cache``, ``--cloud`` and
-``--tenants-file`` override it. Progress and the summary go to stderr; stdout is the
-script's. The ``debug_log_path`` setting also appends every log record to a file.
+``--partner-tenant-id``, ``--username``, ``--client-id``, ``--cache``, ``--cloud``,
+``--tenants-file`` and ``--jobs`` override it. Progress and the summary go to stderr; stdout
+is the script's. The ``debug_log_path`` setting also appends every log record to a file.
 
 Exit codes: 0 all tenants ok; 1 any tenant not ok; 2 usage, configuration, script, sign-in,
 enumeration, tenants-file or tenant-selection error, or ``report()`` failed; 130 interrupted.
@@ -228,11 +228,11 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     run.add_argument(
         "--jobs",
         type=_positive_int,
-        default=1,
+        default=None,
         metavar="N",
         help=(
-            "Tenants to run concurrently (default: 1). 5-8 suits read-only reports; "
-            "keep 1 for scripts that write unless they are idempotent."
+            "Tenants to work on at once (default: the jobs setting, else 1). 5-8 suits "
+            "read-only reports; keep 1 for scripts that write unless they are idempotent."
         ),
     )
     _add_settings_arguments(parser)
@@ -257,6 +257,9 @@ def settings_from_args(args: argparse.Namespace) -> Settings:
             overrides[name] = value
     if args.cache is not None:
         overrides["cache"] = args.cache
+    # add_arguments() adds --jobs; the m365-gdap-runner command, which runs nothing, does not.
+    if getattr(args, "jobs", None) is not None:
+        overrides["jobs"] = args.jobs
     return load_settings(profile=args.profile, overrides=overrides)
 
 
@@ -542,6 +545,8 @@ def _run(
         payload = payload_from_module(module, _script_name(module))
         settings = settings_from_args(args)
         _start_debug_log(settings)
+        if settings.jobs < 1:
+            raise ConfigError(f"jobs must be at least 1, not {settings.jobs!r}.")
         session = PartnerSession(settings, transport=transport)
         session.login(payload.clients)
         tenants = session.list_tenants()
@@ -556,7 +561,7 @@ def _run(
         selected,
         scopes=payload.scopes,
         clients=payload.clients,
-        jobs=args.jobs,
+        jobs=settings.jobs,
         grant_when_possible=(
             payload.grant_when_possible
             if args.grant_when_possible is None
@@ -575,7 +580,7 @@ def _run(
                 if args.continue_on_error is None
                 else args.continue_on_error
             ),
-            jobs=args.jobs,
+            jobs=settings.jobs,
         )
     except RunInterrupted as exc:
         results = exc.results
