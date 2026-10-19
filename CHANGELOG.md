@@ -33,6 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forgotten.
 - Settings `browser_path`, the browser sign-ins open in place of the system default, and
   `browser_args`, the arguments it is started with, such as a profile.
+- Setting `browser_timeout`: the seconds a sign-in window waits to be completed before that
+  sign-in fails (default 120).
 - Setting `debug_log_path`, for development: every log record, debug and library ones
   included, is appended to that file, or to `m365_gdap_runner_debug.log` in it when it names
   a folder. The terminal shows what it did without it.

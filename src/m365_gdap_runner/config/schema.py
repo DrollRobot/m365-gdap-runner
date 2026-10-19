@@ -177,6 +177,10 @@ class Settings:
             "address is added last"
         ),
     )
+    browser_timeout: float = option(
+        default_value=120.0,
+        help="Seconds a sign-in window waits to be completed before that sign-in fails",
+    )
     cloud: str = option(
         default_value="",
         help=(

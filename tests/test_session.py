@@ -30,6 +30,7 @@ from tests._gdap_fakes import (
     TENANT_B,
     TENANT_C,
     USER,
+    FakeApp,
     FakeMsal,
     bearer_tenant,
     customers_body,
@@ -146,10 +147,11 @@ def test_partner_tenant_id_is_the_guid(fake_msal: FakeMsal) -> None:
     [
         ("cache", "plaintext", "cache must be one of"),
         ("cloud", "Mars", "Unknown cloud 'Mars'"),
+        ("browser_timeout", 0.0, "browser_timeout must be more than 0 seconds, not 0.0"),
     ],
 )
-def test_bad_cache_or_cloud_is_a_config_error(
-    fake_msal: FakeMsal, field: str, value: str, message: str
+def test_bad_cache_cloud_or_browser_timeout_is_a_config_error(
+    fake_msal: FakeMsal, field: str, value: object, message: str
 ) -> None:
     with pytest.raises(ConfigError, match=message):
         PartnerSession(make_settings(**{field: value}))
@@ -415,6 +417,34 @@ def test_the_partner_and_direct_sign_ins_use_the_browser_settings(
     # The partner sign-in, then beta corp's own.
     assert fake_msal.interactive_tenants() == [PARTNER_TENANT, TENANT_B]
     assert browsers == opened
+
+
+@pytest.mark.parametrize(
+    ("overrides", "timeout"),
+    [({}, 120.0), ({"browser_timeout": 45.0}, 45.0)],
+    ids=["default", "browser-timeout"],
+)
+def test_the_partner_and_direct_sign_ins_wait_browser_timeout_seconds(
+    fake_msal: FakeMsal,
+    monkeypatch: pytest.MonkeyPatch,
+    overrides: dict[str, Any],
+    timeout: float,
+) -> None:
+    timeouts: list[object] = []
+    interactive = FakeApp.acquire_token_interactive
+
+    def recording(self: FakeApp, scopes: list[str], **kwargs: Any) -> dict[str, Any]:
+        timeouts.append(kwargs.get("timeout"))
+        return interactive(self, scopes, **kwargs)
+
+    monkeypatch.setattr(FakeApp, "acquire_token_interactive", recording)
+    fake_msal.tenant_errors[TENANT_B] = CONSENT_REQUIRED
+    beta_with_admin = Tenant(TENANT_B, "beta corp", "Commercial", BETA_ADMIN)
+    session = PartnerSession(make_settings(**overrides), transport=TRANSPORT)
+    session.login(["graph"])
+    session.check_access([beta_with_admin], scopes=["User.Read.All"])
+    # The partner sign-in, then beta corp's own.
+    assert timeouts == [timeout, timeout]
 
 
 def test_browser_args_without_a_browser_path_is_a_config_error(fake_msal: FakeMsal) -> None:

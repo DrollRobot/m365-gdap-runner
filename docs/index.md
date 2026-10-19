@@ -76,6 +76,10 @@ offered: GDAP does not work through it. To use another browser, or another profi
 - `browser_args`: a list of arguments for it, such as `["--profile-directory=Profile 2"]`.
   The sign-in address is added last. Needs `browser_path`.
 
+A sign-in window waits `browser_timeout` seconds (default 120) to be completed. After that,
+the sign-in fails: the partner sign-in ends the run, and a tenant's own leaves that tenant
+`auth_failed`.
+
 ## Keeping sign-ins between runs
 
 Sign-ins are kept in memory and end with the run. To keep them, opt in to the disk cache:

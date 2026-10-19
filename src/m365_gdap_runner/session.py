@@ -144,14 +144,19 @@ class PartnerSession:
             transport: Optional httpx transport for every client this session builds (tests).
 
         Raises:
-            ConfigError: If ``cache`` or ``cloud`` holds a value azure-auth does not know, or
-                ``browser_args`` is set without ``browser_path``.
+            ConfigError: If ``cache`` or ``cloud`` holds a value azure-auth does not know,
+                ``browser_args`` is set without ``browser_path``, or ``browser_timeout`` is
+                not more than 0.
             azure_auth.AuthError: If the partner tenant cannot be looked up, or the disk
                 cache cannot be encrypted on this platform.
         """
         if settings.cache not in CACHE_KINDS:
             raise ConfigError(
                 f"cache must be one of {', '.join(CACHE_KINDS)}, not {settings.cache!r}."
+            )
+        if settings.browser_timeout <= 0:
+            raise ConfigError(
+                f"browser_timeout must be more than 0 seconds, not {settings.browser_timeout!r}."
             )
         tenant: str | azure_auth.Tenant = settings.partner_tenant_id
         if settings.cloud:
@@ -173,6 +178,7 @@ class PartnerSession:
             client_id=settings.client_id or None,
             cache=cast(Literal["memory", "disk"], settings.cache),
             cache_path=self._cache_path,
+            browser_timeout=settings.browser_timeout,
             browser=self._browser,
         )
         if settings.cache == "disk" and settings.cache_reminder_path:
@@ -411,6 +417,7 @@ class PartnerSession:
                 client_id=self._settings.client_id or None,
                 cache=cast(Literal["memory", "disk"], self._settings.cache),
                 cache_path=self._cache_path,
+                browser_timeout=self._settings.browser_timeout,
                 browser=self._browser,
             )
             for kind in clients:
