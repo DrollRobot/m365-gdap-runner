@@ -42,7 +42,7 @@ LICENSED_USERS = EXAMPLES / "licensed_users.py"
 AUDIT_DISABLED = EXAMPLES / "audit_disabled.py"
 MAILBOX_AUDIT_GAPS = EXAMPLES / "mailbox_audit_gaps.py"
 UNIFIED_AUDIT_LOG = EXAMPLES / "unified_audit_log.py"
-DISABLE_CONNECTWISE = EXAMPLES / "disable_connectwise_backup_sign_in.py"
+SERVICE_PRINCIPAL_ENABLED = EXAMPLES / "service_principal_enabled.py"
 
 
 def _example(path: Path) -> Payload:
@@ -390,45 +390,65 @@ def test_unified_audit_log_writes_no_workbook_when_no_tenant_ran(
     assert capsys.readouterr().out == "No tenants ran; no workbook written.\n"
 
 
-# --- disable_connectwise_backup_sign_in.py -----------------------------------------------
+# --- service_principal_enabled.py --------------------------------------------------------
 
-CONNECTWISE_APP_ID = "cw000000-0000-0000-0000-000000000001"
-
-
-def _connectwise_app(object_id: str, *, enabled: bool) -> dict[str, Any]:
-    """Build the app's service principal as the filtered read returns it."""
-    return {
-        "id": object_id,
-        "appId": CONNECTWISE_APP_ID,
-        "displayName": "ConnectWise Cloud Backup",
-        "accountEnabled": enabled,
-    }
+BACKUP_APP_ID = "cw000000-0000-0000-0000-000000000001"
+REPORTER_APP_ID = "rp000000-0000-0000-0000-000000000002"
+MAIL_APP_ID = "ml000000-0000-0000-0000-000000000003"
 
 
-def _connectwise_services(
+def _sp(object_id: str, name: str, app_id: str, *, enabled: bool) -> dict[str, Any]:
+    """Build a service principal as the list read returns it."""
+    return {"id": object_id, "appId": app_id, "displayName": name, "accountEnabled": enabled}
+
+
+def _sp_services(
     apps: dict[str, list[dict[str, Any]]], patches: list[httpx.Request]
 ) -> httpx.MockTransport:
-    """Fake Graph holding *apps* per tenant, recording every PATCH it is sent."""
+    """Fake Graph holding *apps* per tenant, recording every PATCH it is sent.
+
+    A read of one service principal returns it whole: as listed, plus ``tags``, which the list
+    read leaves out. A PATCH changes nothing, so a later read still shows the old state.
+    """
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/v1.0/servicePrincipals":
-            assert request.url.params["$filter"] == "displayName eq 'ConnectWise Cloud Backup'"
-            return httpx.Response(200, json={"value": apps.get(bearer_tenant(request), [])})
-        if request.method == "PATCH":
-            patches.append(request)
-            return httpx.Response(204)
+        held = apps.get(bearer_tenant(request), [])
+        path = request.url.path
+        if path == "/v1.0/servicePrincipals":
+            assert request.url.params["$select"] == "id,appId,displayName,accountEnabled"
+            assert request.url.params["$top"] == "999"
+            return httpx.Response(200, json={"value": held})
+        if path.startswith("/v1.0/servicePrincipals/"):
+            if request.method == "PATCH":
+                patches.append(request)
+                return httpx.Response(204)
+            (app,) = [app for app in held if app["id"] == path.rsplit("/", 1)[1]]
+            return httpx.Response(200, json={**app, "tags": ["WindowsAzureActiveDirectoryApp"]})
         return fake_services(request)
 
     return httpx.MockTransport(handler)
 
 
 @pytest.fixture
-def connectwise(monkeypatch: pytest.MonkeyPatch) -> Any:
-    """The example, run through ``main()`` with ``--include all``, as its own parser would."""
+def sp_enabled(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
+    """The example, run through ``main()`` with ``--include all``, writing to a temp dir.
+
+    Its patterns are ``backup`` and the reporter app's ID, as the command line would set them.
+    """
     monkeypatch.setenv(ENV_PREFIX + "PARTNER_TENANT_ID", PARTNER_TENANT)
     monkeypatch.setenv(ENV_PREFIX + "USERNAME", USER)
     monkeypatch.setattr(cli, "configure_logging", lambda verbosity: None)
-    return load_script(DISABLE_CONNECTWISE)
+    module = load_script(SERVICE_PRINCIPAL_ENABLED)
+    monkeypatch.setattr(module, "OUT_DIR", tmp_path / "reports")
+    patterns = [module.pattern("backup"), module.pattern(REPORTER_APP_ID)]
+    monkeypatch.setattr(module, "PATTERNS", patterns)
+    return module
+
+
+def _disable(monkeypatch: pytest.MonkeyPatch, module: Any) -> None:
+    """Set what ``--disable`` sets."""
+    monkeypatch.setattr(module, "DISABLE", True)
+    monkeypatch.setattr(module, "SCOPES", ["Application.ReadWrite.All"])
 
 
 def _run_all(module: Any, transport: httpx.MockTransport) -> int:
@@ -437,68 +457,145 @@ def _run_all(module: Any, transport: httpx.MockTransport) -> int:
     return cli.main(module, parser.parse_args(["--include", "all"]), transport=transport)
 
 
-def test_connectwise_dry_run_changes_nothing_and_says_what_would_change(
-    fake_msal: FakeMsal,
-    monkeypatch: pytest.MonkeyPatch,
-    connectwise: Any,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    monkeypatch.setattr(connectwise, "DRY_RUN", True)
-    patches: list[httpx.Request] = []
-    apps = {TENANT_A: [_connectwise_app("sp-a", enabled=True)]}
+def _output(tmp_path: Path, suffix: str = "xlsx") -> Path:
+    """Return where the example writes today's workbook, or its JSON with ``json``."""
+    today = datetime.date.today().isoformat()
+    return tmp_path / "reports" / f"ServicePrincipalEnabled_{today}.{suffix}"
 
-    assert _run_all(connectwise, _connectwise_services(apps, patches)) == 0
+
+def test_sp_enabled_reports_every_match_and_changes_nothing(
+    fake_msal: FakeMsal,
+    sp_enabled: Any,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO)
+    patches: list[httpx.Request] = []
+    apps = {
+        TENANT_A: [
+            _sp("sp-a1", "ConnectWise Cloud Backup", BACKUP_APP_ID, enabled=True),
+            _sp("sp-a2", "Reporter", REPORTER_APP_ID, enabled=False),
+            _sp("sp-a3", "Mail", MAIL_APP_ID, enabled=True),
+        ],
+        TENANT_B: [_sp("sp-b1", "ConnectWise Cloud Backup", BACKUP_APP_ID, enabled=False)],
+    }
+
+    assert _run_all(sp_enabled, _sp_services(apps, patches)) == 0
 
     assert patches == []
-    assert capsys.readouterr().out == (
-        "Dry run: nothing was changed.\n"
-        f"Alpha      would disable (appId {CONNECTWISE_APP_ID})\n"
-        "beta corp  not found\n"
-    )
-    # The dry run checks consent for the write scope the real run needs.
+    path = _output(tmp_path)
+    assert [p.name for p in path.parent.iterdir()] == [path.name]
+    assert capsys.readouterr().out == f"Wrote {path}\n"
+    assert _sheets(path) == {
+        "Tenants": [
+            ("Tenant", "Status", "TenantId", "ConnectWise Cloud Backup", "Reporter"),
+            ("Alpha", "ok", TENANT_A, "enabled", "disabled"),
+            ("beta corp", "ok", TENANT_B, "disabled", None),
+        ]
+    }
+    # Nothing is written while tenants run.
+    assert [r for r in caplog.records if r.filename == SERVICE_PRINCIPAL_ENABLED.name] == []
+    # A report asks only to read.
+    assert (
+        GRAPH_CLI_CLIENT_ID,
+        ("https://graph.microsoft.com/Application.Read.All",),
+    ) in fake_msal.silent_calls(TENANT_A)
+
+
+def test_sp_enabled_disable_turns_sign_in_off_where_it_is_on(
+    fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, sp_enabled: Any, tmp_path: Path
+) -> None:
+    _disable(monkeypatch, sp_enabled)
+    patches: list[httpx.Request] = []
+    apps = {
+        TENANT_A: [
+            _sp("sp-a1", "ConnectWise Cloud Backup", BACKUP_APP_ID, enabled=True),
+            _sp("sp-a2", "Reporter", REPORTER_APP_ID, enabled=False),
+        ],
+        TENANT_B: [_sp("sp-b1", "ConnectWise Cloud Backup", BACKUP_APP_ID, enabled=True)],
+    }
+
+    assert _run_all(sp_enabled, _sp_services(apps, patches)) == 0
+
+    assert [(bearer_tenant(p), p.url.path) for p in patches] == [
+        (TENANT_A, "/v1.0/servicePrincipals/sp-a1"),
+        (TENANT_B, "/v1.0/servicePrincipals/sp-b1"),
+    ]
+    assert all(json.loads(p.content) == {"accountEnabled": False} for p in patches)
+    assert _sheets(_output(tmp_path))["Tenants"][1:] == [
+        ("Alpha", "ok", TENANT_A, "disabled", "disabled"),
+        ("beta corp", "ok", TENANT_B, "disabled", None),
+    ]
     assert (
         GRAPH_CLI_CLIENT_ID,
         ("https://graph.microsoft.com/Application.ReadWrite.All",),
     ) in fake_msal.silent_calls(TENANT_A)
 
 
-def test_connectwise_disables_sign_in_where_it_is_still_enabled(
-    fake_msal: FakeMsal, connectwise: Any, capsys: pytest.CaptureFixture[str]
+def test_sp_enabled_exports_each_match_whole_keyed_by_tenant_id(
+    fake_msal: FakeMsal,
+    monkeypatch: pytest.MonkeyPatch,
+    sp_enabled: Any,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    patches: list[httpx.Request] = []
+    monkeypatch.setattr(sp_enabled, "EXPORT_JSON", True)
+    # With --disable, the export shows each app as the run left it.
+    _disable(monkeypatch, sp_enabled)
     apps = {
-        TENANT_A: [_connectwise_app("sp-a", enabled=True)],
-        TENANT_B: [_connectwise_app("sp-b", enabled=False)],
+        TENANT_A: [
+            _sp("sp-a1", "ConnectWise Cloud Backup", BACKUP_APP_ID, enabled=True),
+            _sp("sp-a3", "Mail", MAIL_APP_ID, enabled=True),
+        ]
     }
 
-    assert _run_all(connectwise, _connectwise_services(apps, patches)) == 0
+    assert _run_all(sp_enabled, _sp_services(apps, [])) == 0
 
-    (patch,) = patches
-    assert patch.url.path == "/v1.0/servicePrincipals/sp-a"
-    assert bearer_tenant(patch) == TENANT_A
-    assert json.loads(patch.content) == {"accountEnabled": False}
-    assert capsys.readouterr().out == (
-        f"Alpha      disabled (appId {CONNECTWISE_APP_ID})\n"
-        f"beta corp  already disabled (appId {CONNECTWISE_APP_ID})\n"
-    )
+    path = _output(tmp_path, "json")
+    assert capsys.readouterr().out == f"Wrote {_output(tmp_path)}\nWrote {path}\n"
+    backup = _sp("sp-a1", "ConnectWise Cloud Backup", BACKUP_APP_ID, enabled=False)
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        TENANT_A: [{**backup, "tags": ["WindowsAzureActiveDirectoryApp"]}],
+        TENANT_B: [],
+    }
 
 
-def test_connectwise_report_lists_the_tenants_that_failed(
-    connectwise: Any, capsys: pytest.CaptureFixture[str]
+def test_sp_enabled_workbook_lists_failed_tenants_and_apps_that_share_a_name(
+    sp_enabled: Any, tmp_path: Path
 ) -> None:
-    connectwise.report(
+    sp_enabled.report(
         [
             TenantResult(
                 Tenant(TENANT_A, "Alpha"),
                 "ok",
-                [{"appId": CONNECTWISE_APP_ID, "id": "sp-a", "action": "disabled"}],
+                [
+                    _sp("sp-1", "Backup", "app-1", enabled=True),
+                    _sp("sp-2", "Backup", "app-2", enabled=False),
+                    {"id": "sp-3", "appId": "app-3", "accountEnabled": True},
+                ],
             ),
             TenantResult(Tenant(TENANT_B, "beta corp"), "auth_failed", error="AADSTS65001"),
         ]
     )
-    assert capsys.readouterr().out == (
-        f"Alpha      disabled (appId {CONNECTWISE_APP_ID})\nbeta corp  auth_failed: AADSTS65001\n"
-    )
+    sheet = load_workbook(_output(tmp_path))["Tenants"]
+    assert list(sheet.iter_rows(values_only=True)) == [
+        # An app without a display name is shown by its app ID.
+        ("Tenant", "Status", "TenantId", "app-3", "Backup"),
+        ("Alpha", "ok", TENANT_A, "enabled", "disabled, enabled"),
+        ("beta corp", "auth_failed", TENANT_B, None, None),
+    ]
+    assert sheet.freeze_panes == "A2"
+    (table,) = sheet.tables.values()
+    assert table.ref == "A1:E3"
+
+
+def test_sp_enabled_writes_nothing_when_no_tenant_ran(
+    sp_enabled: Any, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    sp_enabled.report([])
+    assert not (tmp_path / "reports").exists()
+    assert capsys.readouterr().out == "No tenants ran; nothing written.\n"
 
 
 def _refused_in_alpha(transport: httpx.MockTransport) -> httpx.MockTransport:
@@ -513,33 +610,30 @@ def _refused_in_alpha(transport: httpx.MockTransport) -> httpx.MockTransport:
     return httpx.MockTransport(handler)
 
 
-def test_connectwise_dry_run_goes_on_after_a_tenant_error(
-    fake_msal: FakeMsal,
-    monkeypatch: pytest.MonkeyPatch,
-    connectwise: Any,
-    capsys: pytest.CaptureFixture[str],
+def test_sp_enabled_report_goes_on_after_a_tenant_error(
+    fake_msal: FakeMsal, sp_enabled: Any, tmp_path: Path
 ) -> None:
-    # What --dry-run sets.
-    monkeypatch.setattr(connectwise, "DRY_RUN", True)
-    monkeypatch.setattr(connectwise, "CONTINUE_ON_ERROR", True)
-    patches: list[httpx.Request] = []
-    apps = {TENANT_B: [_connectwise_app("sp-b", enabled=True)]}
+    apps = {TENANT_B: [_sp("sp-b1", "ConnectWise Cloud Backup", BACKUP_APP_ID, enabled=True)]}
 
-    assert _run_all(connectwise, _refused_in_alpha(_connectwise_services(apps, patches))) == 1
+    assert _run_all(sp_enabled, _refused_in_alpha(_sp_services(apps, []))) == 1
 
-    out = capsys.readouterr().out
-    assert "Alpha      error: GraphError(" in out
-    assert f"beta corp  would disable (appId {CONNECTWISE_APP_ID})" in out
-    assert patches == []
+    alpha, beta = _sheets(_output(tmp_path))["Tenants"][1:]
+    assert alpha == ("Alpha", "error", TENANT_A, None)
+    assert beta == ("beta corp", "ok", TENANT_B, "enabled")
 
 
-def test_connectwise_stops_at_a_tenant_error_when_it_changes_things(
-    fake_msal: FakeMsal, connectwise: Any, capsys: pytest.CaptureFixture[str]
+def test_sp_enabled_disable_goes_on_after_a_tenant_error(
+    fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, sp_enabled: Any, tmp_path: Path
 ) -> None:
+    _disable(monkeypatch, sp_enabled)
     patches: list[httpx.Request] = []
-    apps = {TENANT_B: [_connectwise_app("sp-b", enabled=True)]}
+    apps = {TENANT_B: [_sp("sp-b1", "ConnectWise Cloud Backup", BACKUP_APP_ID, enabled=True)]}
 
-    assert _run_all(connectwise, _refused_in_alpha(_connectwise_services(apps, patches))) == 1
+    assert _run_all(sp_enabled, _refused_in_alpha(_sp_services(apps, patches))) == 1
 
-    assert "beta corp  skipped" in capsys.readouterr().out
-    assert patches == []
+    rows = _sheets(_output(tmp_path))["Tenants"][1:]
+    assert [(row[0], row[1]) for row in rows] == [("Alpha", "error"), ("beta corp", "ok")]
+    assert rows[1][3] == "disabled"
+    assert [(bearer_tenant(p), p.url.path) for p in patches] == [
+        (TENANT_B, "/v1.0/servicePrincipals/sp-b1")
+    ]

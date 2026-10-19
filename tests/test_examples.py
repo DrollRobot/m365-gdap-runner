@@ -1,13 +1,16 @@
-"""Unit tests for the uv script headers the examples carry."""
+"""Unit tests for the examples: the uv script headers they carry, and their helpers."""
 
 from __future__ import annotations
 
+import argparse
 import re
 import tomllib
 from pathlib import Path
 from typing import Any
 
 import pytest
+
+from tests._gdap_fakes import load_script
 
 pytestmark = pytest.mark.unit
 
@@ -37,3 +40,19 @@ def test_example_header_installs_the_runner_from_a_release(path: Path) -> None:
     runner = [dep for dep in header["dependencies"] if dep.startswith("m365-gdap-runner")]
     assert len(runner) == 1
     assert RUNNER.fullmatch(runner[0]), runner[0]
+
+
+def test_service_principal_pattern_is_case_insensitive_and_rejects_a_bad_regex() -> None:
+    module = load_script(ROOT / "examples" / "service_principal_enabled.py")
+    assert module.pattern("BACKUP$").search("ConnectWise Cloud Backup")
+    with pytest.raises(argparse.ArgumentTypeError, match=r"not a valid regular expression: '\('"):
+        module.pattern("(")
+
+
+def test_service_principal_matches_display_name_or_app_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = load_script(ROOT / "examples" / "service_principal_enabled.py")
+    monkeypatch.setattr(module, "PATTERNS", [module.pattern("^backup"), module.pattern("^cw00")])
+    assert module.is_match({"displayName": "Backup Tool", "appId": "x"})
+    assert module.is_match({"displayName": "Other", "appId": "cw000000-0000"})
+    assert not module.is_match({"displayName": "Cloud Backup", "appId": "x"})
+    assert not module.is_match({})

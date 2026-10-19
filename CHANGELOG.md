@@ -56,7 +56,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   run, a log line every 30 seconds says how many are done and about how long the rest will
   take.
 - Script setting `CONTINUE_ON_ERROR`: an error in `run()` stops the run unless the script sets
-  it True, as the example reports do and the ConnectWise example does under `--dry-run`.
+  it True, as the example reports and the service principal example do.
   `--continue-on-error` and the new `--no-continue-on-error` override it.
 - Example scripts, each with the header `uv run` builds its environment from:
   `examples/licensed_users.py` (Graph; its `report()` prints every tenant's users as JSON),
@@ -65,8 +65,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read through Exchange's REST endpoint; an Excel workbook per tenant and a summary
   workbook, in the folder its own `--out` flag names), `examples/unified_audit_log.py`
   (whether the unified audit log is on in each tenant; one Excel workbook for the run), and
-  `examples/disable_connectwise_backup_sign_in.py` (Graph; disables user sign-in on the
-  ConnectWise Cloud Backup enterprise app, with a `--dry-run` flag that changes nothing).
+  `examples/service_principal_enabled.py` (Graph; whether users can sign in to the
+  enterprise apps whose name or app ID matches the regular expressions given, as one Excel
+  workbook with a column per app; `--disable` turns sign-in off where it is on, and
+  `--export-json` also writes the matched service principals, keyed by tenant ID).
 - Supports Python 3.11 and newer. CI tests every supported version, 3.11 through 3.14, on
   Ubuntu, macOS and Windows.
 
