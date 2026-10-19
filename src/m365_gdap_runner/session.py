@@ -262,15 +262,18 @@ class PartnerSession:
         scopes: Sequence[str] = (),
         clients: Sequence[str] = ("graph",),
         jobs: int = 1,
+        grant_when_possible: bool = False,
     ) -> None:
         """Find a way into every tenant before the run, so the run itself never prompts.
 
         A tenant in the partner's cloud is checked first through the partner sign-in, silently
         and the way the run will use it: every client the script uses must get a token
-        (:meth:`TenantContext.probe`). A tenant that fails that check, for whatever reason, a
-        tenant in another cloud, and a tenant whose ``gdap`` is False, which is never
-        checked, then get a direct sign-in: a context of their own, in their own cloud, as
-        their ``username``, signed in once per client. One with no
+        (:meth:`TenantContext.probe`). With *grant_when_possible*, a tenant whose grant lacks
+        some of *scopes* has them added to the app's grant there, when the app holds
+        ``DelegatedPermissionGrant.ReadWrite.All``, and passes. A tenant that fails that
+        check, for whatever reason, a tenant in another cloud, and a tenant whose ``gdap`` is
+        False, which is never checked, then get a direct sign-in: a context of their own, in
+        their own cloud, as their ``username``, signed in once per client. One with no
         ``username`` gets none, and no prompt. A sign-in window opens only where no cached
         sign-in will do. Direct sign-ins run one at a time, on this thread. While the silent
         checks run, a log line every 30 seconds says how many are done and about how long the
@@ -284,6 +287,10 @@ class PartnerSession:
             scopes: The script's Graph scopes.
             clients: The script's ``CLIENTS``.
             jobs: How many silent checks run at once.
+            grant_when_possible: Add the scopes a tenant lacks to the app's grant where the
+                app can, through the partner sign-in only (azure-auth's ``GraphClient`` option
+                of that name). Each grant waits for a token that carries the new scopes,
+                about a minute and three at most.
         """
         partner_cloud = self.cloud_name.lower()
         nearby = [
@@ -296,7 +303,9 @@ class PartnerSession:
             max_workers=max(1, min(jobs, len(nearby))), thread_name_prefix="check"
         ) as pool:
             futures = {
-                pool.submit(self._through_partner, t, scopes, clients): t.tenant_id.lower()
+                pool.submit(
+                    self._through_partner, t, scopes, clients, grant_when_possible
+                ): t.tenant_id.lower()
                 for t in nearby
             }
             try:
@@ -348,7 +357,11 @@ class PartnerSession:
             self._routes[key] = self._sign_in_directly(tenant, scopes, clients)
 
     def _through_partner(
-        self, tenant: Tenant, scopes: Sequence[str], clients: Sequence[str]
+        self,
+        tenant: Tenant,
+        scopes: Sequence[str],
+        clients: Sequence[str],
+        grant_when_possible: bool,
     ) -> AuthContext | Exception:
         """Check a tenant through the partner sign-in, silently.
 
@@ -356,6 +369,7 @@ class PartnerSession:
             tenant: The tenant, in the partner's cloud.
             scopes: The script's Graph scopes.
             clients: The script's ``CLIENTS``.
+            grant_when_possible: Add missing scopes to the app's grant where it can.
 
         Returns:
             The customer tenant's context when every client got a token, else what went wrong.
@@ -363,7 +377,12 @@ class PartnerSession:
         try:
             auth = self.auth.get_tenant_context(tenant.tenant_id)
             with TenantContext(
-                tenant, auth, scopes=scopes, clients=clients, transport=self._transport
+                tenant,
+                auth,
+                scopes=scopes,
+                clients=clients,
+                grant_when_possible=grant_when_possible,
+                transport=self._transport,
             ) as context:
                 context.probe()
         except Exception as exc:

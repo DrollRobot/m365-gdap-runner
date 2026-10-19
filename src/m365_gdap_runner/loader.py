@@ -20,6 +20,11 @@ And it may set ``CONTINUE_ON_ERROR``. An error in ``run()`` stops the run by def
 script that changes things does not repeat a broken change in every tenant; a script that
 only reads sets it True to keep going. ``--continue-on-error`` and
 ``--no-continue-on-error`` override it.
+
+And it may set ``GRANT_WHEN_POSSIBLE``: where a tenant's grant lacks some of ``SCOPES`` and
+the app holds ``DelegatedPermissionGrant.ReadWrite.All`` there, the check before the run
+adds them to the app's grant instead of failing the tenant. ``--grant-when-possible`` and
+``--no-grant-when-possible`` override it.
 """
 
 from __future__ import annotations
@@ -57,6 +62,8 @@ class Payload:
         clients: Client kinds the script uses (``graph``, ``exchange``, ``ipps``, ``arm``).
         report: The script's ``report(results)`` function, or None when it has none.
         continue_on_error: Whether the run goes on after an error in ``run()``.
+        grant_when_possible: Whether the check before the run adds missing scopes to the
+            app's grant where it can.
     """
 
     name: str
@@ -65,6 +72,7 @@ class Payload:
     clients: tuple[str, ...] = DEFAULT_CLIENTS
     report: Callable[[list[TenantResult]], object] | None = None
     continue_on_error: bool = False
+    grant_when_possible: bool = False
 
 
 def _one_argument_function(
@@ -109,7 +117,7 @@ def payload_from_module(module: ModuleType, name: str) -> Payload:
     Raises:
         PayloadInvalid: If ``run`` is missing, ``run`` or ``report`` cannot take one
             positional argument, ``CLIENTS`` or ``SCOPES`` is invalid, or
-            ``CONTINUE_ON_ERROR`` is not True or False.
+            ``CONTINUE_ON_ERROR`` or ``GRANT_WHEN_POSSIBLE`` is not True or False.
     """
     run = _one_argument_function(getattr(module, "run", None), name, "run", "ctx")
     report = getattr(module, "report", None)
@@ -117,19 +125,35 @@ def payload_from_module(module: ModuleType, name: str) -> Payload:
         report = _one_argument_function(report, name, "report", "results")
     clients = validate_clients(getattr(module, "CLIENTS", None), name)
     scopes = validate_scopes(getattr(module, "SCOPES", None), name, graph="graph" in clients)
-    continue_on_error = getattr(module, "CONTINUE_ON_ERROR", False)
-    if not isinstance(continue_on_error, bool):
-        raise PayloadInvalid(
-            f"Script {name!r}: CONTINUE_ON_ERROR must be True or False, not {continue_on_error!r}."
-        )
     return Payload(
         name=name,
         run=run,
         scopes=scopes,
         clients=clients,
         report=report,
-        continue_on_error=continue_on_error,
+        continue_on_error=_flag(module, name, "CONTINUE_ON_ERROR"),
+        grant_when_possible=_flag(module, name, "GRANT_WHEN_POSSIBLE"),
     )
+
+
+def _flag(module: ModuleType, name: str, attribute: str) -> bool:
+    """Read a script's True-or-False setting, False when it has none.
+
+    Args:
+        module: The script's module.
+        name: Script name for error messages.
+        attribute: The setting's name, such as ``CONTINUE_ON_ERROR``.
+
+    Returns:
+        The setting.
+
+    Raises:
+        PayloadInvalid: If the setting is not True or False.
+    """
+    value = getattr(module, attribute, False)
+    if not isinstance(value, bool):
+        raise PayloadInvalid(f"Script {name!r}: {attribute} must be True or False, not {value!r}.")
+    return value
 
 
 def validate_clients(value: object, name: str) -> tuple[str, ...]:

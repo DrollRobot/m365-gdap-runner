@@ -63,6 +63,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Script setting `CONTINUE_ON_ERROR`: an error in `run()` stops the run unless the script sets
   it True, as the example reports and the service principal example do.
   `--continue-on-error` and the new `--no-continue-on-error` override it.
+- Script setting `GRANT_WHEN_POSSIBLE`: where a tenant's grant lacks some of the script's
+  `SCOPES` and the app holds `DelegatedPermissionGrant.ReadWrite.All` there, the check
+  before the run adds them to the app's tenant-wide grant, through azure-auth's
+  `grant_when_possible`, instead of failing the tenant. `--grant-when-possible` and
+  `--no-grant-when-possible` override it.
 - Example scripts, each with the header `uv run` builds its environment from:
   `examples/licensed_users.py` (Graph; its `report()` prints every tenant's users as JSON),
   `examples/audit_disabled.py` (Exchange Online; no `report()`, its log is the report),

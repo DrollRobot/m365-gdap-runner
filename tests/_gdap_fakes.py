@@ -89,9 +89,14 @@ def _b64(value: dict[str, Any]) -> str:
     return base64.urlsafe_b64encode(json.dumps(value).encode()).rstrip(b"=").decode()
 
 
-def fake_access(tenant_id: str) -> str:
-    """Return the fake access token for a tenant: an unsigned JWT with a ``tid`` claim."""
-    return f"{_b64({'alg': 'none'})}.{_b64({'tid': tenant_id})}.signature"
+def fake_access(tenant_id: str, scp: str | None = None) -> str:
+    """Return the fake access token for a tenant: an unsigned JWT with a ``tid`` claim.
+
+    With *scp*, the token also carries it, the scopes granted there, space-separated. Without
+    it, azure-auth cannot tell what the tenant has granted and asks for the scopes anyway.
+    """
+    claims = {"tid": tenant_id} if scp is None else {"tid": tenant_id, "scp": scp}
+    return f"{_b64({'alg': 'none'})}.{_b64(claims)}.signature"
 
 
 def bearer_tenant(request: httpx.Request) -> str:
@@ -147,7 +152,7 @@ class FakeApp:
         ) or self.module.tenant_errors.get(self.tenant_id.lower())
         if error is not None:
             return dict(error)
-        return {"access_token": fake_access(self.tenant_id), "expires_in": 3600}
+        return {"access_token": self.module.access(self.tenant_id), "expires_in": 3600}
 
     def acquire_token_interactive(self, scopes: list[str], **kwargs: Any) -> dict[str, Any]:
         self.module.record("interactive", self, scopes)
@@ -160,7 +165,7 @@ class FakeApp:
         username = kwargs.get("login_hint") or USER
         self.module.sign_in(self.client_id, username)
         return {
-            "access_token": fake_access(self.tenant_id),
+            "access_token": self.module.access(self.tenant_id),
             "expires_in": 3600,
             "id_token_claims": {"preferred_username": username, "tid": self.tenant_id},
         }
@@ -176,6 +181,8 @@ class FakeMsal:
             account's silent requests in that tenant return, ahead of ``tenant_errors``.
         interactive_result: When set, what every interactive sign-in returns (a failure).
         interactive_errors: Tenant id to the MSAL error result its interactive sign-ins return.
+        granted: Tenant id to the scopes it has granted, space-separated, which its tokens
+            carry as their ``scp`` claim. A tenant not in it gets tokens with none.
         accounts: Cached accounts, shared by every application.
         signed_in: ``(client_id, username)`` pairs that have signed in interactively, and so
             hold a refresh token.
@@ -186,6 +193,7 @@ class FakeMsal:
     account_errors: dict[tuple[str, str], dict[str, Any]] = field(default_factory=dict)
     interactive_result: dict[str, Any] | None = None
     interactive_errors: dict[str, dict[str, Any]] = field(default_factory=dict)
+    granted: dict[str, str] = field(default_factory=dict)
     accounts: list[dict[str, Any]] = field(default_factory=list)
     signed_in: set[tuple[str, str]] = field(default_factory=set)
     calls: list[Call] = field(default_factory=list)
@@ -202,6 +210,10 @@ class FakeMsal:
         with self.lock:
             self.apps.append(app)
         return app
+
+    def access(self, tenant_id: str) -> str:
+        """Return the fake access token for a tenant, with what it has granted."""
+        return fake_access(tenant_id, self.granted.get(tenant_id.lower()))
 
     def record(self, method: str, app: FakeApp, scopes: Sequence[str]) -> None:
         with self.lock:

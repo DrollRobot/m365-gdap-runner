@@ -37,6 +37,7 @@ def test_valid_script() -> None:
     assert callable(payload.run)
     assert payload.report is None
     assert payload.continue_on_error is False
+    assert payload.grant_when_possible is False
 
 
 def test_report_is_picked_up() -> None:
@@ -47,6 +48,11 @@ def test_report_is_picked_up() -> None:
 def test_continue_on_error_is_picked_up() -> None:
     module = _module(VALID + "\n    CONTINUE_ON_ERROR = True\n")
     assert payload_from_module(module, "script").continue_on_error is True
+
+
+def test_grant_when_possible_is_picked_up() -> None:
+    module = _module(VALID + "\n    GRANT_WHEN_POSSIBLE = True\n")
+    assert payload_from_module(module, "script").grant_when_possible is True
 
 
 def test_clients_are_normalized_and_deduplicated() -> None:
@@ -123,6 +129,10 @@ def test_run_with_optional_parameters_is_accepted() -> None:
         (
             'SCOPES = ["User.Read.All"]\ndef run(ctx):\n    pass\nCONTINUE_ON_ERROR = "yes"\n',
             "CONTINUE_ON_ERROR must be True or False, not 'yes'",
+        ),
+        (
+            'SCOPES = ["User.Read.All"]\ndef run(ctx):\n    pass\nGRANT_WHEN_POSSIBLE = 1\n',
+            "GRANT_WHEN_POSSIBLE must be True or False, not 1",
         ),
     ],
 )

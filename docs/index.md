@@ -118,6 +118,17 @@ going. `--continue-on-error` and `--no-continue-on-error` override the script.
 
 A tenant that could not be reached is `auth_failed` and never stops the run.
 
+## Granting missing scopes
+
+A tenant whose grant lacks some of the script's `SCOPES` fails the check before the run. A
+script that sets `GRANT_WHEN_POSSIBLE = True` has the check add them instead, where the app
+holds `DelegatedPermissionGrant.ReadWrite.All` in that tenant. They go into the app's
+tenant-wide grant, so every user of the app there gets them, each still limited by their own
+roles. azure-auth logs each grant, which shows with `-vv` and in the debug log. The check
+then waits for a token that carries the new scopes: about a minute, three at most. Where
+the app does not hold that permission, the tenant gets a sign-in of its own as before.
+`--grant-when-possible` and `--no-grant-when-possible` override the script.
+
 ## Flags of your own
 
 `main(__name__)` reads the library's flags only. A script with flags of its own builds the

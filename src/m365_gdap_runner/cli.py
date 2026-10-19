@@ -216,6 +216,16 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         ),
     )
     run.add_argument(
+        "--grant-when-possible",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Where a tenant's grant lacks some of the script's SCOPES and the app holds "
+            "DelegatedPermissionGrant.ReadWrite.All there, add them to the app's grant. "
+            "Default: the script's GRANT_WHEN_POSSIBLE, else off."
+        ),
+    )
+    run.add_argument(
         "--jobs",
         type=_positive_int,
         default=1,
@@ -547,6 +557,11 @@ def _run(
         scopes=payload.scopes,
         clients=payload.clients,
         jobs=args.jobs,
+        grant_when_possible=(
+            payload.grant_when_possible
+            if args.grant_when_possible is None
+            else args.grant_when_possible
+        ),
     )
     logger.info("Running %s against %d tenant(s)", payload.name, len(selected))
     interrupted = False

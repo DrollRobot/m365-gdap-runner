@@ -48,6 +48,7 @@ def build_client(
     auth: AuthContext,
     *,
     scopes: Sequence[str] = (),
+    grant_when_possible: bool = False,
     transport: httpx.BaseTransport | None = None,
 ) -> ResourceClient:
     """Create the azure-auth client for one kind.
@@ -56,6 +57,8 @@ def build_client(
         kind: One of :data:`CLIENT_KINDS`.
         auth: The context the client gets its tokens from.
         scopes: Delegated Graph scopes; used by ``graph`` only.
+        grant_when_possible: azure-auth's ``GraphClient`` option of that name: add *scopes*
+            the tenant lacks to the app's grant where it can. Used by ``graph`` only.
         transport: Optional httpx transport (tests).
 
     Returns:
@@ -65,7 +68,12 @@ def build_client(
         ValueError: If *kind* is not a known client kind.
     """
     if kind == "graph":
-        return GraphClient(auth, scopes=list(scopes), transport=transport)
+        return GraphClient(
+            auth,
+            scopes=list(scopes),
+            grant_when_possible=grant_when_possible,
+            transport=transport,
+        )
     if kind == "exchange":
         return ExchangeClient(auth, transport=transport)
     if kind == "ipps":
@@ -91,6 +99,7 @@ class TenantContext:
         *,
         scopes: Sequence[str] = (),
         clients: Sequence[str] = ("graph",),
+        grant_when_possible: bool = False,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         """Build one client per declared kind. No network call is made.
@@ -100,12 +109,21 @@ class TenantContext:
             auth: The azure-auth context for this tenant.
             scopes: The payload's Graph scopes.
             clients: The payload's ``CLIENTS``.
+            grant_when_possible: Whether the Graph client adds missing scopes to the app's
+                grant where it can.
             transport: Optional httpx transport for every client (tests).
         """
         self.tenant = tenant
         self.auth = auth
         self._clients: dict[str, ResourceClient] = {
-            kind: build_client(kind, auth, scopes=scopes, transport=transport) for kind in clients
+            kind: build_client(
+                kind,
+                auth,
+                scopes=scopes,
+                grant_when_possible=grant_when_possible,
+                transport=transport,
+            )
+            for kind in clients
         }
 
     @property

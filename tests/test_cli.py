@@ -40,6 +40,9 @@ from tests._gdap_fakes import (
 )
 
 EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
+
+# Microsoft Graph's own application ID: the resource of an app's Graph grant.
+GRAPH_APP_ID = "00000003-0000-0000-c000-000000000000"
 LICENSED_USERS = load_script(EXAMPLES / "licensed_users.py")
 AUDIT_DISABLED = load_script(EXAMPLES / "audit_disabled.py")
 
@@ -114,7 +117,7 @@ def _tenant_ids(script: ModuleType) -> list[str]:
 @pytest.mark.unit
 def test_add_arguments_defaults() -> None:
     args = _args("--include", "all")
-    assert (args.jobs, args.continue_on_error) == (1, None)
+    assert (args.jobs, args.continue_on_error, args.grant_when_possible) == (1, None, None)
     assert (args.include, args.exclude) == (["all"], None)
     assert (args.partner_tenant_id, args.username, args.client_id, args.cache, args.cloud) == (
         None,
@@ -484,6 +487,68 @@ def test_a_script_with_empty_scopes_gets_whatever_the_app_holds(
     assert {scopes for _, scopes in fake_msal.silent_calls(TENANT_A)} == {
         ("https://graph.microsoft.com/.default",)
     }
+
+
+def _grant_service(fake_msal: FakeMsal, patches: list[dict[str, str]]) -> Handler:
+    """Fake services plus the app's one tenant-wide grant for Graph, in every tenant.
+
+    The grant holds what the tenant has granted. A PATCH to it records the body and changes
+    what the tenant has granted, as Entra then puts it in the tokens it issues.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        tenant = bearer_tenant(request).lower()
+        if path == "/v1.0/servicePrincipals":
+            graph = GRAPH_APP_ID in request.url.params["$filter"]
+            return httpx.Response(200, json={"value": [{"id": "graph" if graph else "app"}]})
+        if path == "/v1.0/oauth2PermissionGrants":
+            grant = {
+                "id": "grant",
+                "clientId": "app",
+                "consentType": "AllPrincipals",
+                "resourceId": "graph",
+                "scope": fake_msal.granted[tenant],
+            }
+            return httpx.Response(200, json={"value": [grant]})
+        if path == "/v1.0/oauth2PermissionGrants/grant" and request.method == "PATCH":
+            body = json.loads(request.content)
+            patches.append(body)
+            fake_msal.granted[tenant] = body["scope"]
+            return httpx.Response(204)
+        return fake_services(request)
+
+    return handler
+
+
+@pytest.mark.integration
+@pytest.mark.acceptance
+def test_grant_when_possible_adds_the_missing_scopes_and_the_tenant_runs(
+    fake_msal: FakeMsal, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="azure_auth")
+    script = _script(tmp_path, RECORDER + "\n    GRANT_WHEN_POSSIBLE = True\n")
+    fake_msal.granted[TENANT_A] = "DelegatedPermissionGrant.ReadWrite.All"
+    patches: list[dict[str, str]] = []
+    handler = _grant_service(fake_msal, patches)
+    assert _main(script, "--include", "Alpha", handler=handler) == 0
+    assert patches == [{"scope": "DelegatedPermissionGrant.ReadWrite.All User.Read.All"}]
+    assert [result.status for result in _reported(script)] == ["ok"]
+    assert "Added User.Read.All to the tenant-wide grant" in caplog.text
+
+
+@pytest.mark.integration
+def test_no_grant_when_possible_overrides_the_script(fake_msal: FakeMsal, tmp_path: Path) -> None:
+    script = _script(tmp_path, RECORDER + "\n    GRANT_WHEN_POSSIBLE = True\n")
+    fake_msal.granted[TENANT_A] = "DelegatedPermissionGrant.ReadWrite.All"
+    patches: list[dict[str, str]] = []
+    handler = _grant_service(fake_msal, patches)
+    assert _main(script, "--include", "Alpha", "--no-grant-when-possible", handler=handler) == 1
+    (alpha,) = _reported(script)
+    assert alpha.status == "auth_failed"
+    assert alpha.error is not None
+    assert "could grant itself the requested scopes" in alpha.error
+    assert patches == []
 
 
 @pytest.mark.integration
