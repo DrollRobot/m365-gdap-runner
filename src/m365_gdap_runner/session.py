@@ -5,8 +5,8 @@ sign-in per client id the script uses, all at the partner (home) tenant, before 
 starts. Customer tenants are reached through contexts from azure-auth's ``get_tenant_context()``,
 which never prompt; they redeem the home sign-in's refresh token in the customer tenant.
 
-Every sign-in opens the browser. The Windows broker is not offered: GDAP does not work
-through it.
+Every sign-in opens the browser: the system default, or the ``browser_path`` setting's, with
+``browser_args``. The Windows broker is not offered: GDAP does not work through it.
 
 A tenant the partner sign-in cannot reach (no GDAP relationship, missing consent, a policy
 that wants a fresh sign-in, or another Microsoft cloud) gets a direct sign-in instead: a
@@ -73,6 +73,26 @@ def _place_cache_reminder(cache_file: Path, folder: str) -> None:
     logger.debug("Token cache reminder %s points at %s", link, cache_file.parent)
 
 
+def _browser(path: str, args: Sequence[str]) -> list[str] | None:
+    """Build azure-auth's ``browser`` argument from the browser settings.
+
+    Args:
+        path: The ``browser_path`` setting: a path, or a program on ``PATH``.
+        args: The ``browser_args`` setting.
+
+    Returns:
+        The program followed by its arguments, or None for the system default.
+
+    Raises:
+        ConfigError: If ``browser_args`` is set without ``browser_path``.
+    """
+    if not path:
+        if args:
+            raise ConfigError("browser_args needs browser_path, the browser to pass them to.")
+        return None
+    return [str(Path(path).expanduser()), *args]
+
+
 def _time_left(seconds: float) -> str:
     """Say roughly how long the rest of the access check will take.
 
@@ -124,7 +144,8 @@ class PartnerSession:
             transport: Optional httpx transport for every client this session builds (tests).
 
         Raises:
-            ConfigError: If ``cache`` or ``cloud`` holds a value azure-auth does not know.
+            ConfigError: If ``cache`` or ``cloud`` holds a value azure-auth does not know, or
+                ``browser_args`` is set without ``browser_path``.
             azure_auth.AuthError: If the partner tenant cannot be looked up, or the disk
                 cache cannot be encrypted on this platform.
         """
@@ -143,6 +164,7 @@ class PartnerSession:
         self._settings = settings
         # None keeps the disk cache in azure-auth's default file.
         self._cache_path = Path(settings.cache_path).expanduser() if settings.cache_path else None
+        self._browser = _browser(settings.browser_path, settings.browser_args)
         # How check_access() found each tenant can be reached, by lower-cased tenant ID.
         self._routes: dict[str, AuthContext | Exception] = {}
         self.auth = AuthContext(
@@ -151,6 +173,7 @@ class PartnerSession:
             client_id=settings.client_id or None,
             cache=cast(Literal["memory", "disk"], settings.cache),
             cache_path=self._cache_path,
+            browser=self._browser,
         )
         if settings.cache == "disk" and settings.cache_reminder_path:
             _place_cache_reminder(
@@ -369,6 +392,7 @@ class PartnerSession:
                 client_id=self._settings.client_id or None,
                 cache=cast(Literal["memory", "disk"], self._settings.cache),
                 cache_path=self._cache_path,
+                browser=self._browser,
             )
             for kind in clients:
                 with build_client(kind, auth, scopes=scopes, transport=self._transport) as client:

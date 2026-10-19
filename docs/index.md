@@ -64,8 +64,12 @@ different Microsoft app), then, before the first `run()`, checks every selected 
 silently through that sign-in. A tenant it cannot reach that way gets a sign-in of its own
 (see [Tenants outside GDAP](#tenants-outside-gdap)).
 
-Sign-ins open the browser. The Windows sign-in window (the broker) is not offered: GDAP does
-not work through it.
+Sign-ins open the system's default browser. The Windows sign-in window (the broker) is not
+offered: GDAP does not work through it. To use another browser, or another profile of it:
+
+- `browser_path`: the browser, as a full path (recommended) or a program on `PATH`.
+- `browser_args`: a list of arguments for it, such as `["--profile-directory=Profile 2"]`.
+  The sign-in address is added last. Needs `browser_path`.
 
 ## Keeping sign-ins between runs
 

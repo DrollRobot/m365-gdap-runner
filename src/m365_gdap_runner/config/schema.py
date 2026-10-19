@@ -163,6 +163,20 @@ class Settings:
             "M365-GDAP-RUNNER_MSAL_CACHE_DELETEME, a link to the cache's folder; empty puts none"
         ),
     )
+    browser_path: str = option(
+        default_value="",
+        help=(
+            "Browser that sign-ins open, as a path (recommended) or a program on PATH; empty "
+            "uses the system default"
+        ),
+    )
+    browser_args: list[str] = option(  # noqa: RUF009  (option() returns a dataclass field)
+        default_factory=list,
+        help=(
+            "Arguments for browser_path, such as --profile-directory=Profile 2; the sign-in "
+            "address is added last"
+        ),
+    )
     cloud: str = option(
         default_value="",
         help=(

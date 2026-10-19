@@ -37,6 +37,8 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.cache == "memory"
     assert settings.cache_path == ""
     assert settings.cache_reminder_path == ""
+    assert settings.browser_path == ""
+    assert settings.browser_args == []
     assert settings.cloud == ""
     assert settings.tenants_file == ""
     assert settings.debug_log_path == ""

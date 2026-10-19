@@ -30,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `cache_reminder_path`, a folder in plain sight where every run with the disk cache puts
   `M365-GDAP-RUNNER_MSAL_CACHE_DELETEME`, a link to the cache's folder, so the file is not
   forgotten.
+- Settings `browser_path`, the browser sign-ins open in place of the system default, and
+  `browser_args`, the arguments it is started with, such as a profile.
 - Setting `debug_log_path`, for development: every log record, debug and library ones
   included, is appended to that file, or to `m365_gdap_runner_debug.log` in it when it names
   a folder. The terminal shows what it did without it.

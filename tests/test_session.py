@@ -6,10 +6,11 @@ import logging
 import os
 from itertools import count
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
-from azure_auth import AuthError, ConsentRequired, TenantNotFound
+from azure_auth import AuthContext, AuthError, ConsentRequired, TenantNotFound
 from azure_auth.auth import cache as azure_auth_cache
 from azure_auth.constants import (
     AZURE_POWERSHELL_CLIENT_ID,
@@ -360,6 +361,65 @@ def test_a_failed_direct_sign_in_is_what_context_for_raises(fake_msal: FakeMsal)
     session.check_access([GAMMA_GOV], scopes=["User.Read.All"])
     with pytest.raises(AuthError, match="access_denied"):
         session.context_for(GAMMA_GOV, scopes=["User.Read.All"])
+
+
+# --- the browser -----------------------------------------------------------------------
+
+
+@pytest.fixture
+def browsers(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, ...]]:
+    """The command of every sign-in azure-auth opens in a chosen browser, in order.
+
+    Each then signs in through the fake msal, as a sign-in in the default browser does.
+    """
+    opened: list[tuple[str, ...]] = []
+
+    def browser_sign_in(
+        self: AuthContext,
+        app: Any,
+        scopes: list[str],
+        claims: str | None,
+        prompt: str | None,
+        browser: tuple[str, ...],
+    ) -> dict[str, Any]:
+        opened.append(browser)
+        return dict(app.acquire_token_interactive(scopes, login_hint=self.username))
+
+    monkeypatch.setattr("azure_auth.auth.context.AuthContext._browser_sign_in", browser_sign_in)
+    return opened
+
+
+@pytest.mark.parametrize(
+    ("overrides", "opened"),
+    [
+        ({}, []),
+        ({"browser_path": "~/edge"}, [(str(Path.home() / "edge"),)] * 2),
+        (
+            {"browser_path": "msedge", "browser_args": ["--profile-directory=Profile 2"]},
+            [("msedge", "--profile-directory=Profile 2")] * 2,
+        ),
+    ],
+    ids=["system-default", "browser-path", "browser-path-and-args"],
+)
+def test_the_partner_and_direct_sign_ins_use_the_browser_settings(
+    fake_msal: FakeMsal,
+    browsers: list[tuple[str, ...]],
+    overrides: dict[str, Any],
+    opened: list[tuple[str, ...]],
+) -> None:
+    fake_msal.tenant_errors[TENANT_B] = CONSENT_REQUIRED
+    beta_with_admin = Tenant(TENANT_B, "beta corp", "Commercial", BETA_ADMIN)
+    session = PartnerSession(make_settings(**overrides), transport=TRANSPORT)
+    session.login(["graph"])
+    session.check_access([beta_with_admin], scopes=["User.Read.All"])
+    # The partner sign-in, then beta corp's own.
+    assert fake_msal.interactive_tenants() == [PARTNER_TENANT, TENANT_B]
+    assert browsers == opened
+
+
+def test_browser_args_without_a_browser_path_is_a_config_error(fake_msal: FakeMsal) -> None:
+    with pytest.raises(ConfigError, match="browser_args needs browser_path"):
+        PartnerSession(make_settings(browser_args=["--inprivate"]))
 
 
 # --- the disk cache --------------------------------------------------------------------
