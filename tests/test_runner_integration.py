@@ -70,8 +70,8 @@ def test_graph_example_runs_through_session_and_azure_auth(fake_msal: FakeMsal) 
     session = PartnerSession(make_settings(), transport=httpx.MockTransport(handler))
     session.login(payload.clients)
     tenants = session.list_tenants()
-    session.check_access(tenants, scopes=payload.scopes, clients=payload.clients)
-    results = run_payload(session, payload, tenants)
+    ready = session.check_access(tenants, scopes=payload.scopes, clients=payload.clients)
+    results = run_payload(session, payload, tenants, ready=ready)
 
     assert [t.tenant_id for t in tenants] == [TENANT_A, TENANT_B]
     assert [r.status for r in results] == ["ok", "auth_failed"]
@@ -102,8 +102,8 @@ def test_exchange_example_signs_in_to_exchange_and_runs_the_cmdlet(
     session = PartnerSession(make_settings(), transport=httpx.MockTransport(fake_services))
     session.login(payload.clients)
     tenants = session.list_tenants()
-    session.check_access(tenants, clients=payload.clients)
-    results = run_payload(session, payload, tenants)
+    ready = session.check_access(tenants, clients=payload.clients)
+    results = run_payload(session, payload, tenants, ready=ready)
 
     assert [r.status for r in results] == ["ok", "ok"]
     assert [r.getMessage() for r in caplog.records if r.filename == "audit_disabled.py"] == [

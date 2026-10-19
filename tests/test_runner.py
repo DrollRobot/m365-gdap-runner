@@ -181,18 +181,95 @@ def test_serial_run_is_not_concurrent() -> None:
     assert _statuses(results) == ["error", "error"]
 
 
-def test_parallel_stop_on_error_skips_pending_tenants(release: threading.Event) -> None:
+def test_parallel_stop_on_error_lets_running_tenants_finish_and_starts_no_more(
+    release: threading.Event,
+) -> None:
+    beta_started = threading.Event()
+
     def run(ctx: TenantContext) -> object:
         if ctx.tenant is ALPHA:
+            assert beta_started.wait(5)
             raise RuntimeError("boom")
-        release.wait(5)
+        if ctx.tenant is BETA:
+            beta_started.set()
+            release.wait(5)
         return None
 
     results = run_payload(FakeSession(), _payload(run), [ALPHA, BETA, GAMMA, DELTA], jobs=2)
-    assert results[0].status == "error"
-    assert results[1].status == "ok"
-    assert results[2].status in {"ok", "skipped"}
-    assert results[3].status == "skipped"
+    assert _statuses(results) == ["error", "ok", "skipped", "skipped"]
+
+
+def test_tenants_start_in_the_order_ready_hands_them_over() -> None:
+    payload = Recorder()
+    results = run_payload(FakeSession(), _payload(payload), TENANTS, ready=[GAMMA, ALPHA, BETA])
+    assert payload.called == [TENANT_C, TENANT_A, TENANT_B]
+    assert [r.tenant for r in results] == TENANTS
+
+
+@pytest.mark.acceptance
+def test_a_tenant_runs_while_ready_finds_the_next(release: threading.Event) -> None:
+    asked_for_beta = threading.Event()
+
+    def ready() -> Iterator[Tenant]:
+        yield ALPHA
+        # A sign-in for the next tenant, say: Alpha's run() must not wait for it.
+        asked_for_beta.set()
+        yield BETA
+
+    def run(ctx: TenantContext) -> object:
+        if ctx.tenant is ALPHA:
+            assert asked_for_beta.wait(5)
+        return None
+
+    results = run_payload(FakeSession(), _payload(run), [ALPHA, BETA], ready=ready())
+    assert _statuses(results) == ["ok", "ok"]
+
+
+def test_no_tenant_ready_hands_over_after_an_error_starts() -> None:
+    payload = Recorder(failures={TENANT_A: RuntimeError("boom")})
+    alpha_done = threading.Event()
+
+    def ready() -> Iterator[Tenant]:
+        for tenant in TENANTS:
+            yield tenant
+            if tenant is ALPHA:
+                # Alpha's run() has failed by the time Beta is handed over.
+                assert alpha_done.wait(5)
+
+    def run(ctx: TenantContext) -> object:
+        try:
+            return payload(ctx)
+        finally:
+            alpha_done.set()
+
+    results = run_payload(FakeSession(), _payload(run), TENANTS, ready=ready())
+    assert _statuses(results) == ["error", "skipped", "skipped"]
+    assert payload.called == [TENANT_A]
+
+
+def test_an_interrupt_while_ready_finds_the_next_waits_for_running_tenants(
+    release: threading.Event,
+) -> None:
+    alpha_started = threading.Event()
+    closed = threading.Event()
+
+    def ready() -> Iterator[Tenant]:
+        try:
+            yield ALPHA
+            assert alpha_started.wait(5)
+            raise KeyboardInterrupt  # Ctrl+C in a sign-in window, say
+        finally:
+            closed.set()
+
+    def run(ctx: TenantContext) -> object:
+        alpha_started.set()
+        release.wait(5)  # still running when Ctrl+C comes
+        return None
+
+    with pytest.raises(RunInterrupted) as info:
+        run_payload(FakeSession(), _payload(run), TENANTS, ready=ready(), jobs=2)
+    assert _statuses(info.value.results) == ["ok", "skipped", "skipped"]
+    assert closed.is_set()
 
 
 def test_serial_interrupt_returns_partial_results() -> None:

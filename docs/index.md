@@ -60,9 +60,9 @@ uv run users.py --include Contoso
 ```
 
 The runner signs in once per client in `CLIENTS` at the partner tenant (each uses a
-different Microsoft app), then, before the first `run()`, checks every selected tenant
-silently through that sign-in. A tenant it cannot reach that way gets a sign-in of its own
-(see [Tenants outside GDAP](#tenants-outside-gdap)).
+different Microsoft app), then checks each selected tenant silently through that sign-in
+before its `run()`. A tenant it cannot reach that way gets a sign-in of its own (see
+[Tenants outside GDAP](#tenants-outside-gdap)).
 
 The check asks for exactly the scopes in `SCOPES`, so a tenant that has not granted one of
 them fails before `run()`. `SCOPES = []` asks for none in particular: Graph gets whatever
@@ -115,10 +115,11 @@ of each kind.
 
 ## Errors in run()
 
-An error raised in `run()` stops the run: that tenant is `error`, and the tenants not yet
-started are `skipped`. That keeps a script that changes things from repeating a broken
-change in every tenant. A script that only reads sets `CONTINUE_ON_ERROR = True` to keep
-going. `--continue-on-error` and `--no-continue-on-error` override the script.
+An error raised in `run()` stops the run: that tenant is `error`, tenants already running
+finish, and the tenants not yet started are `skipped`. That keeps a script that changes
+things from repeating a broken change in every tenant. A script that only reads sets
+`CONTINUE_ON_ERROR = True` to keep going. `--continue-on-error` and `--no-continue-on-error`
+override the script.
 
 A tenant that could not be reached is `auth_failed` and never stops the run.
 
@@ -210,13 +211,14 @@ A tenant the partner sign-in cannot reach still runs. That covers a row of the t
 with no GDAP relationship, a tenant in another cloud (the partner sign-in reaches its own
 cloud only), and a GDAP tenant where consent is missing or a policy wants a fresh sign-in.
 
-Before the first `run()`, every selected tenant in the partner's cloud is checked silently
-through the partner sign-in; every 30 seconds, a log line says how many are done and about how
+Every selected tenant in the partner's cloud is checked silently through the partner
+sign-in, `jobs` at a time; every 30 seconds, a log line says how many are done and about how
 long the rest will take. Each tenant that fails that check, and each tenant in another
-cloud, then gets a sign-in of its own, in its own cloud, as the account in its
-`m365_username` cell. That is one sign-in per client in `CLIENTS`, one tenant at a
-time, all before the loop starts, so `--jobs` runs never prompt. With `--cache disk`, later
-runs are silent. A sign-in that fails or is cancelled leaves that tenant `auth_failed`; the
+cloud, gets a sign-in of its own, in its own cloud, as the account in its `m365_username`
+cell: one sign-in per client in `CLIENTS`. Sign-in windows open one at a time, as soon as a
+tenant needs one, while the other checks go on. Each tenant's `run()` starts as soon as its
+access is settled, and never opens a sign-in window. With `--cache disk`, later runs are
+silent. A sign-in that fails, is cancelled or times out leaves that tenant `auth_failed`; the
 rest run.
 
 A tenant whose `m365_username` cell is blank gets no sign-in of its own: it is `auth_failed`,

@@ -13,7 +13,9 @@ that wants a fresh sign-in, or another Microsoft cloud) gets a direct sign-in in
 context of its own, in its own cloud, as the tenant's own account. So does a tenant whose
 ``m365_gdap`` cell in the tenants file is not TRUE, without trying the partner sign-in. A
 tenant with no account of its own gets none. All of that happens in
-:meth:`PartnerSession.check_access`, before the loop, so the loop never opens a browser.
+:meth:`PartnerSession.check_access`, which hands each tenant to the run as soon as its way in
+is settled and opens every sign-in window itself, one at a time, so the tenants' ``run()``
+calls never open one.
 
 Why sign in per client: Microsoft's first-party apps differ per resource (Graph PowerShell,
 Exchange Online PowerShell, Azure PowerShell) and a refresh token belongs to one app, so a
@@ -26,8 +28,9 @@ or the ``cache_path`` setting's; ``cache_reminder_path`` leaves a link to it in 
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Sequence
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import deque
+from collections.abc import Generator, Iterable, Sequence
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 from time import monotonic
 from typing import Literal, cast
@@ -170,7 +173,9 @@ class PartnerSession:
         # None keeps the disk cache in azure-auth's default file.
         self._cache_path = Path(settings.cache_path).expanduser() if settings.cache_path else None
         self._browser = _browser(settings.browser_path, settings.browser_args)
-        # How check_access() found each tenant can be reached, by lower-cased tenant ID.
+        # How check_access() found each tenant can be reached, by lower-cased tenant ID. It
+        # writes and context_for() reads, on different threads, but never for the same tenant
+        # at once: check_access() hands a tenant out only after writing its route.
         self._routes: dict[str, AuthContext | Exception] = {}
         self.auth = AuthContext(
             tenant,
@@ -269,8 +274,8 @@ class PartnerSession:
         clients: Sequence[str] = ("graph",),
         jobs: int = 1,
         grant_when_possible: bool = False,
-    ) -> None:
-        """Find a way into every tenant before the run, so the run itself never prompts.
+    ) -> Generator[Tenant, None, None]:
+        """Find a way into each tenant, and hand it out as soon as one is found.
 
         A tenant in the partner's cloud is checked first through the partner sign-in, silently
         and the way the run will use it: every client the script uses must get a token
@@ -281,9 +286,15 @@ class PartnerSession:
         False, which is never checked, then get a direct sign-in: a context of their own, in
         their own cloud, as their ``username``, signed in once per client. One with no
         ``username`` gets none, and no prompt. A sign-in window opens only where no cached
-        sign-in will do. Direct sign-ins run one at a time, on this thread. While the silent
-        checks run, a log line every 30 seconds says how many are done and about how long the
-        rest will take.
+        sign-in will do.
+
+        The silent checks run in the background, *jobs* at a time. Direct sign-ins run on the
+        thread that iterates, one at a time, as soon as a tenant needs one: the tenants never
+        checked first, then each one whose check fails. Before each one, every tenant whose
+        check has passed is handed out, so a sign-in window holds up no tenant that is ready.
+        A log line every 30 seconds says how many checks are done and about how long the rest
+        will take. Stopping the iteration (``close()``) cancels the checks not yet started and
+        opens no more sign-in windows.
 
         :meth:`context_for` then hands out what was found, and raises the reason for a tenant
         that could not be reached.
@@ -297,70 +308,113 @@ class PartnerSession:
                 app can, through the partner sign-in only (azure-auth's ``GraphClient`` option
                 of that name). Each grant waits for a token that carries the new scopes,
                 about a minute and three at most.
+
+        Yields:
+            Each tenant once, as soon as :meth:`context_for` can hand out its context or the
+            reason it could not be reached.
         """
         partner_cloud = self.cloud_name.lower()
         nearby = [
             t for t in tenants if t.gdap and (t.cloud or self.cloud_name).lower() == partner_cloud
         ]
+        checked_ids = {t.tenant_id.lower() for t in nearby}
+        # Tenants waiting for a direct sign-in, each with why the partner sign-in failed, or
+        # None when it was never tried.
+        direct: deque[tuple[Tenant, Exception | None]] = deque(
+            (t, None) for t in tenants if t.tenant_id.lower() not in checked_ids
+        )
         logger.info("Checking access to %d tenant(s)", len(tenants))
-        checked: dict[str, AuthContext | Exception] = {}
+        done = 0
         started = last = monotonic()
         with ThreadPoolExecutor(
             max_workers=max(1, min(jobs, len(nearby))), thread_name_prefix="check"
         ) as pool:
-            futures = {
-                pool.submit(
-                    self._through_partner, t, scopes, clients, grant_when_possible
-                ): t.tenant_id.lower()
+            checks = {
+                pool.submit(self._through_partner, t, scopes, clients, grant_when_possible): t
                 for t in nearby
             }
+            position = {future: index for index, future in enumerate(checks)}
+            waiting = set(checks)
             try:
-                for done, future in enumerate(as_completed(futures), start=1):
-                    checked[futures[future]] = future.result()
-                    now = monotonic()
-                    if done < len(nearby) and now - last >= _PROGRESS_EVERY:
-                        last = now
-                        left = (now - started) / done * (len(nearby) - done)
-                        logger.info(
-                            "Checked %d of %d tenant(s), %s", done, len(nearby), _time_left(left)
+                while waiting or direct:
+                    # Wait for a check only when no sign-in is waiting to be done.
+                    finished, waiting = wait(
+                        waiting, timeout=0 if direct else None, return_when=FIRST_COMPLETED
+                    )
+                    for future in sorted(finished, key=position.__getitem__):
+                        tenant, route = checks[future], future.result()
+                        done += 1
+                        now = monotonic()
+                        if done < len(nearby) and now - last >= _PROGRESS_EVERY:
+                            last = now
+                            left = (now - started) / done * (len(nearby) - done)
+                            logger.info(
+                                "Checked %d of %d tenant(s), %s",
+                                done,
+                                len(nearby),
+                                _time_left(left),
+                            )
+                        if isinstance(route, AuthContext):
+                            self._routes[tenant.tenant_id.lower()] = route
+                            yield tenant
+                        else:
+                            direct.append((tenant, route))
+                    if direct:
+                        tenant, failure = direct.popleft()
+                        self._routes[tenant.tenant_id.lower()] = self._reach_directly(
+                            tenant, failure, scopes, clients
                         )
+                        yield tenant
             finally:
-                # On Ctrl+C, the checks not yet started never start.
-                for future in futures:
+                # On Ctrl+C, or when the run stops early, the checks not yet started never start.
+                for future in checks:
                     future.cancel()
-        for tenant in tenants:
-            key = tenant.tenant_id.lower()
-            route = checked.get(key)
-            if isinstance(route, AuthContext):
-                self._routes[key] = route
-                continue
-            if route is None and not tenant.gdap:
-                why = "its m365_gdap is not TRUE"
-                route = AuthError(
-                    f"{tenant.display_name}'s m365_gdap is not TRUE, so the partner sign-in "
-                    "was not tried; it needs a direct sign-in."
-                )
-            elif route is None:
-                why = f"it is in the {tenant.cloud} cloud"
-                route = AuthError(
-                    f"{tenant.display_name} is in the {tenant.cloud} cloud, which the partner "
-                    "sign-in cannot reach; it needs a direct sign-in."
-                )
-            else:
-                why = f"the partner sign-in cannot reach it ({route})"
-            if not tenant.username:
-                logger.warning(
-                    "Skipping %s: %s, and its m365_username is blank", tenant.display_name, why
-                )
-                self._routes[key] = AuthError(
-                    f"{route} No direct sign-in to {tenant.display_name}: its m365_username is "
-                    "blank."
-                )
-                continue
-            logger.info(
-                "Signing in to %s directly as %s: %s", tenant.display_name, tenant.username, why
+
+    def _reach_directly(
+        self,
+        tenant: Tenant,
+        failure: Exception | None,
+        scopes: Sequence[str],
+        clients: Sequence[str],
+    ) -> AuthContext | Exception:
+        """Give a tenant the partner sign-in does not reach a sign-in of its own, if it can.
+
+        Args:
+            tenant: The tenant.
+            failure: Why its check through the partner sign-in failed, or None when it had none:
+                its ``gdap`` is False, or it is in another cloud.
+            scopes: The script's Graph scopes.
+            clients: The script's ``CLIENTS``.
+
+        Returns:
+            The tenant's own context, else why it cannot be reached. A tenant with no
+            ``username`` gets no sign-in, and no prompt.
+        """
+        if failure is not None:
+            why = f"the partner sign-in cannot reach it ({failure})"
+        elif not tenant.gdap:
+            why = "its m365_gdap is not TRUE"
+            failure = AuthError(
+                f"{tenant.display_name}'s m365_gdap is not TRUE, so the partner sign-in "
+                "was not tried; it needs a direct sign-in."
             )
-            self._routes[key] = self._sign_in_directly(tenant, scopes, clients)
+        else:
+            why = f"it is in the {tenant.cloud} cloud"
+            failure = AuthError(
+                f"{tenant.display_name} is in the {tenant.cloud} cloud, which the partner "
+                "sign-in cannot reach; it needs a direct sign-in."
+            )
+        if not tenant.username:
+            logger.warning(
+                "Skipping %s: %s, and its m365_username is blank", tenant.display_name, why
+            )
+            return AuthError(
+                f"{failure} No direct sign-in to {tenant.display_name}: its m365_username is blank."
+            )
+        logger.info(
+            "Signing in to %s directly as %s: %s", tenant.display_name, tenant.username, why
+        )
+        return self._sign_in_directly(tenant, scopes, clients)
 
     def _through_partner(
         self,

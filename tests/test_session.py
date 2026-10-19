@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from itertools import count
 from pathlib import Path
 from typing import Any
@@ -219,7 +220,7 @@ def test_check_access_reaches_gdap_tenants_through_the_partner_sign_in(
     fake_msal: FakeMsal,
 ) -> None:
     session = _signed_in(["graph"])
-    session.check_access([ALPHA, BETA], scopes=["User.Read.All"], jobs=2)
+    list(session.check_access([ALPHA, BETA], scopes=["User.Read.All"], jobs=2))
     with session.context_for(ALPHA, scopes=["User.Read.All"]) as alpha:
         assert alpha.auth.home is session.auth
     assert fake_msal.interactive_tenants() == [PARTNER_TENANT]
@@ -252,7 +253,7 @@ def test_check_access_logs_progress_every_30_seconds(
         # Gamma is in another cloud, so it gets no silent check to count, and with no
         # m365_username, no sign-in of its own either.
         gamma = Tenant(TENANT_C, "Gamma", "USGov")
-        session.check_access([ALPHA, BETA, gamma], scopes=["User.Read.All"])
+        list(session.check_access([ALPHA, BETA, gamma], scopes=["User.Read.All"]))
     # Nothing after the last check: the lines that follow say how it went.
     assert [r.getMessage() for r in caplog.records if r.msg.startswith("Checked")] == lines
 
@@ -263,7 +264,7 @@ def test_check_access_signs_in_directly_where_the_partner_sign_in_fails(
     fake_msal.tenant_errors[TENANT_B] = CONSENT_REQUIRED
     beta_with_admin = Tenant(TENANT_B, "beta corp", "Commercial", BETA_ADMIN)
     session = _signed_in(["graph"])
-    session.check_access([ALPHA, beta_with_admin], scopes=["User.Read.All"])
+    list(session.check_access([ALPHA, beta_with_admin], scopes=["User.Read.All"]))
     with session.context_for(beta_with_admin, scopes=["User.Read.All"]) as beta:
         assert beta.auth.home is beta.auth
         assert (beta.auth.tenant.id, beta.auth.username) == (TENANT_B, BETA_ADMIN)
@@ -284,7 +285,7 @@ def test_check_access_tries_the_partner_sign_in_then_a_cached_direct_one(
     session = PartnerSession(make_settings(cache="disk"), transport=TRANSPORT)
     session.login(["graph"])
     with caplog.at_level(logging.INFO, logger="m365_gdap_runner.session"):
-        session.check_access([beta_with_admin], scopes=["User.Read.All"])
+        list(session.check_access([beta_with_admin], scopes=["User.Read.All"]))
     assert (
         f"Signing in to beta corp directly as {BETA_ADMIN}: the partner sign-in cannot reach it"
         in caplog.text
@@ -302,7 +303,7 @@ def test_check_access_never_tries_the_partner_sign_in_where_gdap_is_false(
     beta = Tenant(TENANT_B, "beta corp", "Commercial", BETA_ADMIN, gdap=False)
     session = _signed_in(["graph"])
     with caplog.at_level(logging.INFO, logger="m365_gdap_runner.session"):
-        session.check_access([ALPHA, beta], scopes=["User.Read.All"])
+        list(session.check_access([ALPHA, beta], scopes=["User.Read.All"]))
     assert fake_msal.silent_calls(TENANT_B) == []
     assert fake_msal.interactive_tenants() == [PARTNER_TENANT, TENANT_B]
     assert (
@@ -330,7 +331,7 @@ def test_check_access_never_signs_in_directly_as_the_partner_account(
 ) -> None:
     fake_msal.tenant_errors[TENANT_B] = CONSENT_REQUIRED
     session = _signed_in(["graph"])
-    session.check_access([tenant], scopes=["User.Read.All"])
+    list(session.check_access([tenant], scopes=["User.Read.All"]))
     with pytest.raises(AuthError, match="m365_username is blank") as info:
         session.context_for(tenant, scopes=["User.Read.All"])
     assert reason in str(info.value)
@@ -341,7 +342,7 @@ def test_check_access_signs_in_to_another_cloud_once_per_client_as_its_account(
     fake_msal: FakeMsal,
 ) -> None:
     session = _signed_in(["graph", "exchange"])
-    session.check_access([GAMMA_GOV], scopes=["User.Read.All"], clients=["graph", "exchange"])
+    list(session.check_access([GAMMA_GOV], scopes=["User.Read.All"], clients=["graph", "exchange"]))
     # Straight to Gamma's own sign-in, never through the commercial partner sign-in: Graph
     # first, then Exchange, which has no refresh token of its own for this account yet.
     assert [(c.method, c.client_id) for c in fake_msal.calls if c.tenant_id == TENANT_C] == [
@@ -360,9 +361,87 @@ def test_check_access_signs_in_to_another_cloud_once_per_client_as_its_account(
 def test_a_failed_direct_sign_in_is_what_context_for_raises(fake_msal: FakeMsal) -> None:
     fake_msal.interactive_errors[TENANT_C] = {"error": "access_denied", "error_description": "no"}
     session = _signed_in(["graph"])
-    session.check_access([GAMMA_GOV], scopes=["User.Read.All"])
+    list(session.check_access([GAMMA_GOV], scopes=["User.Read.All"]))
     with pytest.raises(AuthError, match="access_denied"):
         session.context_for(GAMMA_GOV, scopes=["User.Read.All"])
+
+
+def test_check_access_hands_out_every_tenant_once(fake_msal: FakeMsal) -> None:
+    fake_msal.tenant_errors[TENANT_B] = CONSENT_REQUIRED
+    blank_gamma = Tenant(TENANT_C, "Gamma", "USGov")
+    session = _signed_in(["graph"])
+    handed_out = list(session.check_access([ALPHA, BETA, blank_gamma], jobs=2))
+    # Reached or not: context_for() then has a context or the reason for each.
+    assert sorted(t.tenant_id for t in handed_out) == [TENANT_A, TENANT_B, TENANT_C]
+
+
+@pytest.mark.acceptance
+@pytest.mark.parametrize(
+    "beta",
+    [
+        Tenant(TENANT_B, "beta corp", "Commercial", BETA_ADMIN, gdap=False),
+        Tenant(TENANT_B, "beta corp", "Commercial", BETA_ADMIN),
+    ],
+    ids=["never-checked", "check-failed"],
+)
+def test_a_direct_sign_in_does_not_wait_for_the_other_checks(
+    fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, beta: Tenant
+) -> None:
+    fake_msal.tenant_errors[TENANT_B] = CONSENT_REQUIRED
+    beta_signed_in = threading.Event()
+    through_partner = PartnerSession._through_partner
+    sign_in_directly = PartnerSession._sign_in_directly
+
+    def alpha_waits_for_beta(
+        self: PartnerSession, tenant: Tenant, *args: Any
+    ) -> AuthContext | Exception:
+        if tenant.tenant_id == TENANT_A:
+            assert beta_signed_in.wait(5), "beta corp's sign-in waited for Alpha's check"
+        return through_partner(self, tenant, *args)
+
+    def sign_in(self: PartnerSession, tenant: Tenant, *args: Any) -> AuthContext | Exception:
+        try:
+            return sign_in_directly(self, tenant, *args)
+        finally:
+            beta_signed_in.set()
+
+    monkeypatch.setattr(PartnerSession, "_through_partner", alpha_waits_for_beta)
+    monkeypatch.setattr(PartnerSession, "_sign_in_directly", sign_in)
+    session = _signed_in(["graph"])
+    handed_out = list(session.check_access([ALPHA, beta], scopes=["User.Read.All"], jobs=2))
+    assert handed_out == [beta, ALPHA]
+    assert fake_msal.interactive_tenants() == [PARTNER_TENANT, TENANT_B]
+
+
+def test_direct_sign_ins_open_one_at_a_time_on_the_thread_that_iterates(
+    fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_msal.tenant_errors[TENANT_A] = CONSENT_REQUIRED
+    fake_msal.tenant_errors[TENANT_B] = CONSENT_REQUIRED
+    threads: list[threading.Thread] = []
+    interactive = FakeApp.acquire_token_interactive
+
+    def recording(self: FakeApp, scopes: list[str], **kwargs: Any) -> dict[str, Any]:
+        threads.append(threading.current_thread())
+        return interactive(self, scopes, **kwargs)
+
+    monkeypatch.setattr(FakeApp, "acquire_token_interactive", recording)
+    alpha = Tenant(TENANT_A, "Alpha", "Commercial", "admin@alpha.example")
+    beta = Tenant(TENANT_B, "beta corp", "Commercial", BETA_ADMIN)
+    session = _signed_in(["graph"])
+    list(session.check_access([alpha, beta], scopes=["User.Read.All"], jobs=2))
+    # The partner sign-in, then each tenant's own, in the order their checks failed.
+    assert sorted(fake_msal.interactive_tenants()[1:]) == [TENANT_A, TENANT_B]
+    assert threads == [threading.current_thread()] * 3
+
+
+def test_closing_check_access_opens_no_more_sign_in_windows(fake_msal: FakeMsal) -> None:
+    beta = Tenant(TENANT_B, "beta corp", "Commercial", BETA_ADMIN, gdap=False)
+    session = _signed_in(["graph"])
+    ready = session.check_access([beta, GAMMA_GOV], scopes=["User.Read.All"])
+    assert next(ready) == beta
+    ready.close()
+    assert fake_msal.interactive_tenants() == [PARTNER_TENANT, TENANT_B]
 
 
 # --- the browser -----------------------------------------------------------------------
@@ -413,7 +492,7 @@ def test_the_partner_and_direct_sign_ins_use_the_browser_settings(
     beta_with_admin = Tenant(TENANT_B, "beta corp", "Commercial", BETA_ADMIN)
     session = PartnerSession(make_settings(**overrides), transport=TRANSPORT)
     session.login(["graph"])
-    session.check_access([beta_with_admin], scopes=["User.Read.All"])
+    list(session.check_access([beta_with_admin], scopes=["User.Read.All"]))
     # The partner sign-in, then beta corp's own.
     assert fake_msal.interactive_tenants() == [PARTNER_TENANT, TENANT_B]
     assert browsers == opened
@@ -442,7 +521,7 @@ def test_the_partner_and_direct_sign_ins_wait_browser_timeout_seconds(
     beta_with_admin = Tenant(TENANT_B, "beta corp", "Commercial", BETA_ADMIN)
     session = PartnerSession(make_settings(**overrides), transport=TRANSPORT)
     session.login(["graph"])
-    session.check_access([beta_with_admin], scopes=["User.Read.All"])
+    list(session.check_access([beta_with_admin], scopes=["User.Read.All"]))
     # The partner sign-in, then beta corp's own.
     assert timeouts == [timeout, timeout]
 
@@ -498,7 +577,7 @@ def test_the_partner_and_direct_sign_ins_use_the_cache_settings(
     beta_with_admin = Tenant(TENANT_B, "beta corp", "Commercial", BETA_ADMIN)
     session = PartnerSession(make_settings(**overrides), transport=TRANSPORT)
     session.login(["graph"])
-    session.check_access([beta_with_admin], scopes=["User.Read.All"])
+    list(session.check_access([beta_with_admin], scopes=["User.Read.All"]))
     # The partner sign-in, then beta corp's own.
     assert cache_files == [asked, asked]
 

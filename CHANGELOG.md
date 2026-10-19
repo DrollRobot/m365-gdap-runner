@@ -53,17 +53,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `m365-gdap-runner` command creates or refreshes the file and lists the tenants. Setting
   `tenants_file` and flag `--tenants-file` locate the file (default `tenants.csv` in the
   config directory).
-- Tenants the partner sign-in cannot reach: before the first `run()`, every selected tenant
-  is checked silently through the partner sign-in, and each one that fails, or lives in
+- Tenants the partner sign-in cannot reach: before its `run()`, each selected tenant is
+  checked silently through the partner sign-in, and each one that fails, or lives in
   another cloud, gets a sign-in of its own, in its own cloud, as its `m365_username`, one
-  client at a time, so the loop never prompts. Where `m365_username` is blank, those tenants
-  are left `auth_failed` instead. `m365_gdap` marks the tenants the partner sign-in reaches:
-  TRUE, which appended rows get, tries it first. FALSE or blank, as for a tenant GDAP lists
-  but cannot reach, skips the silent check and goes straight to its own sign-in, or, with
-  `m365_username` blank too, leaves the tenant out of the run with a warning. It is also a
-  group, so `--include m365_gdap` runs only the tenants it marks. While the silent checks
-  run, a log line every 30 seconds says how many are done and about how long the rest will
-  take.
+  client at a time. Sign-in windows open one at a time, as soon as a tenant needs one, and
+  each tenant's `run()` starts as soon as its access is settled, without waiting for the
+  other tenants' checks and sign-ins; `run()` never prompts. Where `m365_username` is
+  blank, those tenants are left `auth_failed` instead. `m365_gdap` marks the tenants the
+  partner sign-in reaches: TRUE, which appended rows get, tries it first. FALSE or blank, as
+  for a tenant GDAP lists but cannot reach, skips the silent check and goes straight to its
+  own sign-in, or, with `m365_username` blank too, leaves the tenant out of the run with a
+  warning. It is also a group, so `--include m365_gdap` runs only the tenants it marks.
+  While the silent checks run, a log line every 30 seconds says how many are done and about
+  how long the rest will take.
 - Script setting `CONTINUE_ON_ERROR`: an error in `run()` stops the run unless the script sets
   it True, as the example reports and the service principal example do.
   `--continue-on-error` and the new `--no-continue-on-error` override it.

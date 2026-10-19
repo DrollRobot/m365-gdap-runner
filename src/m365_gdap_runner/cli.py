@@ -19,11 +19,12 @@ writes the run's.
 Tenants are chosen with ``--include``, less ``--exclude``: each takes a tenant, a group (a
 TRUE/FALSE column of the tenants file, see ``tenants.py``), and ``--include`` also ``all``,
 every GDAP tenant. A run that includes nothing is refused. A tenant or group may pick tenants
-without a GDAP relationship, or in another cloud, from the tenants file; before the loop,
-every tenant the partner sign-in cannot reach gets a sign-in of its own. A tenant whose
-``m365_gdap`` is not TRUE and whose ``m365_username`` is blank is left out. Every run adds
-the columns and GDAP tenants the file lacks. The ``m365-gdap-runner`` command
-(:func:`list_tenants`) does only that, and prints the list.
+without a GDAP relationship, or in another cloud, from the tenants file; before its
+``run()``, every tenant the partner sign-in cannot reach gets a sign-in of its own. Each
+tenant's ``run()`` starts as soon as its access is settled, without waiting for the other
+tenants'. A tenant whose ``m365_gdap`` is not TRUE and whose ``m365_username`` is blank is
+left out. Every run adds the columns and GDAP tenants the file lacks. The
+``m365-gdap-runner`` command (:func:`list_tenants`) does only that, and prints the list.
 
 Configuration comes from the config system (see ``src/m365_gdap_runner/config/``);
 ``--partner-tenant-id``, ``--username``, ``--client-id``, ``--cache``, ``--cloud``,
@@ -556,8 +557,9 @@ def _run(
         logger.error("%s", exc)
         return EXIT_USAGE
 
-    # Every prompt happens here, one at a time, so the loop below can run in parallel.
-    session.check_access(
+    # Every prompt happens in check_access(), one at a time, on this thread, and each tenant
+    # starts as soon as it hands it over.
+    ready = session.check_access(
         selected,
         scopes=payload.scopes,
         clients=payload.clients,
@@ -575,6 +577,7 @@ def _run(
             session,
             payload,
             selected,
+            ready=ready,
             continue_on_error=(
                 payload.continue_on_error
                 if args.continue_on_error is None

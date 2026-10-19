@@ -1,17 +1,21 @@
 """Run one script across many tenants.
 
-Access is settled before the loop (:meth:`~m365_gdap_runner.session.PartnerSession.check_access`):
-every declared client already holds a token for each tenant it could reach. For each tenant
-the runner builds a :class:`~m365_gdap_runner.context.TenantContext` and calls ``run()``; a
-tenant that could not be reached becomes an ``auth_failed`` result and ``run()`` never starts.
+Access is settled per tenant before its ``run()``
+(:meth:`~m365_gdap_runner.session.PartnerSession.check_access`): every declared client already
+holds a token for the tenant, if it could be reached. ``check_access()`` hands the tenants
+over as ``ready``, one by one, and each starts as soon as it is handed over, while this thread
+goes back for the next. For each tenant the runner builds a
+:class:`~m365_gdap_runner.context.TenantContext` and calls ``run()``; a tenant that could not
+be reached becomes an ``auth_failed`` result and ``run()`` never starts.
 
 Consent is not authorization: a consented scope can still get 403 if the GDAP
 relationship lacks the needed role. That surfaces inside ``run()`` as a resource
 error and becomes an ``error`` result.
 
-Tenants run serially or on a thread pool (``jobs``). Every input tenant gets
-exactly one :class:`TenantResult`, in input order. Stop-on-first-error is
-best-effort under parallelism: tenants already running finish and are recorded.
+Tenants run serially or on a thread pool (``jobs``); with ``ready``, always on the pool, so
+nothing ``ready`` does to find the next tenant, such as a sign-in, waits for a ``run()``.
+Every input tenant gets exactly one :class:`TenantResult`, in input order. After an error
+stops the run, no tenant starts, but tenants already running finish and are recorded.
 Thread safety relies on azure-auth's locks around its token cache and on one
 context (with its own clients) per tenant; nothing else is shared.
 """
@@ -19,9 +23,10 @@ context (with its own clients) per tenant; nothing else is shared.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Generator, Iterable, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -126,6 +131,7 @@ def run_payload(
     payload: Payload,
     tenants: Sequence[Tenant],
     *,
+    ready: Iterable[Tenant] | None = None,
     continue_on_error: bool = False,
     jobs: int = 1,
 ) -> list[TenantResult]:
@@ -135,6 +141,9 @@ def run_payload(
         session: A signed-in session.
         payload: The validated payload.
         tenants: Tenants to run against, in output order.
+        ready: The same tenants, in the order they may start, each handed over when its
+            access is settled, as ``PartnerSession.check_access()`` yields them. None starts
+            them in input order. A generator is closed when the run stops early.
         continue_on_error: Keep going after a payload error. Auth failures
             never stop the run.
         jobs: Maximum tenants processed concurrently.
@@ -148,13 +157,14 @@ def run_payload(
     """
     if jobs < 1:
         raise ValueError("jobs must be at least 1.")
-    if jobs == 1 or len(tenants) <= 1:
+    if ready is None and (jobs == 1 or len(tenants) <= 1):
         return _run_serial(session, payload, tenants, continue_on_error=continue_on_error)
     return _run_parallel(
         session,
         payload,
         tenants,
-        jobs=min(jobs, len(tenants)),
+        ready=tenants if ready is None else ready,
+        jobs=max(1, min(jobs, len(tenants))),
         continue_on_error=continue_on_error,
     )
 
@@ -199,32 +209,44 @@ def _run_parallel(
     payload: Payload,
     tenants: Sequence[Tenant],
     *,
+    ready: Iterable[Tenant],
     jobs: int,
     continue_on_error: bool,
 ) -> list[TenantResult]:
-    """Run tenants on a thread pool.
+    """Run tenants on a thread pool, each as soon as *ready* hands it over.
+
+    This thread takes the tenants from *ready* while the pool runs the ones it has.
 
     Args:
         session: A signed-in session.
         payload: The validated payload.
         tenants: Tenants in output order.
+        ready: The same tenants, in the order they may start.
         jobs: Worker threads.
         continue_on_error: Keep going after a payload error.
 
     Returns:
-        One result per tenant, in input order; cancelled tenants are ``skipped``.
+        One result per tenant, in input order; tenants that never started are ``skipped``.
 
     Raises:
         RunInterrupted: On Ctrl+C, after in-flight tenants finish.
     """
+    position = {tenant.tenant_id.lower(): index for index, tenant in enumerate(tenants)}
     done: dict[int, TenantResult] = {}
+    # Set by the worker whose tenant's error stops the run, before it takes another tenant.
+    stopped = threading.Event()
     executor = ThreadPoolExecutor(max_workers=jobs, thread_name_prefix="tenant")
-    futures: dict[Future[TenantResult], int] = {
-        executor.submit(_run_one, session, payload, tenant): index
-        for index, tenant in enumerate(tenants)
-    }
+    futures: dict[Future[TenantResult], int] = {}
+    handing_over = iter(ready)
     interrupted = False
     try:
+        for tenant in handing_over:
+            if stopped.is_set():
+                break
+            future = executor.submit(
+                _run_unless_stopped, session, payload, tenant, stopped, continue_on_error
+            )
+            futures[future] = position[tenant.tenant_id.lower()]
         for future in as_completed(futures):
             index = futures[future]
             done[index] = _result_or_interrupted(future, tenants[index])
@@ -238,6 +260,9 @@ def _run_parallel(
     except KeyboardInterrupt:
         interrupted = True
     finally:
+        # A generator, such as check_access(), stops: no more checks or sign-in windows.
+        if isinstance(handing_over, Generator):
+            handing_over.close()
         # Cancel tenants that have not started. as_completed() is never notified about
         # futures cancelled this way, so wait on the running ones directly.
         executor.shutdown(wait=False, cancel_futures=True)
@@ -294,6 +319,33 @@ def _ordered(done: dict[int, TenantResult], tenants: Sequence[Tenant]) -> list[T
         done[index] if index in done else TenantResult(tenant, "skipped")
         for index, tenant in enumerate(tenants)
     ]
+
+
+def _run_unless_stopped(
+    session: ContextFactory,
+    payload: Payload,
+    tenant: Tenant,
+    stopped: threading.Event,
+    continue_on_error: bool,
+) -> TenantResult:
+    """Process one tenant unless an error has stopped the run, and stop it on an error.
+
+    Args:
+        session: A signed-in session.
+        payload: The validated payload.
+        tenant: The tenant.
+        stopped: Set once an error stops the run.
+        continue_on_error: Keep going after a payload error.
+
+    Returns:
+        The tenant's result; ``skipped`` when the run stopped before it started.
+    """
+    if stopped.is_set():
+        return TenantResult(tenant, "skipped")
+    result = _run_one(session, payload, tenant)
+    if result.status == "error" and not continue_on_error:
+        stopped.set()
+    return result
 
 
 def _run_one(session: ContextFactory, payload: Payload, tenant: Tenant) -> TenantResult:
