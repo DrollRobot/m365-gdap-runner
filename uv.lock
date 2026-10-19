@@ -99,8 +99,8 @@ wheels = [
 
 [[package]]
 name = "azure-auth"
-version = "0.6.0"
-source = { git = "https://github.com/DrollRobot/azure-auth.git?tag=v0.6.0#6c5da51a9bd5fcfe025b6c3b317234bcb75a8ff0" }
+version = "0.6.1"
+source = { git = "https://github.com/DrollRobot/azure-auth.git?tag=v0.6.1#ef5d47f0a2a2140a0222df24b4bd9d32df1eb06f" }
 dependencies = [
     { name = "azure-core" },
     { name = "cryptography" },
@@ -922,7 +922,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "azure-auth", git = "https://github.com/DrollRobot/azure-auth.git?tag=v0.6.0" },
+    { name = "azure-auth", git = "https://github.com/DrollRobot/azure-auth.git?tag=v0.6.1" },
     { name = "httpx", specifier = ">=0.28.1,<1" },
     { name = "platformdirs", specifier = ">=4.3,<5" },
     { name = "tomlkit", specifier = ">=0.13,<1" },
