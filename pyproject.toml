@@ -53,7 +53,7 @@ constraint-dependencies = [
 ]
 
 [tool.uv.sources]
-azure-auth = { git = "https://github.com/DrollRobot/azure-auth.git", tag = "v0.4.1" }
+azure-auth = { git = "https://github.com/DrollRobot/azure-auth.git", tag = "v0.5.0" }
 
 [project.scripts]
 m365-gdap-runner = "m365_gdap_runner.cli:list_tenants"
@@ -123,5 +123,5 @@ min_confidence = 60
 ignore_names = [
     "exchange",  # context.py: TenantContext clients, read by payloads
     "ipps",
-    "azure",
+    "arm",
 ]

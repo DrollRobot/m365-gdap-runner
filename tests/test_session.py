@@ -41,7 +41,7 @@ TRANSPORT = httpx.MockTransport(fake_services)
 
 def test_login_signs_in_once_per_client_id(fake_msal: FakeMsal) -> None:
     session = PartnerSession(make_settings(), transport=TRANSPORT)
-    session.login(["graph", "exchange", "ipps", "azure"])
+    session.login(["graph", "exchange", "ipps", "arm"])
     interactive = [c for c in fake_msal.calls if c.method == "interactive"]
     assert [(c.tenant_id, c.client_id, c.scopes) for c in interactive] == [
         (PARTNER_TENANT, GRAPH_CLI_CLIENT_ID, (PARTNER_SCOPE,)),
@@ -105,13 +105,13 @@ def test_list_tenants_dedupes_sorts_and_names_nameless_by_id(fake_msal: FakeMsal
     assert fake_msal.interactive_calls == 1
 
 
-def test_context_for_is_a_sibling_whose_probe_checks_the_customer(fake_msal: FakeMsal) -> None:
+def test_context_for_uses_the_partner_sign_in_and_probes_the_customer(fake_msal: FakeMsal) -> None:
     fake_msal.tenant_errors[TENANT_B] = CONSENT_REQUIRED
     session = PartnerSession(make_settings(), transport=TRANSPORT)
     session.login(["graph"])
 
     with session.context_for(Tenant(TENANT_A, "Alpha"), scopes=["User.Read.All"]) as alpha:
-        assert alpha.auth.is_sibling
+        assert alpha.auth.home is session.auth
         assert alpha.auth.tenant.id == TENANT_A
         alpha.probe()
         assert bearer_tenant(alpha.graph.request("GET", "/users").request) == TENANT_A
@@ -122,8 +122,11 @@ def test_context_for_is_a_sibling_whose_probe_checks_the_customer(fake_msal: Fak
     ):
         beta.probe()
     assert info.value.tenant_id == TENANT_B
+    assert info.value.missing == ("User.Read.All",)
+    # .default, cached then fresh, shows nothing is granted, so User.Read.All is never asked for.
     assert fake_msal.silent_calls(TENANT_B) == [
-        (GRAPH_CLI_CLIENT_ID, ("https://graph.microsoft.com/User.Read.All",))
+        (GRAPH_CLI_CLIENT_ID, ("https://graph.microsoft.com/.default",)),
+        (GRAPH_CLI_CLIENT_ID, ("https://graph.microsoft.com/.default",)),
     ]
     assert fake_msal.interactive_calls == 1
 
@@ -255,10 +258,11 @@ def test_check_access_reaches_gdap_tenants_through_the_partner_sign_in(
     session = _signed_in(["graph"])
     session.check_access([ALPHA, BETA], scopes=["User.Read.All"], jobs=2)
     with session.context_for(ALPHA, scopes=["User.Read.All"]) as alpha:
-        assert alpha.auth.is_sibling
+        assert alpha.auth.home is session.auth
     assert fake_msal.interactive_tenants() == [PARTNER_TENANT]
     assert fake_msal.silent_calls(TENANT_B) == [
-        (GRAPH_CLI_CLIENT_ID, ("https://graph.microsoft.com/User.Read.All",))
+        (GRAPH_CLI_CLIENT_ID, ("https://graph.microsoft.com/.default",)),
+        (GRAPH_CLI_CLIENT_ID, ("https://graph.microsoft.com/User.Read.All",)),
     ]
 
 
@@ -298,7 +302,7 @@ def test_check_access_signs_in_directly_where_the_partner_sign_in_fails(
     session = _signed_in(["graph"])
     session.check_access([ALPHA, beta_with_admin], scopes=["User.Read.All"])
     with session.context_for(beta_with_admin, scopes=["User.Read.All"]) as beta:
-        assert not beta.auth.is_sibling
+        assert beta.auth.home is beta.auth
         assert (beta.auth.tenant.id, beta.auth.username) == (TENANT_B, BETA_ADMIN)
         assert bearer_tenant(beta.graph.request("GET", "/users").request) == TENANT_B
     assert fake_msal.interactive_tenants() == [PARTNER_TENANT, TENANT_B]
@@ -319,14 +323,14 @@ def test_check_access_never_tries_the_partner_sign_in_where_gdap_is_false(
         in caplog.text
     )
     with session.context_for(beta, scopes=["User.Read.All"]) as context:
-        assert (context.auth.is_sibling, context.auth.username) == (False, BETA_ADMIN)
+        assert (context.auth.home is context.auth, context.auth.username) == (True, BETA_ADMIN)
 
 
 @pytest.mark.regression
 @pytest.mark.parametrize(
     ("tenant", "reason"),
     [
-        (BETA, "AADSTS65001"),
+        (BETA, "has no consent in tenant"),
         (Tenant(TENANT_C, "Gamma", "USGov"), "Gamma is in the USGov cloud"),
         (
             Tenant(TENANT_B, "beta corp", "Commercial", gdap=False),

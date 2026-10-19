@@ -83,12 +83,8 @@ def test_graph_example_runs_through_session_and_azure_auth(fake_msal: FakeMsal) 
         }
     ]
     assert results[1].error is not None
-    assert "AADSTS65001" in results[1].error
-
-    # Consent was checked with the script's own scopes, not .default.
-    assert fake_msal.silent_calls(TENANT_B) == [
-        (GRAPH_CLI_CLIENT_ID, ("https://graph.microsoft.com/User.Read.All",))
-    ]
+    # Consent was checked against the script's own scopes: the refusal names them.
+    assert "User.Read.All cannot be issued" in results[1].error
     # The script never ran for the tenant that refused the token.
     users_requests = [r for r in seen if r.url.path == "/v1.0/users"]
     assert [bearer_tenant(r) for r in users_requests] == [TENANT_A]
@@ -460,10 +456,10 @@ def test_connectwise_dry_run_changes_nothing_and_says_what_would_change(
         "beta corp  not found\n"
     )
     # The dry run checks consent for the write scope the real run needs.
-    assert fake_msal.silent_calls(TENANT_A)[0] == (
+    assert (
         GRAPH_CLI_CLIENT_ID,
         ("https://graph.microsoft.com/Application.ReadWrite.All",),
-    )
+    ) in fake_msal.silent_calls(TENANT_A)
 
 
 def test_connectwise_disables_sign_in_where_it_is_still_enabled(

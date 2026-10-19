@@ -6,7 +6,7 @@ isolation and optional parallelism. After the last tenant, the script's ``report
 when it has one, gets every tenant's result; the library writes no output of its own.
 
 A script is a ``.py`` file with ``run(ctx)``, the Graph ``SCOPES`` it needs, and which
-``CLIENTS`` it uses (``graph`` by default; also ``exchange``, ``ipps``, ``azure``). Its
+``CLIENTS`` it uses (``graph`` by default; also ``exchange``, ``ipps``, ``arm``). Its
 ``__main__`` block hands it to :func:`main`::
 
     from m365_gdap_runner import TenantContext, TenantResult

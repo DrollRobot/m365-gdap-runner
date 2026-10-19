@@ -17,14 +17,14 @@ from typing import Literal, Self
 
 import httpx
 from azure_auth import AuthContext
-from azure_auth.sync import AzureClient, ExchangeClient, GraphClient, IppsClient, ResourceClient
+from azure_auth.sync import ArmClient, ExchangeClient, GraphClient, IppsClient, ResourceClient
 
 from m365_gdap_runner.tenants import Tenant
 
-ClientKind = Literal["graph", "exchange", "ipps", "azure"]
+ClientKind = Literal["graph", "exchange", "ipps", "arm"]
 
 # Every client a payload can declare in ``CLIENTS``, in the order they are signed in.
-CLIENT_KINDS: tuple[ClientKind, ...] = ("graph", "exchange", "ipps", "azure")
+CLIENT_KINDS: tuple[ClientKind, ...] = ("graph", "exchange", "ipps", "arm")
 
 
 class ClientNotDeclared(RuntimeError):
@@ -70,8 +70,8 @@ def build_client(
         return ExchangeClient(auth, transport=transport)
     if kind == "ipps":
         return IppsClient(auth, transport=transport)
-    if kind == "azure":
-        return AzureClient(auth, transport=transport)
+    if kind == "arm":
+        return ArmClient(auth, transport=transport)
     raise ValueError(f"Unknown client kind {kind!r}; expected one of {', '.join(CLIENT_KINDS)}.")
 
 
@@ -152,19 +152,19 @@ class TenantContext:
         return client
 
     @property
-    def azure(self) -> AzureClient:
+    def arm(self) -> ArmClient:
         """Azure Resource Manager client bound to this tenant."""
-        client = self._client("azure")
-        assert isinstance(client, AzureClient)  # noqa: S101
+        client = self._client("arm")
+        assert isinstance(client, ArmClient)  # noqa: S101
         return client
 
     def probe(self) -> None:
         """Get a token for every declared client without prompting.
 
         This is the check :meth:`~m365_gdap_runner.session.PartnerSession.check_access` makes
-        before the run: a sibling context never opens a browser, so a scope that is not
-        consented in this tenant, or a Conditional Access policy that wants a fresh sign-in,
-        fails here instead of inside the script.
+        before the run: a context from azure-auth's ``get_tenant_context()`` never opens a
+        browser, so a scope that is not consented in this tenant, or a Conditional Access policy
+        that wants a fresh sign-in, fails here instead of inside the script.
 
         Raises:
             azure_auth.ConsentRequired: If consent is missing in this tenant.

@@ -27,7 +27,7 @@ import json
 
 from m365_gdap_runner import TenantContext, TenantResult
 
-# Which of ctx.graph, ctx.exchange, ctx.ipps and ctx.azure this script uses. The runner
+# Which of ctx.graph, ctx.exchange, ctx.ipps and ctx.arm this script uses. The runner
 # signs in once per client at the partner tenant and checks each in every customer tenant.
 CLIENTS = ["graph"]
 

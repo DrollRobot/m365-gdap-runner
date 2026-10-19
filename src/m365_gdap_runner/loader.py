@@ -2,7 +2,7 @@
 
 A script defines ``run(ctx)`` and declares what it uses:
 
-- ``CLIENTS``: which of ``ctx.graph``, ``ctx.exchange``, ``ctx.ipps`` and ``ctx.azure``
+- ``CLIENTS``: which of ``ctx.graph``, ``ctx.exchange``, ``ctx.ipps`` and ``ctx.arm``
   it needs. Defaults to ``["graph"]``. The runner signs in once per client at the
   partner tenant and checks each one in every customer tenant before ``run()``.
 - ``SCOPES``: the delegated Graph scopes it needs in each customer tenant. Required
@@ -52,7 +52,7 @@ class Payload:
         name: The script's file name without ``.py``.
         run: The script's ``run(ctx)`` function.
         scopes: Delegated Graph scopes the script needs in each tenant.
-        clients: Client kinds the script uses (``graph``, ``exchange``, ``ipps``, ``azure``).
+        clients: Client kinds the script uses (``graph``, ``exchange``, ``ipps``, ``arm``).
         report: The script's ``report(results)`` function, or None when it has none.
         continue_on_error: Whether the run goes on after an error in ``run()``.
     """

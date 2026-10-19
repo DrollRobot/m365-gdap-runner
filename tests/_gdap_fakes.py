@@ -1,8 +1,8 @@
 """Shared fakes for the runner tests.
 
 Two boundaries are faked: the ``msal`` module azure-auth signs in with, and the HTTP
-transport its clients send requests through. Everything between them (``AuthContext``,
-sibling contexts, the Graph and Exchange clients) is real.
+transport its clients send requests through. Everything between them (``AuthContext``, the
+contexts ``get_tenant_context()`` returns, the Graph and Exchange clients) is real.
 
 Fake access tokens are unsigned JWTs whose ``tid`` claim is the tenant they were issued
 for, so a fake service can tell which tenant a request is for from its bearer token, and

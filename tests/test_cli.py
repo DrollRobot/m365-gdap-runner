@@ -342,7 +342,7 @@ def test_report_gets_every_tenant_in_order_failures_included(
     )
     assert (beta.tenant.tenant_id, beta.status, beta.result) == (TENANT_B, "auth_failed", None)
     assert beta.error is not None
-    assert "AADSTS65001" in beta.error
+    assert "has no consent in tenant" in beta.error
     captured = capsys.readouterr()
     assert captured.out == ""  # the library writes nothing; stdout is the script's
     assert "Summary: ok=1, auth_failed=1, error=0, skipped=0" in captured.err

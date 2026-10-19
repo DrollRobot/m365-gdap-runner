@@ -2,8 +2,8 @@
 
 azure-auth does the authentication. This module only decides *what* to sign in to: one
 sign-in per client id the script uses, all at the partner (home) tenant, before the loop
-starts. Customer tenants are reached through azure-auth sibling contexts, which never prompt;
-they redeem the home sign-in's refresh token in the customer tenant.
+starts. Customer tenants are reached through contexts from azure-auth's ``get_tenant_context()``,
+which never prompt; they redeem the home sign-in's refresh token in the customer tenant.
 
 The partner signs in through the browser or, with ``sign_in = "broker"`` on Windows, through
 the Windows broker, which holds the refresh token itself and can sign in the account already
@@ -113,11 +113,11 @@ class PartnerSession:
     """One partner sign-in, and the customer tenants reachable from it.
 
     Attributes:
-        auth: The root azure-auth context, for the partner tenant.
+        auth: The home azure-auth context, for the partner tenant.
     """
 
     def __init__(self, settings: Settings, *, transport: httpx.BaseTransport | None = None) -> None:
-        """Build the root context from settings. No sign-in happens yet.
+        """Build the home context from settings. No sign-in happens yet.
 
         Args:
             settings: Resolved settings.
@@ -335,10 +335,10 @@ class PartnerSession:
             clients: The script's ``CLIENTS``.
 
         Returns:
-            The sibling context when every client got a token, else what went wrong.
+            The customer tenant's context when every client got a token, else what went wrong.
         """
         try:
-            auth = self.auth.for_tenant(tenant.tenant_id)
+            auth = self.auth.get_tenant_context(tenant.tenant_id)
             with TenantContext(
                 tenant, auth, scopes=scopes, clients=clients, transport=self._transport
             ) as context:
@@ -403,7 +403,7 @@ class PartnerSession:
             raise route
         return TenantContext(
             tenant,
-            route or self.auth.for_tenant(tenant.tenant_id),
+            route or self.auth.get_tenant_context(tenant.tenant_id),
             scopes=scopes,
             clients=clients,
             transport=self._transport,

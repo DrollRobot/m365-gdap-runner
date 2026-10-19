@@ -68,7 +68,7 @@ cell. The `m365_gdap` column marks the tenants the partner sign-in reaches, so
 `--include m365_gdap` runs only those. FALSE or blank there skips the partner sign-in; with
 `m365_username` blank too, the tenant is left out of the run. The library writes no output of its own: `run()` writes any per-tenant report,
 `report()` the run's. A script with flags of its own adds the library's to its parser with
-`add_arguments()`. `ctx` also offers `exchange`, `ipps` and `azure` clients when declared in
+`add_arguments()`. `ctx` also offers `exchange`, `ipps` and `arm` clients when declared in
 `CLIENTS`, and `ctx.auth`, the azure-auth context, for anything else. See
 [docs/index.md](docs/index.md) and `examples/`.
 

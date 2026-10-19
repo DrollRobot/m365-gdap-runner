@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--jobs` parallelism. `add_arguments()` adds the library's flags to a script's own parser,
   for scripts with flags of their own.
 - Script contract: `run(ctx)`, the Graph `SCOPES` it needs, `CLIENTS` naming which of
-  `ctx.graph`, `ctx.exchange`, `ctx.ipps` and `ctx.azure` it uses (default `graph`), and an
+  `ctx.graph`, `ctx.exchange`, `ctx.ipps` and `ctx.arm` it uses (default `graph`), and an
   optional `report(results)`, called once after the last tenant with every tenant's
   `TenantResult`, failed ones included. The library writes no output of its own: `run()`
   writes any per-tenant report and `report()` the run's.
@@ -74,7 +74,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Authentication, token caching, tenant lookup, and the Graph, Exchange Online, Security &
   Compliance and Azure Resource Manager clients come from
-  [azure-auth](https://github.com/DrollRobot/azure-auth), pinned to v0.4.0. This package
+  [azure-auth](https://github.com/DrollRobot/azure-auth), pinned to v0.5.0. This package
   no longer carries an MSAL session or a Graph client of its own.
 
 [Unreleased]: https://github.com/DrollRobot/m365_gdap_runner/commits/HEAD

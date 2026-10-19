@@ -32,7 +32,7 @@ script needs:
 # ///
 from m365_gdap_runner import TenantContext, TenantResult
 
-CLIENTS = ["graph"]  # which of ctx.graph, ctx.exchange, ctx.ipps, ctx.azure you use
+CLIENTS = ["graph"]  # which of ctx.graph, ctx.exchange, ctx.ipps, ctx.arm you use
 SCOPES = ["User.Read.All"]  # delegated Graph scopes; only when "graph" is in CLIENTS
 
 
