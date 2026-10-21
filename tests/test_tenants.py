@@ -5,6 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from openpyxl import Workbook, load_workbook
+from openpyxl.utils.cell import coordinate_to_tuple, get_column_letter
+from openpyxl.worksheet.table import Table
+from openpyxl.worksheet.worksheet import Worksheet
 
 from m365_gdap_runner.config.paths import CONFIG_DIR_ENV
 from m365_gdap_runner.tenants import (
@@ -263,6 +267,101 @@ def test_load_rejects_non_utf8(tmp_path: Path) -> None:
 def test_load_reports_an_unreadable_path(tmp_path: Path) -> None:
     with pytest.raises(TenantFileError, match="Cannot read"):
         TenantFile.load(tmp_path)  # a directory
+
+
+# A row of workbook cells, as openpyxl writes them.
+XlsxRow = list[str | bool | int | None]
+
+
+def _write_xlsx(path: Path, *tables: tuple[str, list[XlsxRow]], totals_row: bool = False) -> Path:
+    """Write a one-sheet workbook under a title in A1, with a table per (top-left cell, rows).
+
+    The first of each table's rows is its header; with *totals_row*, its last is a totals row.
+    """
+    workbook = Workbook()
+    sheet = workbook.active
+    assert isinstance(sheet, Worksheet)
+    sheet["A1"] = "Customers"
+    for number, (corner, rows) in enumerate(tables, start=1):
+        top, left = coordinate_to_tuple(corner)
+        for row_offset, row in enumerate(rows):
+            for column_offset, value in enumerate(row):
+                sheet.cell(top + row_offset, left + column_offset, value)
+        last = f"{get_column_letter(left + len(rows[0]) - 1)}{top + len(rows) - 1}"
+        table = Table(displayName=f"Tenants{number}", ref=f"{corner}:{last}")
+        if totals_row:
+            table.totalsRowCount = 1
+        sheet.add_table(table)
+    workbook.save(path)
+    return path
+
+
+XLSX_HEADER: XlsxRow = [*M365.split(","), "pilot", "cw_company_id"]
+
+
+def test_load_reads_the_one_table_of_a_workbook_as_text(tmp_path: Path) -> None:
+    path = _write_xlsx(
+        tmp_path / "tenants.XLSX",  # any case
+        (
+            "B3",
+            [
+                XLSX_HEADER,
+                [TENANT_A, "Alpha", None, "Commercial", True, 1001],
+                [TENANT_B, "beta corp", "beta.example", None, False, 1002],
+                [TENANT_C, "Gamma", None, None, "TRUE", None],  # TRUE as text counts too
+                ["Total", None, None, None, 2, 3105],
+            ],
+        ),
+        totals_row=True,
+    )
+    tenant_file = TenantFile.load(path)
+    assert tenant_file.columns == XLSX_HEADER
+    assert len(tenant_file.rows) == 3  # the totals row is left out
+    assert tenant_file.rows[0] == {
+        "m365_tenant_id": TENANT_A,
+        "m365_tenant_name": "Alpha",
+        "m365_domain": "",
+        "m365_cloud": "Commercial",
+        "pilot": "TRUE",
+        "cw_company_id": "1001",
+    }
+    assert [row.tenant_id for row in tenant_file.members("pilot")] == [TENANT_A, TENANT_C]
+    assert tenant_file.first_row == 4
+
+
+def test_load_of_a_workbook_numbers_rows_as_the_sheet_does(tmp_path: Path) -> None:
+    path = _write_xlsx(
+        tmp_path / "t.xlsx",
+        (
+            "A3",
+            [
+                XLSX_HEADER,
+                [TENANT_A, "Alpha", None, None, True, None],
+                [TENANT_B, "beta corp", None, None, "maybe", None],
+            ],
+        ),
+    )
+    with pytest.raises(TenantFileError, match="row 5: 'maybe' in column 'pilot'"):
+        TenantFile.load(path).members("pilot")
+
+
+@pytest.mark.parametrize("corners", [(), ("A3", "J3")])
+def test_load_of_a_workbook_needs_exactly_one_table(
+    tmp_path: Path, corners: tuple[str, ...]
+) -> None:
+    rows: list[XlsxRow] = [XLSX_HEADER, [TENANT_A]]
+    path = _write_xlsx(tmp_path / "t.xlsx", *((corner, rows) for corner in corners))
+    with pytest.raises(
+        TenantFileError,
+        match=f"has {len(corners)} tables; a tenants workbook must have exactly one",
+    ):
+        TenantFile.load(path)
+
+
+def test_load_reports_an_xlsx_that_is_not_a_workbook(tmp_path: Path) -> None:
+    path = _write(tmp_path / "t.xlsx", M365)
+    with pytest.raises(TenantFileError, match="Cannot read"):
+        TenantFile.load(path)
 
 
 # --- TenantFile.members ----------------------------------------------------------------
@@ -533,6 +632,100 @@ def test_save_creates_the_file_and_its_directory(tmp_path: Path) -> None:
         f"{M365},m365_username,m365_gdap,m365_pw_url",
         f"{TENANT_A},Alpha,,Commercial,,TRUE,",
     ]
+
+
+def test_save_creates_a_workbook_with_one_table(tmp_path: Path) -> None:
+    path = tmp_path / "deeper" / "tenants.xlsx"
+    tenant_file = TenantFile.empty(path)
+    tenant_file.sync([ALPHA], commercial)
+    tenant_file.save()
+    sheet = load_workbook(path)["Tenants"]
+    assert sheet.tables["Tenants"].ref == "A1:G2"
+    assert [cell.value for cell in sheet[2]] == [
+        TENANT_A,
+        "Alpha",
+        None,
+        "Commercial",
+        None,
+        True,  # Excel's own TRUE
+        None,
+    ]
+    assert TenantFile.load(path).rows == tenant_file.rows
+    assert [p.name for p in path.parent.iterdir()] == [path.name]  # no temp file left
+
+
+def _shared_workbook(path: Path, *, totals_row: bool = False) -> Path:
+    """A workbook another tool keeps: a table at B3 with a formula, lacking some m365_ columns."""
+    totals: list[XlsxRow] = [["Total", None, None, None, None]] if totals_row else []
+    return _write_xlsx(
+        path,
+        (
+            "B3",
+            [
+                ["m365_tenant_id", "m365_tenant_name", "m365_cloud", "pilot", "notes"],
+                [TENANT_A, "Alpha", None, True, "=1+1"],
+                [TENANT_C, "Gamma", "USGov", False, 1003],
+                *totals,
+            ],
+        ),
+        totals_row=totals_row,
+    )
+
+
+def test_save_writes_into_a_workbook_only_what_changed(tmp_path: Path) -> None:
+    path = _shared_workbook(tmp_path / "t.xlsx")
+    tenant_file = TenantFile.load(path)
+    report = tenant_file.sync([ALPHA, BETA], commercial)
+    assert (report.added, report.clouds_filled) == ([BETA], [ALPHA])
+    tenant_file.save()
+    workbook = load_workbook(path)
+    sheet = workbook.active
+    assert isinstance(sheet, Worksheet)
+    # New columns go right of the table, the new row below it, and the table grows over both.
+    table = sheet.tables["Tenants1"]
+    assert table.ref == "B3:J6"
+    assert [column.name for column in table.tableColumns] == [
+        "m365_tenant_id",
+        "m365_tenant_name",
+        "m365_cloud",
+        "pilot",
+        "notes",
+        "m365_domain",
+        "m365_username",
+        "m365_gdap",
+        "m365_pw_url",
+    ]
+    assert [[cell.value for cell in row] for row in sheet["B3:J6"]] == [
+        [column.name for column in table.tableColumns],
+        [TENANT_A, "Alpha", "Commercial", True, "=1+1", None, None, True, None],
+        [TENANT_C, "Gamma", "USGov", False, 1003, None, None, None, None],
+        [TENANT_B, "beta corp", "Commercial", None, None, None, None, True, None],
+    ]
+    assert sheet["A1"].value == "Customers"  # outside the table, left alone
+
+
+@pytest.mark.parametrize("in_the_way", ["B6", "G4"])  # below the table, and right of it
+def test_save_will_not_grow_a_workbook_table_over_cells_in_use(
+    tmp_path: Path, in_the_way: str
+) -> None:
+    path = _shared_workbook(tmp_path / "t.xlsx")
+    workbook = load_workbook(path)
+    workbook["Sheet"][in_the_way] = "mine"
+    workbook.save(path)
+    before = path.read_bytes()
+    tenant_file = TenantFile.load(path)
+    tenant_file.sync([ALPHA, BETA], commercial)
+    with pytest.raises(TenantFileError, match="the cells it would grow into"):
+        tenant_file.save()
+    assert path.read_bytes() == before
+
+
+def test_save_will_not_grow_a_workbook_table_with_a_totals_row(tmp_path: Path) -> None:
+    path = _shared_workbook(tmp_path / "t.xlsx", totals_row=True)
+    tenant_file = TenantFile.load(path)
+    tenant_file.sync([ALPHA, BETA], commercial)
+    with pytest.raises(TenantFileError, match="it has a totals row"):
+        tenant_file.save()
 
 
 # --- extra_tenants / details -----------------------------------------------------------

@@ -14,6 +14,7 @@ requires-python = ">=3.11"
 dependencies = [
     "azure-auth",
     "httpx>=0.28.1,<1",
+    "openpyxl>=3.1.5,<4",
     "platformdirs>=4.3,<5",
     "tomlkit>=0.13,<1",
 ]
@@ -25,7 +26,6 @@ docs = [
     "mkdocstrings[python]>=1.0.4,<2",
 ]
 test = [
-    "openpyxl>=3.1.5,<4",  # examples/mailbox_audit_gaps.py writes workbooks with it
     "pytest>=9.0.3,<10",  # GHSA-6w46-j5rx-g56g
     "pytest-cov>=7.1,<8",
 ]

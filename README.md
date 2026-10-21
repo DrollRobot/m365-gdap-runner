@@ -61,11 +61,11 @@ uv run users.py --include pilot
 ```
 
 Tenants are chosen with `--include`, less `--exclude`. Each takes a tenant (display name or
-ID) or a group (a TRUE/FALSE column of the tenants CSV), and `--include all` means every GDAP
-tenant. A tenant the partner sign-in cannot reach, including one without GDAP or in another
-cloud, gets a sign-in of its own before the run, as the account in its row's `m365_username`
-cell. The `m365_gdap` column marks the tenants the partner sign-in reaches, so
-`--include m365_gdap` runs only those. FALSE or blank there skips the partner sign-in; with
+ID) or a group (a TRUE/FALSE column of the tenants CSV or `.xlsx`), and `--include all`
+means every GDAP tenant. A tenant the partner sign-in cannot reach, including one without
+GDAP or in another cloud, gets a sign-in of its own before the run, as the account in its
+row's `m365_username` cell. The `m365_gdap` column marks the tenants the partner sign-in
+reaches, so `--include m365_gdap` runs only those. FALSE or blank there skips the partner sign-in; with
 `m365_username` blank too, the tenant is left out of the run. The library writes no output of its own: `run()` writes any per-tenant report,
 `report()` the run's. A script with flags of its own adds the library's to its parser with
 `add_arguments()`. `ctx` also offers `exchange`, `ipps` and `arm` clients when declared in

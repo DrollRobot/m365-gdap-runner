@@ -200,6 +200,15 @@ cccccccc-0000-0000-0000-00000000000c,Gamma,gamma.example,Commercial,admin@gamma.
 command fills the cell in, by OpenID Connect discovery, when it appends a tenant or finds the
 cell blank.
 
+The file can also be an Excel workbook, named `.xlsx`, with the same columns in one table
+(Insert > Table). The table may sit on any sheet, at any spot; a workbook with no table, or
+more than one, is an error. TRUE and FALSE may be Excel's own or typed as text, a totals row
+is ignored, and a formula counts as the value Excel last calculated. When `m365-gdap-runner`
+adds to the table, new columns go to its right and new rows below it, and the table grows to
+hold them; every other cell is left as it was. Those cells must be empty, and the table must
+have no totals row. Saving the workbook drops any charts and images in it. A missing `.xlsx`
+file is created as a workbook with one table.
+
 The file is `tenants.csv` in the config directory (`m365-gdap-runner-config path` shows
 where), unless the `tenants_file` setting or `--tenants-file` points elsewhere. Only the
 `m365-gdap-runner` command writes it. It creates the file when there is none. Any of the

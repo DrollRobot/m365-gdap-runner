@@ -1,11 +1,11 @@
 """GDAP customer tenants, the tenants file, and how the command line picks tenants.
 
 Graph says which customer tenants have a GDAP relationship (see ``session.py``). The tenants
-file says which tenants belong to which group: a CSV edited in a spreadsheet, one row per
-customer, with the columns ``m365_tenant_id``, ``m365_tenant_name``, ``m365_domain``,
-``m365_cloud``, ``m365_username``, ``m365_gdap`` and ``m365_pw_url``, and one column per group
-holding TRUE or FALSE. ``--include NAME`` runs the tenants marked TRUE in column ``NAME``, and
-``--exclude NAME`` leaves them out (:func:`select`).
+file says which tenants belong to which group: a CSV, or an Excel workbook holding one table,
+one row per customer, with the columns ``m365_tenant_id``, ``m365_tenant_name``,
+``m365_domain``, ``m365_cloud``, ``m365_username``, ``m365_gdap`` and ``m365_pw_url``, and one
+column per group holding TRUE or FALSE. ``--include NAME`` runs the tenants marked TRUE in
+column ``NAME``, and ``--exclude NAME`` leaves them out (:func:`select`).
 
 The file may be shared with tools that describe the same customers on other platforms, so
 the columns this package owns carry the ``m365_`` prefix, every other column is left alone
@@ -36,12 +36,20 @@ import contextlib
 import csv
 import os
 import tempfile
+import warnings
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from urllib.parse import urlsplit
+from zipfile import BadZipFile
 
 from azure_auth.clouds import CLOUDS, get_cloud
+from openpyxl import Workbook, load_workbook
+from openpyxl.utils import get_column_letter
+from openpyxl.utils.exceptions import InvalidFileException
+from openpyxl.worksheet.cell_range import CellRange
+from openpyxl.worksheet.table import Table, TableColumn, TableStyleInfo
+from openpyxl.worksheet.worksheet import Worksheet
 
 from m365_gdap_runner.config import Settings
 from m365_gdap_runner.config.paths import config_dir
@@ -172,21 +180,106 @@ def tenants_file_path(settings: Settings) -> Path:
     return config_dir() / TENANTS_FILE_NAME
 
 
-class TenantFile:
-    """The tenants CSV: one row per customer, one TRUE/FALSE column per group.
+def _is_workbook(path: Path) -> bool:
+    """Return True if *path* names an Excel workbook rather than a CSV.
 
-    Rows keep every cell as the text the file holds, so :meth:`save` writes back what was
-    read plus any added columns and rows. Only the group column a caller asks about, and the
-    cloud of the rows marked in it, are checked; every other cell may hold anything.
+    Args:
+        path: The tenants file.
+
+    Returns:
+        Whether its name ends in ``.xlsx``, in any case.
+    """
+    return path.suffix.lower() == ".xlsx"
+
+
+def _cell_text(value: object) -> str:
+    """Return a workbook cell's value as the text a CSV cell would hold.
+
+    Args:
+        value: The cell's value as openpyxl reads it; a formula's is its last calculated one.
+
+    Returns:
+        TRUE or FALSE for Excel's booleans, ``""`` for an empty cell, else the value as text.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    return str(value)
+
+
+def _cell_value(text: str) -> str | bool | None:
+    """Return what to write to a workbook cell for a cell's text, undoing :func:`_cell_text`.
+
+    Args:
+        text: The cell's text.
+
+    Returns:
+        Excel's boolean for TRUE or FALSE, None (an empty cell) for ``""``, else the text.
+    """
+    if text in ("TRUE", "FALSE"):
+        return text == "TRUE"
+    return text or None
+
+
+def _open_workbook(path: Path, *, data_only: bool) -> tuple[Workbook, Worksheet, Table]:
+    """Open an Excel workbook and find its one table, on whichever sheet it is.
+
+    Args:
+        path: The ``.xlsx`` file.
+        data_only: True reads each formula's last calculated value; False keeps the formulas,
+            to write the workbook back.
+
+    Returns:
+        The workbook, the sheet holding the table, and the table.
+
+    Raises:
+        TenantFileError: If the workbook cannot be read, or holds no table or more than one.
+    """
+    try:
+        # openpyxl warns of workbook features it does not support; they are not this
+        # package's to report.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            workbook = load_workbook(path, data_only=data_only)
+    except (OSError, BadZipFile, InvalidFileException, KeyError) as exc:
+        raise TenantFileError(f"Cannot read {path}: {exc}") from exc
+    tables = [
+        (sheet, table)
+        for sheet in workbook.worksheets
+        if isinstance(sheet, Worksheet)
+        for table in sheet.tables.values()
+    ]
+    if len(tables) != 1:
+        raise TenantFileError(
+            f"{path} has {len(tables)} tables; a tenants workbook must have exactly one."
+        )
+    sheet, table = tables[0]
+    return workbook, sheet, table
+
+
+class TenantFile:
+    """The tenants file: one row per customer, one TRUE/FALSE column per group.
+
+    Rows keep every cell as the text the file holds, a workbook's as :func:`_cell_text` gives
+    it, so :meth:`save` writes back what was read plus any added columns and rows. Only the
+    group column a caller asks about, and the cloud of the rows marked in it, are checked;
+    every other cell may hold anything.
 
     Attributes:
         path: Where the file is, or will be, on disk.
         columns: Column names in file order.
         rows: One mapping per row, column name to cell text.
+        first_row: The spreadsheet row number of the first of *rows*, for error messages.
     """
 
     def __init__(
-        self, path: Path, columns: Sequence[str], rows: Sequence[dict[str, str]] = ()
+        self,
+        path: Path,
+        columns: Sequence[str],
+        rows: Sequence[dict[str, str]] = (),
+        *,
+        first_row: int = 2,
     ) -> None:
         """Hold a file's contents in memory.
 
@@ -195,10 +288,16 @@ class TenantFile:
             columns: Column names in file order. :meth:`sync` adds any of
                 :data:`OWN_COLUMNS` missing.
             rows: One mapping per row, column name to cell text.
+            first_row: The spreadsheet row number of the first of *rows*: 2, below a header
+                in row 1, unless a workbook's table starts lower.
         """
         self.path = path
         self.columns = list(columns)
         self.rows = [dict(row) for row in rows]
+        self.first_row = first_row
+        # As read, so saving a workbook writes only the cells that changed.
+        self._read_columns = list(columns)
+        self._read_rows = [dict(row) for row in rows]
 
     @classmethod
     def empty(cls, path: Path) -> TenantFile:
@@ -216,18 +315,23 @@ class TenantFile:
     def load(cls, path: Path) -> TenantFile:
         """Read the file.
 
-        A file with nothing in it, not even a header, counts as :meth:`empty`. A header that
+        A CSV with nothing in it, not even a header, counts as :meth:`empty`. A header that
         lacks some of this package's columns is fine; :meth:`sync` adds them.
 
         Args:
-            path: The CSV to read. UTF-8, with or without a byte-order mark.
+            path: The file to read: an Excel workbook when its name ends in ``.xlsx`` (see
+                :meth:`_load_workbook`), else a CSV in UTF-8, with or without a byte-order
+                mark.
 
         Returns:
             The file's contents.
 
         Raises:
-            TenantFileError: If the file cannot be read or is not UTF-8.
+            TenantFileError: If the file cannot be read, a CSV is not UTF-8, or a workbook
+                does not hold exactly one table.
         """
+        if _is_workbook(path):
+            return cls._load_workbook(path)
         try:
             with path.open(newline="", encoding="utf-8-sig") as handle:
                 reader = csv.DictReader(handle, restval="")
@@ -243,6 +347,35 @@ class TenantFile:
         if columns is None:
             return cls.empty(path)
         return cls(path, columns, rows)
+
+    @classmethod
+    def _load_workbook(cls, path: Path) -> TenantFile:
+        """Read the one table of an Excel workbook, on whichever sheet it is.
+
+        The table's header row names the columns. A totals row is left out.
+
+        Args:
+            path: The ``.xlsx`` file.
+
+        Returns:
+            The table's contents, each cell as :func:`_cell_text` gives it.
+
+        Raises:
+            TenantFileError: If the workbook cannot be read, or holds no table or more than
+                one.
+        """
+        _, sheet, table = _open_workbook(path, data_only=True)
+        cells = CellRange(table.ref)
+        header, *body = sheet.iter_rows(
+            min_row=cells.min_row,
+            max_row=cells.max_row - (table.totalsRowCount or 0),
+            min_col=cells.min_col,
+            max_col=cells.max_col,
+            values_only=True,
+        )
+        columns = [_cell_text(value) for value in header]
+        rows = [dict(zip(columns, map(_cell_text, row), strict=True)) for row in body]
+        return cls(path, columns, rows, first_row=cells.min_row + 1)
 
     @property
     def groups(self) -> list[str]:
@@ -336,7 +469,7 @@ class TenantFile:
         """
         column = self._group_column(group)
         chosen: list[TenantRow] = []
-        for number, row in enumerate(self.rows, start=2):
+        for number, row in enumerate(self.rows, start=self.first_row):
             cell = row.get(column, "")
             value = cell.strip().casefold()
             if value in FALSE_VALUES:
@@ -434,7 +567,7 @@ class TenantFile:
                 address.
         """
         key = tenant.tenant_id.lower()
-        for number, row in enumerate(self.rows, start=2):
+        for number, row in enumerate(self.rows, start=self.first_row):
             if row.get(ID_COLUMN, "").strip().lower() == key:
                 found = self._row(row, number)
                 return replace(
@@ -521,27 +654,125 @@ class TenantFile:
     def save(self) -> None:
         """Write the file, replacing it in one step so a failure leaves the old one intact.
 
-        The parent directory is created if needed. The file is written with a UTF-8
-        byte-order mark so spreadsheets open it correctly.
+        The parent directory is created if needed. A CSV is written whole, with a UTF-8
+        byte-order mark so spreadsheets open it correctly. A workbook gets only what changed
+        (see :meth:`_updated_workbook`).
 
         Raises:
             OSError: If the file or its directory cannot be written, for example while a
                 spreadsheet holds the file open.
+            TenantFileError: If a workbook cannot be read, or its table cannot grow.
         """
+        workbook = self._updated_workbook() if _is_workbook(self.path) else None
         self.path.parent.mkdir(parents=True, exist_ok=True)
         descriptor, temp = tempfile.mkstemp(
             dir=self.path.parent, prefix=self.path.name + ".", suffix=".tmp"
         )
         try:
-            with os.fdopen(descriptor, "w", newline="", encoding="utf-8-sig") as handle:
-                writer = csv.DictWriter(handle, fieldnames=self.columns, extrasaction="ignore")
-                writer.writeheader()
-                writer.writerows(self.rows)
+            if workbook is None:
+                with os.fdopen(descriptor, "w", newline="", encoding="utf-8-sig") as handle:
+                    writer = csv.DictWriter(handle, fieldnames=self.columns, extrasaction="ignore")
+                    writer.writeheader()
+                    writer.writerows(self.rows)
+            else:
+                os.close(descriptor)
+                workbook.save(temp)
             os.replace(temp, self.path)
         except BaseException:
             with contextlib.suppress(OSError):
                 os.unlink(temp)
             raise
+
+    def _updated_workbook(self) -> Workbook:
+        """Return the workbook with this file's columns and rows in its table, for :meth:`save`.
+
+        A new workbook gets one sheet and one table, both named ``Tenants``. In an existing
+        one, only the cells that differ from what :meth:`load` read are written: a new column
+        goes right of the table, a new row below it, and the table grows to hold them. Every
+        other cell keeps its value, formula and formatting. TRUE and FALSE are written as
+        Excel's booleans.
+
+        Returns:
+            The workbook, not yet saved.
+
+        Raises:
+            TenantFileError: If the workbook cannot be read or holds no table or more than
+                one, or its table must grow but has a totals row or cells in the way.
+        """
+        if not self.path.exists():
+            return self._new_workbook()
+        workbook, sheet, table = _open_workbook(self.path, data_only=False)
+        cells = CellRange(table.ref)
+        top, left = cells.min_row, cells.min_col
+        new_columns = [column for column in self.columns if column not in self._read_columns]
+        order = [*self._read_columns, *new_columns]
+        last_row = top + len(self.rows)
+        last_column = left + len(order) - 1
+        if len(self.rows) > len(self._read_rows) or new_columns:
+            if table.totalsRowCount:
+                raise TenantFileError(
+                    f"Cannot add to the table in {self.path}: it has a totals row. Turn the "
+                    "totals row off, then run m365-gdap-runner again."
+                )
+            below = sheet.iter_rows(
+                min_row=cells.max_row + 1,
+                max_row=last_row,
+                min_col=left,
+                max_col=last_column,
+                values_only=True,
+            )
+            beside = sheet.iter_rows(
+                min_row=top,
+                max_row=cells.max_row,
+                min_col=cells.max_col + 1,
+                max_col=last_column,
+                values_only=True,
+            )
+            if any(value is not None for row in [*below, *beside] for value in row):
+                raise TenantFileError(
+                    f"Cannot add to the table in {self.path}: the cells it would grow into, "
+                    "below it or to its right, are not empty."
+                )
+            ref = f"{get_column_letter(left)}{top}:{get_column_letter(last_column)}{last_row}"
+            table.ref = ref
+            if table.autoFilter is not None:
+                table.autoFilter.ref = ref
+            next_id = max((column.id for column in table.tableColumns), default=0) + 1
+            for offset, column in enumerate(new_columns):
+                sheet.cell(top, left + order.index(column), column)
+                table.tableColumns.append(TableColumn(id=next_id + offset, name=column))
+        at = {column: left + index for index, column in enumerate(order)}
+        for number, row in enumerate(self.rows):
+            before = self._read_rows[number] if number < len(self._read_rows) else {}
+            for column, column_at in at.items():
+                value = row.get(column, "")
+                if value != before.get(column, ""):
+                    sheet.cell(top + 1 + number, column_at, _cell_value(value))
+        return workbook
+
+    def _new_workbook(self) -> Workbook:
+        """Return a new workbook holding this file's columns and rows in one table.
+
+        Returns:
+            A workbook with one sheet and one table, both named ``Tenants``.
+        """
+        workbook = Workbook()
+        for sheet in list(workbook.worksheets):
+            workbook.remove(sheet)
+        sheet = workbook.create_sheet("Tenants")
+        sheet.append(self.columns)
+        for row in self.rows:
+            sheet.append([_cell_value(row.get(column, "")) for column in self.columns])
+        # A table needs a row under its header, even a blank one.
+        last_row = max(len(self.rows), 1) + 1
+        table = Table(
+            displayName="Tenants",
+            ref=f"A1:{get_column_letter(len(self.columns))}{last_row}",
+            # Excel's default for a new table.
+            tableStyleInfo=TableStyleInfo(name="TableStyleMedium2", showRowStripes=True),
+        )
+        sheet.add_table(table)
+        return workbook
 
 
 def _named(

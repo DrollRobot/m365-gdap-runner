@@ -42,10 +42,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Setting `debug_log_path`, for development: every log record, debug and library ones
   included, is appended to that file, or to `m365_gdap_runner_debug.log` in it when it names
   a folder. The terminal shows what it did without it.
-- Tenant selection from a tenants file: a CSV with `m365_tenant_id`, `m365_tenant_name`,
-  `m365_domain`, `m365_cloud`, `m365_username`, `m365_gdap`, `m365_pw_url`, and one TRUE/FALSE
-  column per group; other tools may keep their own columns in the same file. Any of the `m365_`
-  columns the file lacks is added, and a blank cloud is filled in by OpenID Connect discovery.
+- Tenant selection from a tenants file: a CSV, or an `.xlsx` workbook holding one table, with
+  `m365_tenant_id`, `m365_tenant_name`, `m365_domain`, `m365_cloud`, `m365_username`,
+  `m365_gdap`, `m365_pw_url`, and one TRUE/FALSE column per group; other tools may keep their
+  own columns in the same file. Any of the `m365_` columns the file lacks is added, and a
+  blank cloud is filled in by OpenID Connect discovery. A workbook's table grows to the right
+  and down; the rest of the workbook is left as it was, except that charts and images are
+  dropped.
   `--include` runs a tenant (display name or ID), a group (the tenants marked TRUE in that
   column) or `all` (every GDAP tenant); `--exclude` takes tenants and groups back out, and
   always wins. Both are repeatable, and a run that includes nothing is refused. A name that

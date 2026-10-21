@@ -19,13 +19,16 @@ from typing import Any
 
 import httpx
 import pytest
+from openpyxl import Workbook, load_workbook
+from openpyxl.worksheet.table import Table
+from openpyxl.worksheet.worksheet import Worksheet
 
 from m365_gdap_runner import cli
 from m365_gdap_runner.config.paths import CONFIG_DIR_ENV
 from m365_gdap_runner.config.schema import ENV_PREFIX
 from m365_gdap_runner.runner import TenantResult, run_payload
 from m365_gdap_runner.session import PartnerSession
-from m365_gdap_runner.tenants import TenantFile
+from m365_gdap_runner.tenants import OWN_COLUMNS, TenantFile
 from tests._gdap_fakes import (
     CONSENT_REQUIRED,
     GAMMA_ADMIN,
@@ -919,6 +922,41 @@ def test_tenants_file_setting_locates_the_file(
     assert _main(recorder, "--include", "pilot") == 0
     assert _tenant_ids(recorder) == [TENANT_A]
     assert not (tmp_path / "config" / "tenants.csv").exists()
+
+
+@pytest.mark.integration
+@pytest.mark.acceptance
+def test_a_workbook_tenants_file_picks_tenants_as_a_csv_does(
+    fake_msal: FakeMsal, tmp_path: Path, recorder: ModuleType, caplog: pytest.LogCaptureFixture
+) -> None:
+    path = tmp_path / "tenants.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    assert isinstance(sheet, Worksheet)
+    sheet.append([*OWN_COLUMNS, "pilot"])
+    sheet.append([TENANT_A, "Alpha", None, "Commercial", None, True, None, False])
+    sheet.append([TENANT_B, "beta corp", None, "Commercial", None, True, None, True])
+    sheet.add_table(Table(displayName="Tenants", ref="A1:H3"))
+    workbook.save(path)
+    before = path.read_bytes()
+    assert _main(recorder, "--include", "pilot", "--tenants-file", str(path)) == 0
+    assert _tenant_ids(recorder) == [TENANT_B]
+    assert path.read_bytes() == before
+    assert "WARNING" not in caplog.text
+
+
+@pytest.mark.integration
+@pytest.mark.acceptance
+def test_list_tenants_creates_a_workbook_tenants_file(
+    fake_msal: FakeMsal, tmp_path: Path, recorder: ModuleType
+) -> None:
+    path = tmp_path / "tenants.xlsx"
+    assert _list_tenants("--tenants-file", str(path)) == 0
+    sheet = load_workbook(path)["Tenants"]
+    assert [cell.value for cell in sheet["A"]] == ["m365_tenant_id", TENANT_A, TENANT_B]
+    # A script then reads it as it reads a CSV.
+    assert _main(recorder, "--include", "m365_gdap", "--tenants-file", str(path)) == 0
+    assert _tenant_ids(recorder) == [TENANT_A, TENANT_B]
 
 
 def _gamma_csv(
