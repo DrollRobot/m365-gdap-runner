@@ -14,11 +14,12 @@ an M365 tenant: never selected, never an error.
 
 Tenants are matched by ID only; the name and domain columns are for the person editing the
 file. A column the file lacks is added, a GDAP tenant with no row is appended, and a blank
-cloud is filled in by OpenID Connect discovery (:meth:`TenantFile.sync`). A row whose tenant
-has no GDAP relationship, or lives in another Microsoft cloud, can still be selected: the
-runner signs in to it directly, as the account in ``m365_username``. A blank cell means no
-direct sign-in. ``m365_pw_url``, when filled in, is the web page holding that account's
-password, which opens with the direct sign-in's window.
+cloud is filled in by OpenID Connect discovery (:meth:`TenantFile.sync`). Only the
+``m365-gdap-runner`` command saves those to the file; a script run fills them in memory and
+warns. A row whose tenant has no GDAP relationship, or lives in another Microsoft cloud, can
+still be selected: the runner signs in to it directly, as the account in ``m365_username``. A
+blank cell means no direct sign-in. ``m365_pw_url``, when filled in, is the web page holding
+that account's password, which opens with the direct sign-in's window.
 
 ``m365_gdap`` says which tenants the partner sign-in reaches, and is a group like any other,
 so ``--include m365_gdap`` runs only those. TRUE tries the partner sign-in first. FALSE or

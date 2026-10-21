@@ -447,7 +447,12 @@ def test_runs_the_exchange_example_whose_log_is_the_report(
     caplog.set_level(logging.INFO)
     assert _main(AUDIT_DISABLED, "--include", "all") == 0
     assert capsys.readouterr().out == ""
-    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    # The runner's own warning, of the missing tenants file, aside.
+    warnings = [
+        r.getMessage()
+        for r in caplog.records
+        if r.levelno == logging.WARNING and r.name != cli.__name__
+    ]
     assert warnings == ["Mailbox auditing is off tenant-wide (AuditDisabled is True)"]
     assert fake_msal.interactive_calls == 2
 
@@ -805,7 +810,49 @@ def _tenants_csv(path: Path, *lines: str) -> Path:
 
 @pytest.mark.integration
 @pytest.mark.acceptance
-def test_run_appends_tenants_the_file_lacks_and_warns(
+def test_a_run_warns_of_what_the_file_lacks_and_never_writes_it(
+    fake_msal: FakeMsal, tmp_path: Path, recorder: ModuleType, caplog: pytest.LogCaptureFixture
+) -> None:
+    path = _tenants_csv(
+        tmp_path / "tenants.csv",
+        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,pilot,notes",
+        f"{TENANT_A},Alpha,alpha.example,Commercial,,TRUE,keep me",
+        f"{TENANT_C},Gamma,,,,FALSE,",  # no GDAP relationship and a blank cloud
+    )
+    before = path.read_bytes()
+    assert _main(recorder, "--include", "m365_gdap", "--tenants-file", str(path)) == 0
+    # The file lacks m365_gdap, so it counts as TRUE for every GDAP tenant, beta corp included.
+    assert _tenant_ids(recorder) == [TENANT_A, TENANT_B]
+    assert path.read_bytes() == before
+    assert (
+        f"Tenants file {path} lacks column(s) m365_gdap, m365_pw_url; run m365-gdap-runner to "
+        "add them" in caplog.text
+    )
+    assert (
+        f"1 GDAP tenant(s) have no row in {path}; run m365-gdap-runner to add them: beta corp"
+        in caplog.text
+    )
+    assert (
+        f"Looked up the blank m365_cloud of 1 tenant(s) in {path}; run m365-gdap-runner to "
+        "save them: Gamma" in caplog.text
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.acceptance
+def test_a_missing_tenants_file_is_a_warning_and_a_run_never_creates_it(
+    fake_msal: FakeMsal, tmp_path: Path, recorder: ModuleType, caplog: pytest.LogCaptureFixture
+) -> None:
+    assert _main(recorder, "--include", "all") == 0
+    assert _tenant_ids(recorder) == [TENANT_A, TENANT_B]
+    path = tmp_path / "config" / "tenants.csv"
+    assert f"No tenants file at {path}; run m365-gdap-runner to create it" in caplog.text
+    assert not path.exists()
+
+
+@pytest.mark.integration
+@pytest.mark.acceptance
+def test_list_tenants_appends_tenants_the_file_lacks_and_warns(
     fake_msal: FakeMsal, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     path = _tenants_csv(
@@ -813,7 +860,7 @@ def test_run_appends_tenants_the_file_lacks_and_warns(
         "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,pilot,notes",
         f"{TENANT_A},Alpha,alpha.example,Commercial,,TRUE,keep me",
     )
-    assert _main(LICENSED_USERS, "--include", "Alpha", "--tenants-file", str(path)) == 0
+    assert _list_tenants("--tenants-file", str(path)) == 0
     # m365_gdap is new to the file, so it is TRUE for every GDAP tenant.
     assert path.read_text(encoding="utf-8-sig").splitlines() == [
         "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,m365_gdap,"
@@ -1113,7 +1160,7 @@ def test_exit_2_when_the_groups_select_nothing(
 
 
 @pytest.mark.integration
-def test_run_fills_in_blank_clouds_by_discovery(
+def test_list_tenants_fills_in_blank_clouds_by_discovery(
     fake_msal: FakeMsal, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.INFO, logger=cli.__name__)
@@ -1124,7 +1171,7 @@ def test_run_fills_in_blank_clouds_by_discovery(
         f"{TENANT_B},beta corp,,,,FALSE",
         f"{TENANT_C},Gamma,,,,FALSE",  # no GDAP relationship, but a tenant all the same
     )
-    assert _main(LICENSED_USERS, "--include", "pilot", "--tenants-file", str(path)) == 0
+    assert _list_tenants("--tenants-file", str(path)) == 0
     assert path.read_text(encoding="utf-8-sig").splitlines() == [
         "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,m365_gdap,"
         "m365_pw_url,pilot",
@@ -1137,7 +1184,7 @@ def test_run_fills_in_blank_clouds_by_discovery(
 
 @pytest.mark.integration
 @pytest.mark.acceptance
-def test_run_adds_the_columns_the_file_lacks(
+def test_list_tenants_adds_the_columns_the_file_lacks(
     fake_msal: FakeMsal, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.INFO, logger=cli.__name__)
@@ -1147,7 +1194,7 @@ def test_run_adds_the_columns_the_file_lacks(
         f"{TENANT_A},Alpha,TRUE",
         f"{TENANT_B},beta corp,FALSE",
     )
-    assert _main(LICENSED_USERS, "--include", "pilot", "--tenants-file", str(path)) == 0
+    assert _list_tenants("--tenants-file", str(path)) == 0
     assert path.read_text(encoding="utf-8-sig").splitlines() == [
         "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,m365_gdap,"
         "m365_pw_url,pilot",
@@ -1207,7 +1254,7 @@ def test_unwritable_tenants_file_is_a_warning_not_an_error(
         raise PermissionError("held open by a spreadsheet")
 
     monkeypatch.setattr(TenantFile, "save", refuse)
-    assert _main(LICENSED_USERS, "--include", "all") == 0
+    assert _list_tenants() == 0
     assert "Could not write tenants file" in caplog.text
     assert "held open by a spreadsheet" in caplog.text
     assert not (tmp_path / "config" / "tenants.csv").exists()

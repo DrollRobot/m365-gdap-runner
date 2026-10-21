@@ -23,8 +23,9 @@ without a GDAP relationship, or in another cloud, from the tenants file; before 
 ``run()``, every tenant the partner sign-in cannot reach gets a sign-in of its own. Each
 tenant's ``run()`` starts as soon as its access is settled, without waiting for the other
 tenants'. A tenant whose ``m365_gdap`` is not TRUE and whose ``m365_username`` is blank is
-left out. Every run adds the columns and GDAP tenants the file lacks. The
-``m365-gdap-runner`` command (:func:`list_tenants`) does only that, and prints the list.
+left out. A run never writes the tenants file: it warns of the columns, GDAP tenants and
+clouds the file lacks. The ``m365-gdap-runner`` command (:func:`list_tenants`) adds them,
+creating the file if need be, and prints the list.
 
 Configuration comes from the config system (see ``src/m365_gdap_runner/config/``);
 ``--partner-tenant-id``, ``--username``, ``--client-id``, ``--cache``, ``--cloud``,
@@ -378,15 +379,15 @@ def _print_tenants(tenants: Sequence[Tenant]) -> None:
         print(f"{tenant.tenant_id}\t{tenant.display_name}")
 
 
-def _sync_tenant_file(
+def _load_tenant_file(
     settings: Settings, session: PartnerSession, tenants: Sequence[Tenant]
 ) -> TenantFile:
-    """Load the tenants file and bring it up to date with the GDAP tenants.
+    """Load the tenants file for a run, which never writes it, and warn of what it lacks.
 
-    A column this package owns that the file lacks is added. A GDAP tenant with no row is
-    appended; one whose cloud is blank gets it looked up. A missing file is created. A file
-    that cannot be written (a spreadsheet may hold it open) is reported and left as it was;
-    the run goes on with the rows in memory.
+    A column this package owns that the file lacks, a GDAP tenant with no row, and a blank
+    cloud, looked up by discovery, are filled in memory for this run (see
+    :meth:`TenantFile.sync`), with a warning that the ``m365-gdap-runner`` command saves
+    them. A missing file reads as one with no rows.
 
     Args:
         settings: Resolved settings, for the file's location.
@@ -394,7 +395,56 @@ def _sync_tenant_file(
         tenants: The GDAP tenants.
 
     Returns:
-        The file, with every GDAP tenant in it.
+        The file, with every GDAP tenant in it unless it is missing.
+
+    Raises:
+        TenantFileError: If the file exists but cannot be read.
+    """
+    path = tenants_file_path(settings)
+    if not path.exists():
+        logger.warning("No tenants file at %s; run m365-gdap-runner to create it", path)
+        return TenantFile.empty(path)
+    tenant_file = TenantFile.load(path)
+    report = tenant_file.sync(tenants, session.cloud_of)
+    if report.columns_added:
+        logger.warning(
+            "Tenants file %s lacks column(s) %s; run m365-gdap-runner to add them",
+            path,
+            ", ".join(report.columns_added),
+        )
+    if report.added:
+        names = ", ".join(tenant.display_name for tenant in report.added)
+        logger.warning(
+            "%d GDAP tenant(s) have no row in %s; run m365-gdap-runner to add them: %s",
+            len(report.added),
+            path,
+            names,
+        )
+    if report.clouds_filled:
+        names = ", ".join(tenant.display_name for tenant in report.clouds_filled)
+        logger.warning(
+            "Looked up the blank m365_cloud of %d tenant(s) in %s; run m365-gdap-runner to "
+            "save them: %s",
+            len(report.clouds_filled),
+            path,
+            names,
+        )
+    return tenant_file
+
+
+def _update_tenant_file(
+    settings: Settings, session: PartnerSession, tenants: Sequence[Tenant]
+) -> None:
+    """Bring the tenants file up to date with the GDAP tenants, for ``m365-gdap-runner``.
+
+    A column this package owns that the file lacks is added. A GDAP tenant with no row is
+    appended; one whose cloud is blank gets it looked up. A missing file is created. A file
+    that cannot be written (a spreadsheet may hold it open) is reported and left as it was.
+
+    Args:
+        settings: Resolved settings, for the file's location.
+        session: The partner session, for cloud lookups.
+        tenants: The GDAP tenants.
 
     Raises:
         TenantFileError: If the file exists but cannot be read.
@@ -405,19 +455,19 @@ def _sync_tenant_file(
     report = tenant_file.sync(tenants, session.cloud_of)
     if existed and not report.changed:
         logger.debug("Tenants file %s is up to date", path)
-        return tenant_file
+        return
     try:
         tenant_file.save()
     except OSError as exc:
         logger.warning("Could not write tenants file %s: %s", path, exc)
-        return tenant_file
+        return
     if not existed:
         logger.info(
             "Created tenants file %s with %d tenant(s); add a TRUE/FALSE column per group",
             path,
             len(report.added),
         )
-        return tenant_file
+        return
     if report.columns_added:
         logger.info("Added column(s) %s to %s", ", ".join(report.columns_added), path)
     if report.added:
@@ -433,7 +483,6 @@ def _sync_tenant_file(
         logger.info(
             "Filled in the cloud of %d tenant(s) in %s: %s", len(report.clouds_filled), path, names
         )
-    return tenant_file
 
 
 def _select_tenants(
@@ -551,7 +600,7 @@ def _run(
         session = PartnerSession(settings, transport=transport)
         session.login(payload.clients)
         tenants = session.list_tenants()
-        tenant_file = _sync_tenant_file(settings, session, tenants)
+        tenant_file = _load_tenant_file(settings, session, tenants)
         selected = _select_tenants(args, tenants, tenant_file, session.cloud_name)
     except SETUP_ERRORS as exc:
         logger.error("%s", exc)
@@ -636,8 +685,9 @@ def list_tenants(
 ) -> int:
     """The ``m365-gdap-runner`` command: sign in, update the tenants file, list the tenants.
 
-    The file gets the columns and a row for every GDAP tenant it lacks, as on every run; run
-    this once to create it, then add the group columns.
+    The file gets the columns, a row for every GDAP tenant and the clouds it lacks. It is the
+    only command that writes the file; runs only warn. Run it once to create the file, then
+    add the group columns, and again whenever a run warns.
 
     Args:
         argv: Arguments without the program name; None reads ``sys.argv``.
@@ -659,7 +709,7 @@ def list_tenants(
         session = PartnerSession(settings, transport=transport)
         session.login()
         tenants = session.list_tenants()
-        _sync_tenant_file(settings, session, tenants)
+        _update_tenant_file(settings, session, tenants)
     except SETUP_ERRORS as exc:
         logger.error("%s", exc)
         return EXIT_USAGE
