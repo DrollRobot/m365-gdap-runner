@@ -13,8 +13,11 @@ unless a run names it as a group, and a row with no ``m365_tenant_id`` is a cust
 an M365 tenant: never selected, never an error.
 
 Tenants are matched by ID only; the name and domain columns are for the person editing the
-file. A column the file lacks is added, a GDAP tenant with no row is appended, and a blank
-cloud is filled in by OpenID Connect discovery (:meth:`TenantFile.sync`). Only the
+file. A tenant may have more than one row, as long as those rows agree in every ``m365_``
+column, ignoring case and surrounding spaces; a run that selects a tenant whose rows disagree
+is refused (:meth:`TenantFile.details`). A column the file lacks is added, a GDAP tenant with
+no row is appended, and a blank cloud is filled in by OpenID Connect discovery
+(:meth:`TenantFile.sync`). Only the
 ``m365-gdap-runner-customer-export`` command saves those to the file; a script run fills
 them in memory and warns. A row whose tenant has no GDAP relationship, or lives in another
 Microsoft cloud, can still be selected: the runner signs in to it directly, as the account in
@@ -554,6 +557,10 @@ class TenantFile:
     def details(self, tenant: Tenant, *, default_cloud: str) -> Tenant:
         """Return *tenant* with the cloud, sign-in details and ``m365_gdap`` its row gives.
 
+        A tenant with more than one row is fine while those rows agree in every column of
+        :data:`OWN_COLUMNS`, ignoring case and surrounding spaces. Other columns, groups
+        included, may differ.
+
         Args:
             tenant: A selected tenant.
             default_cloud: The cloud when the row has none, or there is no row: the partner's.
@@ -562,22 +569,36 @@ class TenantFile:
             The tenant, with ``cloud`` always filled in.
 
         Raises:
-            TenantFileError: If the row's ``m365_cloud`` names no known cloud, its
-                ``m365_gdap`` is not TRUE, FALSE or blank, or its ``m365_pw_url`` is not a web
-                address.
+            TenantFileError: If the tenant's rows disagree in a column of :data:`OWN_COLUMNS`,
+                or its row's ``m365_cloud`` names no known cloud, its ``m365_gdap`` is not
+                TRUE, FALSE or blank, or its ``m365_pw_url`` is not a web address.
         """
         key = tenant.tenant_id.lower()
-        for number, row in enumerate(self.rows, start=self.first_row):
-            if row.get(ID_COLUMN, "").strip().lower() == key:
-                found = self._row(row, number)
-                return replace(
-                    tenant,
-                    cloud=found.cloud or default_cloud,
-                    username=found.username,
-                    gdap=found.gdap,
-                    pw_url=found.pw_url,
-                )
-        return replace(tenant, cloud=default_cloud)
+        rows = [
+            (number, row)
+            for number, row in enumerate(self.rows, start=self.first_row)
+            if row.get(ID_COLUMN, "").strip().lower() == key
+        ]
+        if not rows:
+            return replace(tenant, cloud=default_cloud)
+        first_number, first = rows[0]
+        for number, row in rows[1:]:
+            for column in OWN_COLUMNS:
+                ours, theirs = first.get(column, ""), row.get(column, "")
+                if ours.strip().casefold() != theirs.strip().casefold():
+                    raise TenantFileError(
+                        f"{self.path} rows {first_number} and {number} are both tenant "
+                        f"{tenant.tenant_id} but differ in column {column!r}: {ours!r} and "
+                        f"{theirs!r}. Make them match, or delete one."
+                    )
+        found = self._row(first, first_number)
+        return replace(
+            tenant,
+            cloud=found.cloud or default_cloud,
+            username=found.username,
+            gdap=found.gdap,
+            pw_url=found.pw_url,
+        )
 
     def _add_missing_columns(self) -> list[str]:
         """Add the columns of :data:`OWN_COLUMNS` the file lacks, blank in every row.
@@ -626,7 +647,7 @@ class TenantFile:
         by_id: dict[str, dict[str, str]] = {}
         for existing in self.rows:
             by_id.setdefault(existing.get(ID_COLUMN, "").strip().lower(), existing)
-        known = dict(by_id)
+        known = set(by_id)
         added: list[Tenant] = []
         for tenant in tenants:
             key = tenant.tenant_id.lower()
@@ -639,17 +660,21 @@ class TenantFile:
                 self.rows.append(row)
                 by_id[key] = row
                 added.append(tenant)
-        filled: list[Tenant] = []
-        for key, row in known.items():
-            if not key or row.get(CLOUD_COLUMN, "").strip():
+        # Every row of a tenant gets the cloud, so a tenant's rows go on agreeing.
+        clouds: dict[str, str] = {}
+        filled: dict[str, Tenant] = {}
+        for row in self.rows:
+            key = row.get(ID_COLUMN, "").strip().lower()
+            if not key or key not in known or row.get(CLOUD_COLUMN, "").strip():
                 continue
             tenant_id = row[ID_COLUMN].strip()
-            cloud = cloud_of(tenant_id)
-            if cloud:
-                row[CLOUD_COLUMN] = cloud
+            if key not in clouds:
+                clouds[key] = cloud_of(tenant_id)
+            if clouds[key]:
+                row[CLOUD_COLUMN] = clouds[key]
                 named = row.get(NAME_COLUMN, "").strip() or tenant_id
-                filled.append(gdap.get(key) or Tenant(tenant_id, named))
-        return SyncReport(columns_added, added, filled)
+                filled.setdefault(key, gdap.get(key) or Tenant(tenant_id, named))
+        return SyncReport(columns_added, added, list(filled.values()))
 
     def save(self) -> None:
         """Write the file, replacing it in one step so a failure leaves the old one intact.

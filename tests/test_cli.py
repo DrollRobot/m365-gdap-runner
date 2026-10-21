@@ -990,6 +990,36 @@ def test_groups_and_tenants_add_up_and_exclude_applies(
 
 
 @pytest.mark.integration
+@pytest.mark.acceptance
+def test_a_tenant_may_have_more_than_one_row_while_they_agree(
+    fake_msal: FakeMsal, tmp_path: Path, recorder: ModuleType, caplog: pytest.LogCaptureFixture
+) -> None:
+    header = f"{','.join(OWN_COLUMNS)},pilot"
+    alpha = f"{TENANT_A},Alpha,,Commercial,,TRUE,"
+    path = _tenants_csv(
+        tmp_path / "tenants.csv",
+        header,
+        f"{alpha},TRUE",
+        f"{TENANT_B},beta corp,,Commercial,,TRUE,,FALSE",
+        f"{alpha},FALSE",  # Alpha again: a group may differ
+    )
+    file_flag = ["--tenants-file", str(path)]
+    assert _main(recorder, "--include", "pilot", *file_flag) == 0
+    assert _tenant_ids(recorder) == [TENANT_A]
+    _tenants_csv(
+        path,
+        header,
+        f"{alpha},TRUE",
+        f"{TENANT_A},Alpha,,Commercial,admin@alpha.example,TRUE,,TRUE",
+    )
+    assert _main(recorder, "--include", "pilot", *file_flag) == 2
+    assert (
+        f"rows 2 and 3 are both tenant {TENANT_A} but differ in column 'm365_username'"
+        in caplog.text
+    )
+
+
+@pytest.mark.integration
 def test_tenants_file_setting_locates_the_file(
     fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, recorder: ModuleType
 ) -> None:

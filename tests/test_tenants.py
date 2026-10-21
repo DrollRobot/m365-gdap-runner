@@ -569,6 +569,30 @@ def test_sync_with_nothing_to_do_changes_nothing_and_looks_nothing_up(tmp_path: 
     assert tenant_file.rows == before
 
 
+def test_sync_fills_the_blank_cloud_of_every_row_of_a_tenant_looking_it_up_once(
+    tmp_path: Path,
+) -> None:
+    looked_up: list[str] = []
+
+    def lookup(tenant_id: str) -> str:
+        looked_up.append(tenant_id)
+        return "USGov"
+
+    path = _write(
+        tmp_path / "t.csv",
+        M365,
+        f"{TENANT_C},Gamma,,",
+        f"{TENANT_A},Alpha,,Commercial",
+        f"{TENANT_C},Gamma,,",
+    )
+    tenant_file = TenantFile.load(path)
+    report = tenant_file.sync([ALPHA], lookup)
+    assert (report.clouds_filled, looked_up) == ([GAMMA], [TENANT_C])
+    assert [row["m365_cloud"] for row in tenant_file.rows] == ["USGov", "Commercial", "USGov"]
+    # Gamma's rows still agree.
+    assert tenant_file.details(GAMMA, default_cloud="Commercial").cloud == "USGov"
+
+
 def test_save_round_trips_other_tools_data_and_appended_rows(csv_path: Path) -> None:
     tenant_file = TenantFile.load(csv_path)
     tenant_file.sync([ALPHA, BETA, DELTA], commercial)
@@ -807,3 +831,36 @@ def test_details_reject_an_unknown_cloud_naming_the_row(tmp_path: Path) -> None:
     )
     with pytest.raises(TenantFileError, match="row 3: 'Mars' in column 'm365_cloud'"):
         TenantFile.load(path).details(GAMMA, default_cloud="Commercial")
+
+
+def test_details_accept_a_tenant_whose_rows_agree(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "t.csv",
+        f"{M365},m365_username,m365_gdap,pilot",
+        f"{TENANT_C},Gamma,gamma.example,USGov,admin@gamma.example,TRUE,TRUE",
+        # Case and surrounding spaces aside, the m365_ columns match; a group may differ.
+        f"{TENANT_C.upper()}, GAMMA ,Gamma.Example,usgov,Admin@gamma.example,true,FALSE",
+    )
+    assert TenantFile.load(path).details(GAMMA, default_cloud="Commercial") == Tenant(
+        TENANT_C, "Gamma", "USGov", "admin@gamma.example"
+    )
+
+
+@pytest.mark.parametrize("column", OWN_COLUMNS[1:])  # every m365_ column but the ID
+def test_details_reject_a_tenant_whose_rows_disagree_naming_both_rows(
+    tmp_path: Path, column: str
+) -> None:
+    row = dict.fromkeys(OWN_COLUMNS, "") | {"m365_tenant_id": TENANT_C, "m365_tenant_name": "Gamma"}
+    path = _write(
+        tmp_path / "t.csv",
+        ",".join(OWN_COLUMNS),
+        ",".join(row.values()),
+        f"{TENANT_A},Alpha,,,,,",
+        ",".join((row | {column: "changed"}).values()),
+    )
+    tenant_file = TenantFile.load(path)
+    error = f"rows 2 and 4 are both tenant {TENANT_C} but differ in column '{column}': .* 'changed'"
+    with pytest.raises(TenantFileError, match=error):
+        tenant_file.details(GAMMA, default_cloud="Commercial")
+    # Only the tenants a run selects are checked.
+    assert tenant_file.details(ALPHA, default_cloud="Commercial").cloud == "Commercial"

@@ -191,7 +191,9 @@ a column holding TRUE or FALSE, where a blank cell counts as FALSE and anything 
 error. Every other column is left alone, so the same file can carry what other tools know
 about the same customers on other platforms. Tenants are matched by ID; the name and domain
 columns are there for you. A row with no `m365_tenant_id` is a customer without an M365
-tenant and is skipped.
+tenant and is skipped. A tenant may have more than one row, as long as they agree in every
+`m365_` column; case and surrounding spaces do not count, and other columns may differ. A run
+that selects a tenant whose rows disagree is refused, naming the rows.
 
 ```csv
 m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,m365_gdap,m365_pw_url,pilot,patching,cw_company_id

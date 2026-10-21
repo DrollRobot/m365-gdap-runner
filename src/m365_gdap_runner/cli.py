@@ -569,7 +569,7 @@ def _select_tenants(
 
     Raises:
         TenantFileError: If a group named holds a cell that is not TRUE, FALSE or blank, or
-            a selected tenant's cloud is not a known one.
+            a selected tenant's cloud is not a known one, or its rows disagree.
         TenantSelectionError: If a value names nothing or could mean two things, or
             ``--include`` selects no tenant.
     """
