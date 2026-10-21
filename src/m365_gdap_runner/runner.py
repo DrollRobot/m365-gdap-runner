@@ -349,7 +349,7 @@ def _run_unless_stopped(
 
 
 def _run_one(session: ContextFactory, payload: Payload, tenant: Tenant) -> TenantResult:
-    """Process one tenant and log its outcome.
+    """Process one tenant and log its outcome: an error when the tenant failed.
 
     Args:
         session: A signed-in session.
@@ -365,7 +365,7 @@ def _run_one(session: ContextFactory, payload: Payload, tenant: Tenant) -> Tenan
         status, result, error = _execute(session, payload, tenant)
         duration = time.monotonic() - start
         if error:
-            logger.info("%s in %.1fs: %s", status, duration, error)
+            logger.error("%s in %.1fs: %s", status, duration, error)
         else:
             logger.info("%s in %.1fs", status, duration)
         return TenantResult(tenant, status, result, error)

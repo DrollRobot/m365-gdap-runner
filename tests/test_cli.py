@@ -10,6 +10,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import sys
 import textwrap
 from collections.abc import Callable, Iterator
@@ -418,6 +419,82 @@ def test_interrupt_skips_report(
     assert _main(script, "--include", "all") == 130
     assert script.__dict__["REPORTED"] == []
     assert "Summary: ok=1, auth_failed=0, error=1, skipped=0" in capsys.readouterr().err
+
+
+# --- warnings and errors again, after the summary --------------------------------------
+
+
+@pytest.mark.integration
+@pytest.mark.acceptance
+def test_warnings_and_errors_are_printed_again_after_the_summary(
+    fake_msal: FakeMsal,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO)
+    script = _script(
+        tmp_path,
+        """
+        import logging
+
+        SCOPES = ["User.Read.All"]
+        CONTINUE_ON_ERROR = True
+
+        def run(ctx):
+            logging.getLogger("script").info("checking")
+            if ctx.tenant.display_name == "beta corp":
+                raise RuntimeError("boom")
+            logging.getLogger("script").warning("auditing is off")
+        """,
+    )
+    assert _main(script, "--include", "all") == 1
+    err = capsys.readouterr().err
+    heading, *lines = err.split("Summary: ok=1, auth_failed=0, error=1, skipped=0\n")[
+        1
+    ].splitlines()
+    assert heading == "Warnings and errors from this run (3):"
+    # Each line as the terminal shows it, less the time.
+    lines = [line.split(" ", 1)[1] for line in lines]
+    path = tmp_path / "config" / "tenants.csv"
+    assert lines[:2] == [
+        f"WARNING [-] No tenants file at {path}; run m365-gdap-runner-customer-export to create it",
+        "WARNING [Alpha] auditing is off",
+    ]
+    assert re.fullmatch(r"ERROR \[beta corp\] error in \d+\.\ds: RuntimeError\('boom'\)", lines[2])
+
+
+@pytest.mark.integration
+def test_a_run_that_logged_no_warning_prints_none_again(
+    fake_msal: FakeMsal, tmp_path: Path, recorder: ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = _tenants_csv(
+        tmp_path / "tenants.csv",
+        ",".join(OWN_COLUMNS),
+        f"{TENANT_A},Alpha,,Commercial,,TRUE,",
+        f"{TENANT_B},beta corp,,Commercial,,TRUE,",
+    )
+    assert _main(recorder, "--include", "all", "--tenants-file", str(path)) == 0
+    assert capsys.readouterr().err.endswith("Summary: ok=2, auth_failed=0, error=0, skipped=0\n")
+
+
+@pytest.mark.integration
+def test_a_run_that_stops_before_its_tenants_prints_no_warnings_again(
+    fake_msal: FakeMsal, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The missing tenants file is a warning, and the unknown tenant ends the run before any
+    # tenant runs: its error is the last line already.
+    assert _main(LICENSED_USERS, "--include", "Contoso") == 2
+    assert "Warnings and errors" not in capsys.readouterr().err
+
+
+@pytest.mark.integration
+def test_the_warning_log_is_removed_after_the_run(
+    fake_msal: FakeMsal, recorder: ModuleType
+) -> None:
+    handlers = list(logging.getLogger().handlers)
+    assert _main(recorder, "--include", "all") == 0
+    assert logging.getLogger().handlers == handlers
 
 
 # --- end to end ------------------------------------------------------------------------

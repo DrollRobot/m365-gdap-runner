@@ -116,6 +116,10 @@ If it raises, the error is logged and the run exits with code 2. Logs and the su
 stderr, so stdout is the script's. `examples/mailbox_audit_gaps.py` writes an Excel workbook
 of each kind.
 
+After the summary line, every warning and error the run logged is printed again, so none is
+lost in a long run's output. That includes the script's own warnings, and each tenant that
+failed, which logs an error.
+
 ## Errors in run()
 
 An error raised in `run()` stops the run: that tenant is `error`, tenants already running

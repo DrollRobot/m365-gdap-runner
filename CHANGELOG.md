@@ -42,6 +42,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Setting `debug_log_path`, for development: every log record, debug and library ones
   included, is appended to that file, or to `m365_gdap_runner_debug.log` in it when it names
   a folder. The terminal shows what it did without it.
+- After a run's summary line, every warning and error the run logged, the script's own
+  included, is printed again, so none is lost in a long run's output. A tenant that failed
+  logs an error.
 - Tenant selection from a tenants file: a CSV, or an `.xlsx` workbook holding one table, with
   `m365_tenant_id`, `m365_tenant_name`, `m365_domain`, `m365_cloud`, `m365_username`,
   `m365_gdap`, `m365_pw_url`, and one TRUE/FALSE column per group; other tools may keep their

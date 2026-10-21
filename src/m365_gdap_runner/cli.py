@@ -30,7 +30,9 @@ clouds the file lacks. The ``m365-gdap-runner-customer-export`` command
 Configuration comes from the config system (see ``src/m365_gdap_runner/config/``);
 ``--partner-tenant-id``, ``--username``, ``--client-id``, ``--cache``, ``--cloud``,
 ``--tenants-file`` and ``--jobs`` override it. Progress and the summary go to stderr; stdout
-is the script's. The ``debug_log_path`` setting also appends every log record to a file.
+is the script's. After the summary, every warning and error the run logged, the script's
+included, is printed again, so none is lost in a long run's output. The ``debug_log_path``
+setting also appends every log record to a file.
 
 Exit codes: 0 all tenants ok; 1 any tenant not ok; 2 usage, configuration, script, sign-in,
 enumeration, tenants-file or tenant-selection error, or ``report()`` failed; 130 interrupted.
@@ -97,6 +99,9 @@ _LIBRARY_LOGGERS = (
     "azure",
     "azure_auth",
 )
+
+# Terminal log lines: the time, and the tenant each record belongs to.
+_TERMINAL_FORMAT = "%(asctime)s %(levelname)s [%(tenant)s] %(message)s"
 
 # Debug log lines: the full date, and the logger each record came from.
 _DEBUG_LOG_FORMAT = "%(asctime)s %(levelname)s [%(tenant)s] %(name)s: %(message)s"
@@ -298,6 +303,59 @@ def _quiet_libraries(record: logging.LogRecord) -> bool:
     )
 
 
+def _terminal_formatter() -> logging.Formatter:
+    """Build the formatter for log lines on the terminal.
+
+    Returns:
+        A formatter for :data:`_TERMINAL_FORMAT`, with the time of day.
+    """
+    return logging.Formatter(_TERMINAL_FORMAT, "%H:%M:%S")
+
+
+class _WarningLog(logging.Handler):
+    """Keep every warning and error a run logs, as the terminal shows it, to print again.
+
+    A long run's output can bury them; :func:`_run` prints them after the summary line.
+
+    Attributes:
+        lines: Each record at WARNING or above, formatted for the terminal, in the order
+            logged.
+    """
+
+    def __init__(self) -> None:
+        """Keep records at WARNING and above, tagged with their tenant."""
+        super().__init__(logging.WARNING)
+        self.addFilter(TenantLogFilter())
+        self.setFormatter(_terminal_formatter())
+        self.lines: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """Keep the record, formatted.
+
+        Args:
+            record: The log record.
+        """
+        try:
+            self.lines.append(self.format(record))
+        except Exception:
+            self.handleError(record)
+
+
+def _print_warnings(warning_log: _WarningLog) -> None:
+    """Print again every warning and error the run logged, under a heading, to stderr.
+
+    Nothing is printed for a run that logged none.
+
+    Args:
+        warning_log: What the run logged.
+    """
+    if not warning_log.lines:
+        return
+    print(f"Warnings and errors from this run ({len(warning_log.lines)}):", file=sys.stderr)
+    for line in warning_log.lines:
+        print(line, file=sys.stderr)
+
+
 def configure_logging(verbosity: int) -> None:
     """Send logs to stderr, tagged with the tenant each record belongs to.
 
@@ -312,9 +370,7 @@ def configure_logging(verbosity: int) -> None:
     if verbosity < 2:
         handler.addFilter(_quiet_libraries)
     handler.addFilter(TenantLogFilter())
-    handler.setFormatter(
-        logging.Formatter("%(asctime)s %(levelname)s [%(tenant)s] %(message)s", "%H:%M:%S")
-    )
+    handler.setFormatter(_terminal_formatter())
     root = logging.getLogger()
     root.addHandler(handler)
     root.setLevel(logging.DEBUG if verbosity >= 1 else logging.INFO)
@@ -579,16 +635,22 @@ def _report(payload: Payload, results: list[TenantResult]) -> bool:
 
 
 def _run(
-    module: ModuleType, args: argparse.Namespace, *, transport: httpx.BaseTransport | None
+    module: ModuleType,
+    args: argparse.Namespace,
+    *,
+    transport: httpx.BaseTransport | None,
+    warning_log: _WarningLog,
 ) -> int:
     """Validate the script, sign in, pick tenants, run them, and call ``report()``.
 
     The script is checked before sign-in, so a mistake in it never costs a browser prompt.
+    After the summary line, the run's warnings and errors are printed again.
 
     Args:
         module: The script's module.
         args: Parsed arguments.
         transport: Optional httpx transport for every client (tests).
+        warning_log: Keeps the run's warnings and errors, to print after the summary.
 
     Returns:
         The process exit code.
@@ -647,6 +709,7 @@ def _run(
     # A report built from part of a run would look complete, so an interrupted run has none.
     reported = interrupted or _report(payload, results)
     print(f"Summary: {summarize(results)}", file=sys.stderr)
+    _print_warnings(warning_log)
     if interrupted:
         return EXIT_INTERRUPTED
     if not reported:
@@ -679,11 +742,16 @@ def main(
     if args is None:
         args = _parser(module).parse_args()
     configure_logging(args.verbose)
+    warning_log = _WarningLog()
+    root = logging.getLogger()
+    root.addHandler(warning_log)
     try:
-        return _run(module, args, transport=transport)
+        return _run(module, args, transport=transport, warning_log=warning_log)
     except KeyboardInterrupt:
         print("Interrupted.", file=sys.stderr)
         return EXIT_INTERRUPTED
+    finally:
+        root.removeHandler(warning_log)
 
 
 def list_tenants(

@@ -89,6 +89,19 @@ def test_results_cover_ok_auth_failed_and_error_in_order() -> None:
     assert results[2].error == "RuntimeError('boom')"
 
 
+def test_a_tenant_that_failed_logs_an_error(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO, logger="m365_gdap_runner.runner")
+    session = FakeSession(auth_errors={TENANT_B: _consent_error(TENANT_B)})
+    payload = Recorder(failures={TENANT_C: RuntimeError("boom")})
+    run_payload(session, _payload(payload), TENANTS, continue_on_error=True)
+    outcomes = [(r.levelno, r.getMessage().split(" ")[0]) for r in caplog.records]
+    assert outcomes == [
+        (logging.INFO, "ok"),
+        (logging.ERROR, "auth_failed"),
+        (logging.ERROR, "error"),
+    ]
+
+
 def test_context_is_built_with_the_payloads_scopes_and_clients_and_closed() -> None:
     session = FakeSession(auth_errors={TENANT_B: _consent_error(TENANT_B)})
     payload = _payload(Recorder(), scopes=("Mail.Read",), clients=("graph", "exchange"))
