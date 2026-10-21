@@ -1,4 +1,4 @@
-"""Tests for main(), add_arguments() and the m365-gdap-runner command in cli.py.
+"""Tests for main(), add_arguments() and the m365-gdap-runner-customer-export command in cli.py.
 
 End-to-end runs use the fake msal module and a fake service transport.
 """
@@ -683,7 +683,7 @@ def test_undeclared_client_is_a_tenant_error(fake_msal: FakeMsal, tmp_path: Path
     assert "ClientNotDeclared" in result.error
 
 
-# --- the m365-gdap-runner command ------------------------------------------------------
+# --- the m365-gdap-runner-customer-export command --------------------------------------
 
 
 @pytest.mark.integration
@@ -828,16 +828,16 @@ def test_a_run_warns_of_what_the_file_lacks_and_never_writes_it(
     assert _tenant_ids(recorder) == [TENANT_A, TENANT_B]
     assert path.read_bytes() == before
     assert (
-        f"Tenants file {path} lacks column(s) m365_gdap, m365_pw_url; run m365-gdap-runner to "
-        "add them" in caplog.text
+        f"Tenants file {path} lacks column(s) m365_gdap, m365_pw_url; run "
+        "m365-gdap-runner-customer-export to add them" in caplog.text
     )
     assert (
-        f"1 GDAP tenant(s) have no row in {path}; run m365-gdap-runner to add them: beta corp"
-        in caplog.text
+        f"1 GDAP tenant(s) have no row in {path}; run m365-gdap-runner-customer-export to add "
+        "them: beta corp" in caplog.text
     )
     assert (
-        f"Looked up the blank m365_cloud of 1 tenant(s) in {path}; run m365-gdap-runner to "
-        "save them: Gamma" in caplog.text
+        f"Looked up the blank m365_cloud of 1 tenant(s) in {path}; run "
+        "m365-gdap-runner-customer-export to save them: Gamma" in caplog.text
     )
 
 
@@ -849,7 +849,10 @@ def test_a_missing_tenants_file_is_a_warning_and_a_run_never_creates_it(
     assert _main(recorder, "--include", "all") == 0
     assert _tenant_ids(recorder) == [TENANT_A, TENANT_B]
     path = tmp_path / "config" / "tenants.csv"
-    assert f"No tenants file at {path}; run m365-gdap-runner to create it" in caplog.text
+    assert (
+        f"No tenants file at {path}; run m365-gdap-runner-customer-export to create it"
+        in caplog.text
+    )
     assert not path.exists()
 
 

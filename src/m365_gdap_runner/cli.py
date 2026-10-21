@@ -1,4 +1,4 @@
-"""Running a script across tenants, and the ``m365-gdap-runner`` command.
+"""Running a script across tenants, and the ``m365-gdap-runner-customer-export`` command.
 
 A script runs itself: its ``__main__`` block hands the module to :func:`main`, which reads
 the command line, signs in once per client the script uses, lists GDAP customer tenants, and
@@ -24,8 +24,8 @@ without a GDAP relationship, or in another cloud, from the tenants file; before 
 tenant's ``run()`` starts as soon as its access is settled, without waiting for the other
 tenants'. A tenant whose ``m365_gdap`` is not TRUE and whose ``m365_username`` is blank is
 left out. A run never writes the tenants file: it warns of the columns, GDAP tenants and
-clouds the file lacks. The ``m365-gdap-runner`` command (:func:`list_tenants`) adds them,
-creating the file if need be, and prints the list.
+clouds the file lacks. The ``m365-gdap-runner-customer-export`` command
+(:func:`list_tenants`) adds them, creating the file if need be, and prints the list.
 
 Configuration comes from the config system (see ``src/m365_gdap_runner/config/``);
 ``--partner-tenant-id``, ``--username``, ``--client-id``, ``--cache``, ``--cloud``,
@@ -259,7 +259,8 @@ def settings_from_args(args: argparse.Namespace) -> Settings:
             overrides[name] = value
     if args.cache is not None:
         overrides["cache"] = args.cache
-    # add_arguments() adds --jobs; the m365-gdap-runner command, which runs nothing, does not.
+    # add_arguments() adds --jobs; the m365-gdap-runner-customer-export command, which runs
+    # nothing, does not.
     if getattr(args, "jobs", None) is not None:
         overrides["jobs"] = args.jobs
     return load_settings(profile=args.profile, overrides=overrides)
@@ -386,8 +387,8 @@ def _load_tenant_file(
 
     A column this package owns that the file lacks, a GDAP tenant with no row, and a blank
     cloud, looked up by discovery, are filled in memory for this run (see
-    :meth:`TenantFile.sync`), with a warning that the ``m365-gdap-runner`` command saves
-    them. A missing file reads as one with no rows.
+    :meth:`TenantFile.sync`), with a warning that the ``m365-gdap-runner-customer-export``
+    command saves them. A missing file reads as one with no rows.
 
     Args:
         settings: Resolved settings, for the file's location.
@@ -402,20 +403,23 @@ def _load_tenant_file(
     """
     path = tenants_file_path(settings)
     if not path.exists():
-        logger.warning("No tenants file at %s; run m365-gdap-runner to create it", path)
+        logger.warning(
+            "No tenants file at %s; run m365-gdap-runner-customer-export to create it", path
+        )
         return TenantFile.empty(path)
     tenant_file = TenantFile.load(path)
     report = tenant_file.sync(tenants, session.cloud_of)
     if report.columns_added:
         logger.warning(
-            "Tenants file %s lacks column(s) %s; run m365-gdap-runner to add them",
+            "Tenants file %s lacks column(s) %s; run m365-gdap-runner-customer-export to add them",
             path,
             ", ".join(report.columns_added),
         )
     if report.added:
         names = ", ".join(tenant.display_name for tenant in report.added)
         logger.warning(
-            "%d GDAP tenant(s) have no row in %s; run m365-gdap-runner to add them: %s",
+            "%d GDAP tenant(s) have no row in %s; run m365-gdap-runner-customer-export to add "
+            "them: %s",
             len(report.added),
             path,
             names,
@@ -423,8 +427,8 @@ def _load_tenant_file(
     if report.clouds_filled:
         names = ", ".join(tenant.display_name for tenant in report.clouds_filled)
         logger.warning(
-            "Looked up the blank m365_cloud of %d tenant(s) in %s; run m365-gdap-runner to "
-            "save them: %s",
+            "Looked up the blank m365_cloud of %d tenant(s) in %s; run "
+            "m365-gdap-runner-customer-export to save them: %s",
             len(report.clouds_filled),
             path,
             names,
@@ -435,7 +439,9 @@ def _load_tenant_file(
 def _update_tenant_file(
     settings: Settings, session: PartnerSession, tenants: Sequence[Tenant]
 ) -> None:
-    """Bring the tenants file up to date with the GDAP tenants, for ``m365-gdap-runner``.
+    """Bring the tenants file up to date with the GDAP tenants.
+
+    For the ``m365-gdap-runner-customer-export`` command.
 
     A column this package owns that the file lacks is added. A GDAP tenant with no row is
     appended; one whose cloud is blank gets it looked up. A missing file is created. A file
@@ -683,7 +689,7 @@ def main(
 def list_tenants(
     argv: Sequence[str] | None = None, *, transport: httpx.BaseTransport | None = None
 ) -> int:
-    """The ``m365-gdap-runner`` command: sign in, update the tenants file, list the tenants.
+    """The ``m365-gdap-runner-customer-export`` command: update the tenants file, list tenants.
 
     The file gets the columns, a row for every GDAP tenant and the clouds it lacks. It is the
     only command that writes the file; runs only warn. Run it once to create the file, then
@@ -697,7 +703,7 @@ def list_tenants(
         The process exit code.
     """
     parser = argparse.ArgumentParser(
-        prog="m365-gdap-runner",
+        prog="m365-gdap-runner-customer-export",
         description="Sign in, add the GDAP tenants the tenants file lacks, and list them.",
     )
     _add_settings_arguments(parser)

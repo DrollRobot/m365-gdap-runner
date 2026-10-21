@@ -54,11 +54,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   always wins. Both are repeatable, and a run that includes nothing is refused. A name that
   matches nothing is an error, and so is one that could mean two things: a tenant and a
   group, or `all` and either. A tenant or group may pick rows without a GDAP relationship,
-  in any cloud. Only the `m365-gdap-runner` command writes the file: it creates it or adds
-  what it lacks, warns which GDAP tenants it appended, and lists the tenants. A script run
-  never writes it; it warns of the columns, GDAP tenants and clouds the file lacks, fills
-  them in for itself, and names the command as the fix. Setting `tenants_file` and flag
-  `--tenants-file` locate the file (default `tenants.csv` in the config directory).
+  in any cloud. Only the `m365-gdap-runner-customer-export` command writes the file: it
+  creates it or adds what it lacks, warns which GDAP tenants it appended, and lists the
+  tenants. A script run never writes it; it warns of the columns, GDAP tenants and clouds the
+  file lacks, fills them in for itself, and names the command as the fix. Setting
+  `tenants_file` and flag `--tenants-file` locate the file (default `tenants.csv` in the
+  config directory).
 - Tenants the partner sign-in cannot reach: before its `run()`, each selected tenant is
   checked silently through the partner sign-in, and each one that fails, or lives in
   another cloud, gets a sign-in of its own, in its own cloud, as its `m365_username`, one

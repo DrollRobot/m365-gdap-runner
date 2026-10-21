@@ -1,4 +1,4 @@
-"""Module entry point: ``python -m m365_gdap_runner``, the same as ``m365-gdap-runner``."""
+"""Module entry point: ``python -m m365_gdap_runner``, as ``m365-gdap-runner-customer-export``."""
 
 from __future__ import annotations
 

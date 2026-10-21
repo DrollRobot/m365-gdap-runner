@@ -56,7 +56,7 @@ if __name__ == "__main__":
 
 ```bash
 m365-gdap-runner-config init           # partner tenant and sign-in name
-m365-gdap-runner                       # creates tenants.csv; add TRUE/FALSE group columns
+m365-gdap-runner-customer-export       # creates tenants.csv; add TRUE/FALSE group columns
 uv run users.py --include pilot
 ```
 

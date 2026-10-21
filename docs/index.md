@@ -11,7 +11,7 @@ the work for one tenant and its own reports.
 ```bash
 uv tool install git+https://github.com/DrollRobot/m365-gdap-runner.git
 m365-gdap-runner-config init      # asks for the partner tenant and your sign-in name
-m365-gdap-runner                  # creates tenants.csv; add TRUE/FALSE group columns
+m365-gdap-runner-customer-export  # creates tenants.csv; add TRUE/FALSE group columns
 ```
 
 Scripts do not need this install: each one names the library in its header, and `uv run`
@@ -196,32 +196,32 @@ bbbbbbbb-0000-0000-0000-00000000000b,beta corp,beta.example,USGov,admin@beta.us,
 cccccccc-0000-0000-0000-00000000000c,Gamma,gamma.example,Commercial,admin@gamma.example,FALSE,,FALSE,TRUE,1003
 ```
 
-`m365_cloud` is `Commercial`, `USGov`, `USGovDoD` or `China`. The `m365-gdap-runner`
-command fills the cell in, by OpenID Connect discovery, when it appends a tenant or finds the
-cell blank.
+`m365_cloud` is `Commercial`, `USGov`, `USGovDoD` or `China`. The
+`m365-gdap-runner-customer-export` command fills the cell in, by OpenID Connect discovery,
+when it appends a tenant or finds the cell blank.
 
 The file can also be an Excel workbook, named `.xlsx`, with the same columns in one table
 (Insert > Table). The table may sit on any sheet, at any spot; a workbook with no table, or
 more than one, is an error. TRUE and FALSE may be Excel's own or typed as text, a totals row
-is ignored, and a formula counts as the value Excel last calculated. When `m365-gdap-runner`
-adds to the table, new columns go to its right and new rows below it, and the table grows to
-hold them; every other cell is left as it was. Those cells must be empty, and the table must
-have no totals row. Saving the workbook drops any charts and images in it. A missing `.xlsx`
-file is created as a workbook with one table.
+is ignored, and a formula counts as the value Excel last calculated. When
+`m365-gdap-runner-customer-export` adds to the table, new columns go to its right and new rows
+below it, and the table grows to hold them; every other cell is left as it was. Those cells
+must be empty, and the table must have no totals row. Saving the workbook drops any charts
+and images in it. A missing `.xlsx` file is created as a workbook with one table.
 
 The file is `tenants.csv` in the config directory (`m365-gdap-runner-config path` shows
 where), unless the `tenants_file` setting or `--tenants-file` points elsewhere. Only the
-`m365-gdap-runner` command writes it. It creates the file when there is none. Any of the
-seven `m365_` columns the file lacks is added after the `m365_` columns it has (or at the end
-when it has none), blank, except that `m365_gdap` is TRUE for every tenant GDAP lists. A GDAP
-tenant with no row is appended with its name, its cloud, TRUE in `m365_gdap` and every other
-column blank, and a warning names it. The command lists the tenants and runs nothing, so run
-it once to create the file, then add group columns. Rows for tenants without a GDAP
-relationship are yours to add and keep.
+`m365-gdap-runner-customer-export` command writes it. It creates the file when there is none.
+Any of the seven `m365_` columns the file lacks is added after the `m365_` columns it has (or
+at the end when it has none), blank, except that `m365_gdap` is TRUE for every tenant GDAP
+lists. A GDAP tenant with no row is appended with its name, its cloud, TRUE in `m365_gdap` and
+every other column blank, and a warning names it. The command lists the tenants and runs
+nothing, so run it once to create the file, then add group columns. Rows for tenants without
+a GDAP relationship are yours to add and keep.
 
 A script run never writes the file. Where the file falls behind, the run warns, names
-`m365-gdap-runner` as the fix, and goes on as if the command had run, for that run only.
-With no file at all, it can pick only GDAP tenants.
+`m365-gdap-runner-customer-export` as the fix, and goes on as if the command had run, for
+that run only. With no file at all, it can pick only GDAP tenants.
 
 ## Tenants outside GDAP
 
