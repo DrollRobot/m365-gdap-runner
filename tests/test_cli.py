@@ -1217,9 +1217,7 @@ def test_a_group_member_without_gdap_gets_a_sign_in_of_its_own(
     assert fake_msal.interactive_tenants() == [PARTNER_TENANT, TENANT_C]
     # Gamma's blank m365_gdap means the partner sign-in is never tried there.
     assert fake_msal.silent_calls(TENANT_C, USER) == []
-    assert f"Signing in to Gamma directly as {GAMMA_ADMIN}: partner: m365_gdap is not TRUE" in (
-        caplog.text
-    )
+    assert f"partner: m365_gdap is not TRUE; direct: signing in as {GAMMA_ADMIN}" in caplog.text
     users = [bearer_tenant(r) for r in seen if r.url.path == "/v1.0/users"]
     assert sorted(users) == [TENANT_A, TENANT_C]
 

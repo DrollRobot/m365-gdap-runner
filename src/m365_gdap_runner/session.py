@@ -53,6 +53,7 @@ from m365_gdap_runner.cache_reminder import place_reminder
 from m365_gdap_runner.config import ConfigError, Settings
 from m365_gdap_runner.context import CLIENT_KINDS, TenantContext, build_client
 from m365_gdap_runner.error_text import brief
+from m365_gdap_runner.runner import tag_logs
 from m365_gdap_runner.tenants import Tenant
 
 logger = logging.getLogger(__name__)
@@ -118,14 +119,14 @@ def _open_pw_page(tenant: Tenant, browser: Sequence[str] | None) -> None:
         browser: The ``pw_browser_path`` program followed by ``pw_browser_args``, or None for
             the system default.
     """
-    logger.debug("Opening %s's password page %s", tenant.display_name, tenant.pw_url)
+    logger.debug("Opening the password page %s", tenant.pw_url)
     if browser is None:
         opened = webbrowser.open(tenant.pw_url)
     else:
         # "%s" is where webbrowser puts the address.
         opened = webbrowser.BackgroundBrowser([*browser, "%s"]).open(tenant.pw_url)
     if not opened:
-        logger.warning("Could not open %s's password page %s", tenant.display_name, tenant.pw_url)
+        logger.warning("Could not open the password page %s", tenant.pw_url)
 
 
 def _ask_to_skip(tenant: Tenant) -> None:
@@ -465,13 +466,9 @@ class PartnerSession:
             partner = f"tenant is in the {tenant.cloud} cloud"
         if not tenant.username:
             return AuthError(f"partner: {partner}; direct: no m365_username")
-        logger.info(
-            "Signing in to %s directly as %s: partner: %s",
-            tenant.display_name,
-            tenant.username,
-            partner,
-        )
-        route = self._sign_in_directly(tenant, scopes, clients)
+        with tag_logs(tenant):
+            logger.info("partner: %s; direct: signing in as %s", partner, tenant.username)
+            route = self._sign_in_directly(tenant, scopes, clients)
         if isinstance(route, AuthContext):
             return route
         return AuthError(f"partner: {partner}; direct: {route}")
@@ -494,21 +491,22 @@ class PartnerSession:
         Returns:
             The customer tenant's context when every client got a token, else what went wrong.
         """
-        try:
-            auth = self.auth.get_tenant_context(tenant.tenant_id)
-            with TenantContext(
-                tenant,
-                auth,
-                scopes=scopes,
-                clients=clients,
-                grant_when_possible=grant_when_possible,
-                transport=self._transport,
-            ) as context:
-                context.probe()
-        except Exception as exc:
-            logger.debug("Partner sign-in cannot reach %s", tenant.display_name, exc_info=True)
-            return exc
-        return auth
+        with tag_logs(tenant):
+            try:
+                auth = self.auth.get_tenant_context(tenant.tenant_id)
+                with TenantContext(
+                    tenant,
+                    auth,
+                    scopes=scopes,
+                    clients=clients,
+                    grant_when_possible=grant_when_possible,
+                    transport=self._transport,
+                ) as context:
+                    context.probe()
+            except Exception as exc:
+                logger.debug("The partner sign-in cannot reach the tenant", exc_info=True)
+                return exc
+            return auth
 
     def _sign_in_directly(
         self, tenant: Tenant, scopes: Sequence[str], clients: Sequence[str]
@@ -551,11 +549,9 @@ class PartnerSession:
             _ask_to_skip(tenant)
             return "skipped with Ctrl+C"
         except Exception as exc:
-            logger.debug("Direct sign-in to %s failed", tenant.display_name, exc_info=True)
+            logger.debug("The direct sign-in failed", exc_info=True)
             why = brief(exc)
-            logger.warning(
-                "Could not sign in to %s as %s: %s", tenant.display_name, tenant.username, why
-            )
+            logger.warning("Could not sign in as %s: %s", tenant.username, why)
             return why
         return auth
 

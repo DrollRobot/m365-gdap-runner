@@ -26,8 +26,9 @@ import logging
 import threading
 import time
 from collections import Counter
-from collections.abc import Generator, Iterable, Sequence
+from collections.abc import Generator, Iterable, Iterator, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Literal, Protocol
@@ -78,6 +79,26 @@ class TenantLogFilter(logging.Filter):
         """
         record.__dict__["tenant"] = _current_tenant.get() or "-"
         return True
+
+
+@contextmanager
+def tag_logs(tenant: Tenant) -> Iterator[None]:
+    """Name the tenant in every record this thread logs inside the block.
+
+    :class:`TenantLogFilter` reads the name. The runner uses it around a tenant's ``run()``,
+    and the session around the tenant's sign-in checks before it.
+
+    Args:
+        tenant: The tenant.
+
+    Yields:
+        Nothing.
+    """
+    token = _current_tenant.set(tenant.display_name)
+    try:
+        yield
+    finally:
+        _current_tenant.reset(token)
 
 
 @dataclass(frozen=True)
@@ -362,8 +383,7 @@ def _run_one(session: ContextFactory, payload: Payload, tenant: Tenant) -> Tenan
     Returns:
         The tenant's result.
     """
-    context_token = _current_tenant.set(tenant.display_name)
-    try:
+    with tag_logs(tenant):
         try:
             context = session.context_for(tenant, scopes=payload.scopes, clients=payload.clients)
         except Exception as exc:
@@ -383,8 +403,6 @@ def _run_one(session: ContextFactory, payload: Payload, tenant: Tenant) -> Tenan
         else:
             logger.info("%s in %.1fs", status, duration)
         return TenantResult(tenant, status, result, error)
-    finally:
-        _current_tenant.reset(context_token)
 
 
 def _execute(payload: Payload, context: TenantContext) -> tuple[Status, object, str | None]:

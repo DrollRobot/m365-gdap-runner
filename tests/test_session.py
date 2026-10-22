@@ -22,6 +22,7 @@ from azure_auth.constants import (
 
 from m365_gdap_runner.cache_reminder import reminder_path
 from m365_gdap_runner.config import ConfigError
+from m365_gdap_runner.runner import TenantLogFilter
 from m365_gdap_runner.session import PartnerSession
 from m365_gdap_runner.tenants import Tenant
 from tests._gdap_fakes import (
@@ -218,6 +219,18 @@ def _signed_in(clients: list[str]) -> PartnerSession:
     return session
 
 
+def _tagged(caplog: pytest.LogCaptureFixture) -> list[tuple[str, str]]:
+    """Each session record caplog kept, as its tenant tag and message.
+
+    Needs :class:`TenantLogFilter` on ``caplog.handler``, which sets the tag.
+    """
+    return [
+        (r.__dict__["tenant"], r.getMessage())
+        for r in caplog.records
+        if r.name == "m365_gdap_runner.session"
+    ]
+
+
 def test_check_access_reaches_gdap_tenants_through_the_partner_sign_in(
     fake_msal: FakeMsal,
 ) -> None:
@@ -293,10 +306,7 @@ def test_check_access_tries_the_partner_sign_in_then_a_cached_direct_one(
     session.login(["graph"])
     with caplog.at_level(logging.INFO, logger="m365_gdap_runner.session"):
         list(session.check_access([beta_with_admin], scopes=["User.Read.All"]))
-    assert (
-        f"Signing in to beta corp directly as {BETA_ADMIN}: partner: no Graph consent"
-        in caplog.text
-    )
+    assert f"partner: no Graph consent; direct: signing in as {BETA_ADMIN}" in caplog.text
     # Only the partner sign-in opened a window; beta corp's own came from the cache.
     assert fake_msal.interactive_tenants() == [PARTNER_TENANT]
     with session.context_for(beta_with_admin, scopes=["User.Read.All"]) as beta:
@@ -313,12 +323,29 @@ def test_check_access_never_tries_the_partner_sign_in_where_gdap_is_false(
         list(session.check_access([ALPHA, beta], scopes=["User.Read.All"]))
     assert fake_msal.silent_calls(TENANT_B, USER) == []
     assert fake_msal.interactive_tenants() == [PARTNER_TENANT, TENANT_B]
-    assert (
-        f"Signing in to beta corp directly as {BETA_ADMIN}: partner: m365_gdap is not TRUE"
-        in caplog.text
-    )
+    assert f"partner: m365_gdap is not TRUE; direct: signing in as {BETA_ADMIN}" in caplog.text
     with session.context_for(beta, scopes=["User.Read.All"]) as context:
         assert (context.auth.home is context.auth, context.auth.username) == (True, BETA_ADMIN)
+
+
+@pytest.mark.acceptance
+def test_the_sign_in_checks_name_their_tenant_in_the_log(
+    fake_msal: FakeMsal, caplog: pytest.LogCaptureFixture
+) -> None:
+    fake_msal.account_errors[(TENANT_B, USER)] = CONSENT_REQUIRED
+    beta_with_admin = Tenant(TENANT_B, "beta corp", "Commercial", BETA_ADMIN)
+    caplog.handler.addFilter(TenantLogFilter())
+    session = _signed_in(["graph"])
+    with caplog.at_level(logging.DEBUG, logger="m365_gdap_runner.session"):
+        list(session.check_access([beta_with_admin], scopes=["User.Read.All"]))
+    tagged = _tagged(caplog)
+    # The partner check runs on a worker thread; the direct sign-in on this one.
+    assert ("beta corp", "The partner sign-in cannot reach the tenant") in tagged
+    assert ("beta corp", f"partner: no Graph consent; direct: signing in as {BETA_ADMIN}") in (
+        tagged
+    )
+    # A line about no one tenant names none.
+    assert ("-", "Checking access to 1 tenant(s)") in tagged
 
 
 @pytest.mark.regression
@@ -437,10 +464,8 @@ def test_a_partner_sign_in_entra_will_not_renew_sends_the_tenant_to_its_own_sign
     session = _signed_in(["graph"])
     with caplog.at_level(logging.INFO, logger="m365_gdap_runner.session"):
         list(session.check_access([beta_with_admin], scopes=["User.Read.All"]))
-    assert (
-        f"Signing in to beta corp directly as {BETA_ADMIN}: partner: invalid_grant: AADSTS70043"
-        in caplog.text
-    )
+    assert "partner: invalid_grant: AADSTS70043" in caplog.text
+    assert f"; direct: signing in as {BETA_ADMIN}" in caplog.text
     assert fake_msal.interactive_tenants() == [PARTNER_TENANT, TENANT_B]
     with session.context_for(beta_with_admin, scopes=["User.Read.All"]) as beta:
         assert beta.auth.username == BETA_ADMIN
@@ -450,13 +475,14 @@ def test_a_failed_direct_sign_in_is_what_context_for_raises(
     fake_msal: FakeMsal, caplog: pytest.LogCaptureFixture
 ) -> None:
     fake_msal.interactive_errors[TENANT_C] = {"error": "access_denied", "error_description": "no"}
+    caplog.handler.addFilter(TenantLogFilter())
     session = _signed_in(["graph"])
     list(session.check_access([GAMMA_GOV], scopes=["User.Read.All"]))
     with pytest.raises(AuthError) as info:
         session.context_for(GAMMA_GOV, scopes=["User.Read.All"])
     # azure-auth's advice after "access_denied: no." is past the length limit, so it is cut.
     assert str(info.value) == "partner: tenant is in the USGov cloud; direct: access_denied: no"
-    assert f"Could not sign in to Gamma as {GAMMA_ADMIN}: access_denied: no" in caplog.text
+    assert ("Gamma", f"Could not sign in as {GAMMA_ADMIN}: access_denied: no") in _tagged(caplog)
 
 
 @pytest.mark.acceptance
@@ -759,10 +785,11 @@ def test_a_password_page_that_cannot_be_opened_is_a_warning(
     fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     monkeypatch.setattr("webbrowser.open", lambda url, *args, **kwargs: False)
+    caplog.handler.addFilter(TenantLogFilter())
     session = _signed_in(["graph"])
     with caplog.at_level(logging.WARNING, logger="m365_gdap_runner.session"):
         list(session.check_access([BETA_WITH_PW_URL], scopes=["User.Read.All"]))
-    assert f"Could not open beta corp's password page {PW_URL}" in caplog.text
+    assert ("beta corp", f"Could not open the password page {PW_URL}") in _tagged(caplog)
     # The sign-in goes on without it.
     assert fake_msal.interactive_tenants() == [PARTNER_TENANT, TENANT_B]
     with session.context_for(BETA_WITH_PW_URL, scopes=["User.Read.All"]) as beta:
