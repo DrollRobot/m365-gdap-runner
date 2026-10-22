@@ -120,6 +120,13 @@ After the summary line, every warning and error the run logged is printed again,
 lost in a long run's output. That includes the script's own warnings, and each tenant that
 failed, which logs an error.
 
+A tenant's error, in the log and in its `TenantResult`, is one short line. For a tenant that
+could not be reached, it names each sign-in tried: `partner: <why>; direct: <why>`, such as
+`partner: missing 5 of 19 Graph scopes, self-grant failed; direct: no m365_username`. Missing
+consent is counted, not listed. Microsoft's Trace ID, Correlation ID and Timestamp are left
+out, and a message over 300 characters is cut to its first sentence. The `debug_log_path` file
+keeps every error in full.
+
 ## Errors in run()
 
 An error raised in `run()` stops the run: that tenant is `error`, tenants already running

@@ -288,7 +288,7 @@ def test_check_access_tries_the_partner_sign_in_then_a_cached_direct_one(
     with caplog.at_level(logging.INFO, logger="m365_gdap_runner.session"):
         list(session.check_access([beta_with_admin], scopes=["User.Read.All"]))
     assert (
-        f"Signing in to beta corp directly as {BETA_ADMIN}: the partner sign-in cannot reach it"
+        f"Signing in to beta corp directly as {BETA_ADMIN}: partner: no Graph consent"
         in caplog.text
     )
     # Only the partner sign-in opened a window; beta corp's own came from the cache.
@@ -308,7 +308,7 @@ def test_check_access_never_tries_the_partner_sign_in_where_gdap_is_false(
     assert fake_msal.silent_calls(TENANT_B) == []
     assert fake_msal.interactive_tenants() == [PARTNER_TENANT, TENANT_B]
     assert (
-        f"Signing in to beta corp directly as {BETA_ADMIN}: its m365_gdap is not TRUE"
+        f"Signing in to beta corp directly as {BETA_ADMIN}: partner: m365_gdap is not TRUE"
         in caplog.text
     )
     with session.context_for(beta, scopes=["User.Read.All"]) as context:
@@ -319,12 +319,9 @@ def test_check_access_never_tries_the_partner_sign_in_where_gdap_is_false(
 @pytest.mark.parametrize(
     ("tenant", "reason"),
     [
-        (BETA, "has no consent in tenant"),
-        (Tenant(TENANT_C, "Gamma", "USGov"), "Gamma is in the USGov cloud"),
-        (
-            Tenant(TENANT_B, "beta corp", "Commercial", gdap=False),
-            "beta corp's m365_gdap is not TRUE",
-        ),
+        (BETA, "no Graph consent"),
+        (Tenant(TENANT_C, "Gamma", "USGov"), "tenant is in the USGov cloud"),
+        (Tenant(TENANT_B, "beta corp", "Commercial", gdap=False), "m365_gdap is not TRUE"),
     ],
 )
 def test_check_access_never_signs_in_directly_as_the_partner_account(
@@ -333,10 +330,50 @@ def test_check_access_never_signs_in_directly_as_the_partner_account(
     fake_msal.tenant_errors[TENANT_B] = CONSENT_REQUIRED
     session = _signed_in(["graph"])
     list(session.check_access([tenant], scopes=["User.Read.All"]))
-    with pytest.raises(AuthError, match="m365_username is blank") as info:
+    with pytest.raises(AuthError) as info:
         session.context_for(tenant, scopes=["User.Read.All"])
-    assert reason in str(info.value)
+    assert str(info.value) == f"partner: {reason}; direct: no m365_username"
     assert fake_msal.interactive_tenants() == [PARTNER_TENANT]
+
+
+def test_a_tenant_with_no_account_of_its_own_adds_no_warning_to_the_check(
+    fake_msal: FakeMsal, caplog: pytest.LogCaptureFixture
+) -> None:
+    # The run's error line for beta corp says why; a warning would say it twice.
+    fake_msal.tenant_errors[TENANT_B] = CONSENT_REQUIRED
+    session = _signed_in(["graph"])
+    with caplog.at_level(logging.INFO, logger="m365_gdap_runner.session"):
+        list(session.check_access([BETA], scopes=["User.Read.All"]))
+    assert [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+
+@pytest.mark.acceptance
+def test_an_excessively_long_partner_failure_is_cut_but_the_direct_one_still_shows(
+    fake_msal: FakeMsal,
+) -> None:
+    fake_msal.tenant_errors[TENANT_B] = {
+        "error": "invalid_grant",
+        "error_description": (
+            "AADSTS50105: Your administrator has configured the application Microsoft Graph "
+            "Command Line Tools ('14d82eec-204b-4c2f-b7e8-296a70dab67e') to block users unless "
+            "they are specifically granted ('assigned') access to the application.  The signed "
+            "in user '{EUII Hidden}' is blocked because they are not a direct member of a group "
+            "with access, nor had access directly assigned by an administrator. Please contact "
+            "your administrator to assign access to this application.\r\nTrace ID: 0\r\n"
+            "Correlation ID: 0\r\nTimestamp: 2026-10-22 01:51:05Z"
+        ),
+        "error_codes": [50105],
+    }
+    session = _signed_in(["graph"])
+    list(session.check_access([BETA], scopes=["User.Read.All"]))
+    with pytest.raises(AuthError) as info:
+        session.context_for(BETA, scopes=["User.Read.All"])
+    assert str(info.value) == (
+        "partner: invalid_grant: AADSTS50105: Your administrator has configured the application "
+        "Microsoft Graph Command Line Tools ('14d82eec-204b-4c2f-b7e8-296a70dab67e') to block "
+        "users unless they are specifically granted ('assigned') access to the application; "
+        "direct: no m365_username"
+    )
 
 
 def test_check_access_signs_in_to_another_cloud_once_per_client_as_its_account(
@@ -359,12 +396,17 @@ def test_check_access_signs_in_to_another_cloud_once_per_client_as_its_account(
         assert gamma.graph.request("GET", "/users").request.url.host == "graph.microsoft.us"
 
 
-def test_a_failed_direct_sign_in_is_what_context_for_raises(fake_msal: FakeMsal) -> None:
+def test_a_failed_direct_sign_in_is_what_context_for_raises(
+    fake_msal: FakeMsal, caplog: pytest.LogCaptureFixture
+) -> None:
     fake_msal.interactive_errors[TENANT_C] = {"error": "access_denied", "error_description": "no"}
     session = _signed_in(["graph"])
     list(session.check_access([GAMMA_GOV], scopes=["User.Read.All"]))
-    with pytest.raises(AuthError, match="access_denied"):
+    with pytest.raises(AuthError) as info:
         session.context_for(GAMMA_GOV, scopes=["User.Read.All"])
+    # azure-auth's advice after "access_denied: no." is past the length limit, so it is cut.
+    assert str(info.value) == "partner: tenant is in the USGov cloud; direct: access_denied: no"
+    assert f"Could not sign in to Gamma as {GAMMA_ADMIN}: access_denied: no" in caplog.text
 
 
 @pytest.mark.acceptance
@@ -380,7 +422,9 @@ def test_ctrl_c_then_enter_during_a_direct_sign_in_skips_that_tenant(
         GAMMA_GOV,
     ]
     assert "Stopped the sign-in to beta corp. Press Enter to skip it" in capsys.readouterr().err
-    with pytest.raises(AuthError, match=r"sign-in to beta corp was skipped with Ctrl\+C"):
+    with pytest.raises(
+        AuthError, match=r"^partner: m365_gdap is not TRUE; direct: skipped with Ctrl\+C$"
+    ):
         session.context_for(beta, scopes=["User.Read.All"])
     # Gamma's sign-in still opened, after beta corp's.
     assert fake_msal.interactive_tenants() == [PARTNER_TENANT, TENANT_B, TENANT_C]
@@ -436,7 +480,7 @@ def test_a_direct_sign_in_does_not_wait_for_the_other_checks(
             assert beta_signed_in.wait(5), "beta corp's sign-in waited for Alpha's check"
         return through_partner(self, tenant, *args)
 
-    def sign_in(self: PartnerSession, tenant: Tenant, *args: Any) -> AuthContext | Exception:
+    def sign_in(self: PartnerSession, tenant: Tenant, *args: Any) -> AuthContext | str:
         try:
             return sign_in_directly(self, tenant, *args)
         finally:

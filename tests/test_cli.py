@@ -352,8 +352,7 @@ def test_report_gets_every_tenant_in_order_failures_included(
         [f"admin@{TENANT_A}.example"],
     )
     assert (beta.tenant.tenant_id, beta.status, beta.result) == (TENANT_B, "auth_failed", None)
-    assert beta.error is not None
-    assert "has no consent in tenant" in beta.error
+    assert beta.error == "partner: no Graph consent; direct: no m365_username"
     captured = capsys.readouterr()
     assert captured.out == ""  # the library writes nothing; stdout is the script's
     assert "Summary: ok=1, auth_failed=1, error=0, skipped=0" in captured.err
@@ -462,7 +461,7 @@ def test_warnings_and_errors_are_printed_again_after_the_summary(
         f"WARNING [-] No tenants file at {path}; run m365-gdap-runner-customer-export to create it",
         "WARNING [Alpha] auditing is off",
     ]
-    assert re.fullmatch(r"ERROR \[beta corp\] error in \d+\.\ds: RuntimeError\('boom'\)", lines[2])
+    assert re.fullmatch(r"ERROR \[beta corp\] error in \d+\.\ds: RuntimeError: boom", lines[2])
 
 
 @pytest.mark.integration
@@ -638,9 +637,33 @@ def test_no_grant_when_possible_overrides_the_script(fake_msal: FakeMsal, tmp_pa
     assert _main(script, "--include", "Alpha", "--no-grant-when-possible", handler=handler) == 1
     (alpha,) = _reported(script)
     assert alpha.status == "auth_failed"
-    assert alpha.error is not None
-    assert "could grant itself the requested scopes" in alpha.error
+    assert alpha.error == (
+        "partner: missing 1 of 1 Graph scopes, --grant-when-possible would add them; "
+        "direct: no m365_username"
+    )
     assert patches == []
+
+
+@pytest.mark.integration
+def test_a_grant_graph_refuses_says_the_self_grant_failed(
+    fake_msal: FakeMsal, tmp_path: Path
+) -> None:
+    script = _script(tmp_path, RECORDER + "\n    GRANT_WHEN_POSSIBLE = True\n")
+    fake_msal.granted[TENANT_A] = "DelegatedPermissionGrant.ReadWrite.All"
+    grants = _grant_service(fake_msal, [])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        # The GDAP roles in this tenant may read the app's grant, not change it.
+        if request.method == "PATCH":
+            denied = {"code": "Authorization_RequestDenied", "message": "Insufficient privileges"}
+            return httpx.Response(403, json={"error": denied})
+        return grants(request)
+
+    assert _main(script, "--include", "Alpha", handler=handler) == 1
+    (alpha,) = _reported(script)
+    assert alpha.error == (
+        "partner: missing 1 of 1 Graph scopes, self-grant failed; direct: no m365_username"
+    )
 
 
 @pytest.mark.integration
@@ -1193,7 +1216,7 @@ def test_a_group_member_without_gdap_gets_a_sign_in_of_its_own(
     assert fake_msal.interactive_tenants() == [PARTNER_TENANT, TENANT_C]
     # Gamma's blank m365_gdap means the partner sign-in is never tried there.
     assert fake_msal.silent_calls(TENANT_C) == []
-    assert f"Signing in to Gamma directly as {GAMMA_ADMIN}: its m365_gdap is not TRUE" in (
+    assert f"Signing in to Gamma directly as {GAMMA_ADMIN}: partner: m365_gdap is not TRUE" in (
         caplog.text
     )
     users = [bearer_tenant(r) for r in seen if r.url.path == "/v1.0/users"]
@@ -1319,9 +1342,10 @@ def test_a_blank_username_fails_the_tenant_without_a_sign_in_as_the_partner_acco
     assert _main(recorder, "--include", "pilot", "--tenants-file", str(path)) == 1
     alpha, gamma = _reported(recorder)
     assert (alpha.status, gamma.status) == ("ok", "auth_failed")
-    assert gamma.error is not None
-    assert "AADSTS50020" in gamma.error
-    assert "No direct sign-in to Gamma: its m365_username is blank." in gamma.error
+    assert gamma.error == (
+        f"partner: invalid_grant: AADSTS50020: User account '{USER}' from identity provider "
+        "does not exist in tenant; direct: no m365_username"
+    )
     assert fake_msal.interactive_tenants() == [PARTNER_TENANT]
 
 
@@ -1371,7 +1395,7 @@ def test_ctrl_c_then_enter_during_a_direct_sign_in_skips_that_tenant_only(
     assert _main(recorder, "--include", "pilot", "--tenants-file", str(path)) == 1
     assert [(r.status, r.error) for r in _reported(recorder)] == [
         ("ok", None),
-        ("auth_failed", "The sign-in to Gamma was skipped with Ctrl+C."),
+        ("auth_failed", "partner: m365_gdap is not TRUE; direct: skipped with Ctrl+C"),
     ]
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 import threading
 from collections.abc import Callable, Iterator
 
@@ -86,7 +87,7 @@ def test_results_cover_ok_auth_failed_and_error_in_order() -> None:
     assert results[0].result == {"tenant": "Alpha"}
     assert results[0].error is None
     assert results[1].error == "invalid_grant: AADSTS65001 consent_required"
-    assert results[2].error == "RuntimeError('boom')"
+    assert results[2].error == "RuntimeError: boom"
 
 
 def test_a_tenant_that_failed_logs_an_error(caplog: pytest.LogCaptureFixture) -> None:
@@ -97,9 +98,41 @@ def test_a_tenant_that_failed_logs_an_error(caplog: pytest.LogCaptureFixture) ->
     outcomes = [(r.levelno, r.getMessage().split(" ")[0]) for r in caplog.records]
     assert outcomes == [
         (logging.INFO, "ok"),
-        (logging.ERROR, "auth_failed"),
+        (logging.ERROR, "auth_failed:"),
         (logging.ERROR, "error"),
     ]
+
+
+def test_only_a_tenant_whose_run_started_logs_a_time(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO, logger="m365_gdap_runner.runner")
+    unreachable = AuthError("partner: no Graph consent; direct: no m365_username")
+    session = FakeSession(auth_errors={TENANT_B: unreachable})
+    payload = Recorder(failures={TENANT_C: RuntimeError("boom")})
+    run_payload(session, _payload(payload), TENANTS, continue_on_error=True)
+    beta, gamma = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
+    assert beta == "auth_failed: partner: no Graph consent; direct: no m365_username"
+    assert re.fullmatch(r"error in \d+\.\ds: RuntimeError: boom", gamma)
+
+
+def test_an_auth_error_inside_run_is_short_and_kept_in_full_for_the_debug_log(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG, logger="m365_gdap_runner.runner")
+    refusal = ConsentRequired(
+        f"Tenant {TENANT_A} has not granted Mail.Read to application ...",
+        tenant_id=TENANT_A,
+        scopes=[
+            "https://graph.microsoft.com/User.Read.All",
+            "https://graph.microsoft.com/Mail.Read",
+        ],
+        granted=["User.Read.All"],
+        missing=["Mail.Read"],
+    )
+    results = run_payload(FakeSession(), _payload(Recorder(failures={TENANT_A: refusal})), [ALPHA])
+    assert results[0].error == "missing 1 of 2 Graph scopes"
+    (debug,) = [r for r in caplog.records if r.levelno == logging.DEBUG]
+    assert debug.exc_info is not None
+    assert debug.exc_info[1] is refusal
 
 
 def test_context_is_built_with_the_payloads_scopes_and_clients_and_closed() -> None:
@@ -132,7 +165,7 @@ def test_unexpected_token_failure_is_auth_failed() -> None:
     session = FakeSession(auth_errors={TENANT_A: ConnectionError("login host unreachable")})
     results = run_payload(session, _payload(Recorder()), [ALPHA])
     assert _statuses(results) == ["auth_failed"]
-    assert results[0].error == "ConnectionError('login host unreachable')"
+    assert results[0].error == "ConnectionError: login host unreachable"
 
 
 def test_failure_to_build_the_context_is_auth_failed() -> None:

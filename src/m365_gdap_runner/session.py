@@ -50,6 +50,7 @@ from azure_auth.sync import GraphClient
 from m365_gdap_runner.cache_reminder import place_reminder
 from m365_gdap_runner.config import ConfigError, Settings
 from m365_gdap_runner.context import CLIENT_KINDS, TenantContext, build_client
+from m365_gdap_runner.error_text import brief
 from m365_gdap_runner.tenants import Tenant
 
 logger = logging.getLogger(__name__)
@@ -421,7 +422,7 @@ class PartnerSession:
                     if direct:
                         tenant, failure = direct.popleft()
                         self._routes[tenant.tenant_id.lower()] = self._reach_directly(
-                            tenant, failure, scopes, clients
+                            tenant, failure, scopes, clients, grant_when_possible
                         )
                         yield tenant
             finally:
@@ -435,6 +436,7 @@ class PartnerSession:
         failure: Exception | None,
         scopes: Sequence[str],
         clients: Sequence[str],
+        grant_when_possible: bool,
     ) -> AuthContext | Exception:
         """Give a tenant the partner sign-in does not reach a sign-in of its own, if it can.
 
@@ -444,36 +446,32 @@ class PartnerSession:
                 its ``gdap`` is False, or it is in another cloud.
             scopes: The script's Graph scopes.
             clients: The script's ``CLIENTS``.
+            grant_when_possible: Whether that check could add missing scopes to the app's
+                grant, for what the failure says of it.
 
         Returns:
-            The tenant's own context, else why it cannot be reached. A tenant with no
-            ``username`` gets no sign-in, and no prompt.
+            The tenant's own context, else why it cannot be reached, in short
+            (:func:`~m365_gdap_runner.error_text.brief`): ``partner: <why>; direct: <why>``. A
+            tenant with no ``username`` gets no sign-in, and no prompt.
         """
         if failure is not None:
-            why = f"the partner sign-in cannot reach it ({failure})"
+            partner = brief(failure, grant_when_possible=grant_when_possible)
         elif not tenant.gdap:
-            why = "its m365_gdap is not TRUE"
-            failure = AuthError(
-                f"{tenant.display_name}'s m365_gdap is not TRUE, so the partner sign-in "
-                "was not tried; it needs a direct sign-in."
-            )
+            partner = "m365_gdap is not TRUE"
         else:
-            why = f"it is in the {tenant.cloud} cloud"
-            failure = AuthError(
-                f"{tenant.display_name} is in the {tenant.cloud} cloud, which the partner "
-                "sign-in cannot reach; it needs a direct sign-in."
-            )
+            partner = f"tenant is in the {tenant.cloud} cloud"
         if not tenant.username:
-            logger.warning(
-                "Skipping %s: %s, and its m365_username is blank", tenant.display_name, why
-            )
-            return AuthError(
-                f"{failure} No direct sign-in to {tenant.display_name}: its m365_username is blank."
-            )
+            return AuthError(f"partner: {partner}; direct: no m365_username")
         logger.info(
-            "Signing in to %s directly as %s: %s", tenant.display_name, tenant.username, why
+            "Signing in to %s directly as %s: partner: %s",
+            tenant.display_name,
+            tenant.username,
+            partner,
         )
-        return self._sign_in_directly(tenant, scopes, clients)
+        route = self._sign_in_directly(tenant, scopes, clients)
+        if isinstance(route, AuthContext):
+            return route
+        return AuthError(f"partner: {partner}; direct: {route}")
 
     def _through_partner(
         self,
@@ -511,7 +509,7 @@ class PartnerSession:
 
     def _sign_in_directly(
         self, tenant: Tenant, scopes: Sequence[str], clients: Sequence[str]
-    ) -> AuthContext | Exception:
+    ) -> AuthContext | str:
         """Sign in to a tenant on its own, as its own account, once per client the script uses.
 
         Ctrl+C while it waits asks whether to skip the tenant or stop the run
@@ -523,7 +521,8 @@ class PartnerSession:
             clients: The script's ``CLIENTS``.
 
         Returns:
-            The tenant's own context, signed in to every client, else what went wrong.
+            The tenant's own context, signed in to every client, else what went wrong, in
+            short.
 
         Raises:
             KeyboardInterrupt: When the person chooses to stop the run.
@@ -545,12 +544,14 @@ class PartnerSession:
                     client.login()
         except KeyboardInterrupt:
             _ask_to_skip(tenant)
-            return AuthError(f"The sign-in to {tenant.display_name} was skipped with Ctrl+C.")
+            return "skipped with Ctrl+C"
         except Exception as exc:
+            logger.debug("Direct sign-in to %s failed", tenant.display_name, exc_info=True)
+            why = brief(exc)
             logger.warning(
-                "Could not sign in to %s as %s: %s", tenant.display_name, tenant.username, exc
+                "Could not sign in to %s as %s: %s", tenant.display_name, tenant.username, why
             )
-            return exc
+            return why
         return auth
 
     def _pw_page_opener(self, tenant: Tenant) -> Callable[[], None] | None:

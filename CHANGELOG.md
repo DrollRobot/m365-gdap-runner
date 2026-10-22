@@ -47,6 +47,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - After a run's summary line, every warning and error the run logged, the script's own
   included, is printed again, so none is lost in a long run's output. A tenant that failed
   logs an error.
+- A tenant's error is one short line, in the log and in its `TenantResult`: `partner: <why>;
+  direct: <why>` for a tenant that could not be reached. Missing Graph consent is counted,
+  not listed, and says whether a self-grant failed, cannot be tried or would help.
+  Microsoft's Trace ID, Correlation ID and Timestamp are dropped, a message over 300
+  characters is cut to its first sentence, and another exception reads `Type: message`. The
+  time is logged only for a tenant whose `run()` started. The debug log keeps every error in
+  full.
 - Tenant selection from a tenants file: a CSV, or an `.xlsx` workbook holding one table, with
   `m365_tenant_id`, `m365_tenant_name`, `m365_domain`, `m365_cloud`, `m365_username`,
   `m365_gdap`, `m365_pw_url`, and one TRUE/FALSE column per group; other tools may keep their

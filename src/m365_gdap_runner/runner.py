@@ -35,6 +35,7 @@ from typing import Literal, Protocol
 from azure_auth import AuthError
 
 from m365_gdap_runner.context import TenantContext
+from m365_gdap_runner.error_text import brief
 from m365_gdap_runner.loader import Payload
 from m365_gdap_runner.tenants import Tenant
 
@@ -87,7 +88,7 @@ class TenantResult:
         tenant: The tenant.
         status: ``ok``, ``auth_failed``, ``error``, or ``skipped``.
         result: What the script's ``run()`` returned when ``ok``, as it is; else None.
-        error: Failure description when not ``ok`` or ``skipped``, else None.
+        error: Why the tenant failed, in a line, when not ``ok`` or ``skipped``, else None.
     """
 
     tenant: Tenant
@@ -351,6 +352,8 @@ def _run_unless_stopped(
 def _run_one(session: ContextFactory, payload: Payload, tenant: Tenant) -> TenantResult:
     """Process one tenant and log its outcome: an error when the tenant failed.
 
+    The log line gives the time ``run()`` took, and none for a tenant it never started for.
+
     Args:
         session: A signed-in session.
         payload: The validated payload.
@@ -360,9 +363,20 @@ def _run_one(session: ContextFactory, payload: Payload, tenant: Tenant) -> Tenan
         The tenant's result.
     """
     context_token = _current_tenant.set(tenant.display_name)
-    start = time.monotonic()
     try:
-        status, result, error = _execute(session, payload, tenant)
+        try:
+            context = session.context_for(tenant, scopes=payload.scopes, clients=payload.clients)
+        except Exception as exc:
+            if isinstance(exc, AuthError):
+                # Already short: check_access() said why, and logged the full error.
+                why = str(exc)
+            else:
+                logger.debug("Building the tenant context failed", exc_info=True)
+                why = brief(exc)
+            logger.error("auth_failed: %s", why)
+            return TenantResult(tenant, "auth_failed", error=why)
+        start = time.monotonic()
+        status, result, error = _execute(payload, context)
         duration = time.monotonic() - start
         if error:
             logger.error("%s in %.1fs: %s", status, duration, error)
@@ -373,33 +387,24 @@ def _run_one(session: ContextFactory, payload: Payload, tenant: Tenant) -> Tenan
         _current_tenant.reset(context_token)
 
 
-def _execute(
-    session: ContextFactory, payload: Payload, tenant: Tenant
-) -> tuple[Status, object, str | None]:
-    """Build the context and call ``run()``.
+def _execute(payload: Payload, context: TenantContext) -> tuple[Status, object, str | None]:
+    """Call ``run()``, then close the context.
 
     Args:
-        session: A signed-in session.
         payload: The validated payload.
-        tenant: The tenant.
+        context: The tenant's context.
 
     Returns:
-        ``(status, result, error)``.
+        ``(status, result, error)``, with the error in short
+        (:func:`~m365_gdap_runner.error_text.brief`); the debug log gets it in full.
     """
-    try:
-        context = session.context_for(tenant, scopes=payload.scopes, clients=payload.clients)
-    except AuthError as exc:
-        return "auth_failed", None, str(exc)
-    except Exception as exc:
-        logger.debug("Building the tenant context failed", exc_info=True)
-        return "auth_failed", None, repr(exc)
-
     with context:
         try:
             result = payload.run(context)
         except AuthError as exc:
-            return "auth_failed", None, str(exc)
+            logger.debug("Payload raised", exc_info=True)
+            return "auth_failed", None, brief(exc)
         except Exception as exc:
             logger.debug("Payload raised", exc_info=True)
-            return "error", None, repr(exc)
+            return "error", None, brief(exc)
     return "ok", result, None

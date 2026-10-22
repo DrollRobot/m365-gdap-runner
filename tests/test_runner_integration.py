@@ -83,8 +83,8 @@ def test_graph_example_runs_through_session_and_azure_auth(fake_msal: FakeMsal) 
         }
     ]
     assert results[1].error is not None
-    # Consent was checked against the script's own scopes: the refusal names them.
-    assert "User.Read.All cannot be issued" in results[1].error
+    # Consent was checked in the tenant, which has none, and beta corp has no account to try.
+    assert results[1].error == "partner: no Graph consent; direct: no m365_username"
     # The script never ran for the tenant that refused the token.
     users_requests = [r for r in seen if r.url.path == "/v1.0/users"]
     assert [bearer_tenant(r) for r in users_requests] == [TENANT_A]
