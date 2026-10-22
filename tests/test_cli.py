@@ -450,9 +450,10 @@ def test_warnings_and_errors_are_printed_again_after_the_summary(
     )
     assert _main(script, "--include", "all") == 1
     err = capsys.readouterr().err
-    heading, *lines = err.split("Summary: ok=1, auth_failed=0, error=1, skipped=0\n")[
+    blank, heading, *lines = err.split("Summary: ok=1, auth_failed=0, error=1, skipped=0\n")[
         1
     ].splitlines()
+    assert blank == ""
     assert heading == "Warnings and errors from this run (3):"
     # Each line as the terminal shows it, less the time.
     lines = [line.split(" ", 1)[1] for line in lines]

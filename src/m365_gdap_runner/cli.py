@@ -351,13 +351,15 @@ class _WarningLog(logging.Handler):
 def _print_warnings(warning_log: _WarningLog) -> None:
     """Print again every warning and error the run logged, under a heading, to stderr.
 
-    Nothing is printed for a run that logged none.
+    A blank line sets them apart from the run's output. Nothing is printed for a run that
+    logged none.
 
     Args:
         warning_log: What the run logged.
     """
     if not warning_log.lines:
         return
+    print(file=sys.stderr)
     print(f"Warnings and errors from this run ({len(warning_log.lines)}):", file=sys.stderr)
     for line in warning_log.lines:
         print(line, file=sys.stderr)
