@@ -46,6 +46,8 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.cloud == ""
     assert settings.tenants_file == ""
     assert settings.debug_log_path == ""
+    assert settings.debug_log_max_mb == 10.0
+    assert settings.debug_log_keep == 5
 
 
 @pytest.mark.parametrize("missing", ["PARTNER_TENANT_ID", "USERNAME"])

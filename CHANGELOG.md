@@ -41,7 +41,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for one run.
 - Setting `debug_log_path`, for development: every log record, debug and library ones
   included, is appended to that file, or to `m365_gdap_runner_debug.log` in it when it names
-  a folder. The terminal shows what it did without it.
+  a folder. The terminal shows what it did without it. Past `debug_log_max_mb` megabytes
+  (default 10; 0 for no limit), the file is compressed to `<name>.1.gz` and a new one started;
+  the newest `debug_log_keep` compressed files (default 5) are kept, and older ones deleted.
 - After a run's summary line, every warning and error the run logged, the script's own
   included, is printed again, so none is lost in a long run's output. A tenant that failed
   logs an error.

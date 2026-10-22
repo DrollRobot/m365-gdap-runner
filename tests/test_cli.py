@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import gzip
 import json
 import logging
 import os
@@ -869,6 +870,95 @@ def test_a_debug_log_path_naming_a_folder_writes_the_default_file_name_in_it(
 )
 def test_debug_log_file(tmp_path: Path, setting: str, expected: str) -> None:
     assert cli._debug_log_file(setting.format(tmp=tmp_path)) == Path(expected.format(tmp=tmp_path))
+
+
+@pytest.mark.integration
+@pytest.mark.acceptance
+def test_a_full_debug_log_is_compressed_and_only_the_newest_ones_kept(
+    fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path = tmp_path / "debug.log"
+    monkeypatch.setenv(ENV_PREFIX + "DEBUG_LOG_PATH", str(path))
+    monkeypatch.setenv(ENV_PREFIX + "DEBUG_LOG_MAX_MB", "0.0005")  # about 500 bytes, a few lines
+    monkeypatch.setenv(ENV_PREFIX + "DEBUG_LOG_KEEP", "2")
+    runs = 4  # each logs more than a file holds, so the oldest are deleted
+    for _run in range(runs):
+        with _restoring_loggers():
+            assert _list_tenants() == 0
+    assert sorted(p.name for p in tmp_path.glob("debug.log*")) == [
+        "debug.log",
+        "debug.log.1.gz",
+        "debug.log.2.gz",
+    ]
+    assert path.stat().st_size <= 0.0005 * cli._MEGABYTE
+    kept = path.read_text(encoding="utf-8")
+    for number in (1, 2):
+        old = gzip.decompress((tmp_path / f"debug.log.{number}.gz").read_bytes()).decode("utf-8")
+        assert re.match(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d+ [A-Z]+ \[", old)
+        kept += old
+    assert kept.count("Debug log started") < runs
+
+
+@pytest.mark.integration
+def test_a_debug_log_with_no_size_limit_is_never_compressed(
+    fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path = tmp_path / "debug.log"
+    monkeypatch.setenv(ENV_PREFIX + "DEBUG_LOG_PATH", str(path))
+    monkeypatch.setenv(ENV_PREFIX + "DEBUG_LOG_MAX_MB", "0")
+    with _restoring_loggers():
+        assert _list_tenants() == 0
+    assert [p.name for p in tmp_path.glob("debug.log*")] == ["debug.log"]
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("name", "value", "message"),
+    [
+        ("DEBUG_LOG_MAX_MB", "-1", "debug_log_max_mb must not be negative, not -1.0."),
+        ("DEBUG_LOG_KEEP", "0", "debug_log_keep must be at least 1, not 0."),
+    ],
+    ids=["negative-size", "keep-none"],
+)
+def test_a_bad_debug_log_limit_is_a_configuration_error(
+    fake_msal: FakeMsal,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    name: str,
+    value: str,
+    message: str,
+) -> None:
+    monkeypatch.setenv(ENV_PREFIX + "DEBUG_LOG_PATH", str(tmp_path / "debug.log"))
+    monkeypatch.setenv(ENV_PREFIX + name, value)
+    assert _list_tenants() == 2
+    assert message in caplog.text
+    assert not (tmp_path / "debug.log").exists()
+
+
+@pytest.mark.unit
+def test_a_debug_log_that_cannot_be_compressed_warns_once_and_keeps_growing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    def held_open(self: cli._DebugLogHandler, source: str, dest: str) -> None:
+        raise PermissionError(32, "The file is being used by another process", source)
+
+    monkeypatch.setattr(cli._DebugLogHandler, "rotate", held_open)
+    folder = tmp_path / "logs"
+    folder.mkdir()
+    path = folder / "debug.log"
+    handler = cli._DebugLogHandler(path, max_bytes=200, keep=2)
+    log = logging.getLogger("tests.debug_log")
+    log.addHandler(handler)
+    try:
+        for number in range(20):
+            log.warning("record %d", number)
+    finally:
+        log.removeHandler(handler)
+        handler.close()
+    assert caplog.text.count("Could not compress debug log") == 1
+    assert [p.name for p in folder.iterdir()] == ["debug.log"]
+    assert path.read_text(encoding="utf-8").splitlines() == [f"record {n}" for n in range(20)]
 
 
 @pytest.mark.unit

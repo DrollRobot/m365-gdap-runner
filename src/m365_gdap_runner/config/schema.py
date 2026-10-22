@@ -221,6 +221,17 @@ class Settings:
             "development; a folder means m365_gdap_runner_debug.log in it; empty writes none"
         ),
     )
+    debug_log_max_mb: float = option(
+        default_value=10.0,
+        help=(
+            "Megabytes the debug log grows to before it is compressed and a new one started; "
+            "0 lets it grow without limit"
+        ),
+    )
+    debug_log_keep: int = option(
+        default_value=5,
+        help="Compressed debug logs kept besides the current one; older ones are deleted",
+    )
 
 
 def is_secret(f: Field[Any]) -> bool:

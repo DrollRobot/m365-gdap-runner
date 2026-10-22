@@ -125,4 +125,7 @@ ignore_names = [
     "exchange",  # context.py: TenantContext clients, read by payloads
     "ipps",
     "arm",
+    "rotation_filename",  # cli.py: _DebugLogHandler overrides, called by logging.handlers
+    "rotate",
+    "maxBytes",
 ]

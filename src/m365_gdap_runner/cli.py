@@ -32,7 +32,8 @@ Configuration comes from the config system (see ``src/m365_gdap_runner/config/``
 ``--tenants-file`` and ``--jobs`` override it. Progress and the summary go to stderr; stdout
 is the script's. After the summary, every warning and error the run logged, the script's
 included, is printed again, so none is lost in a long run's output. The ``debug_log_path``
-setting also appends every log record to a file.
+setting also appends every log record to a file; past ``debug_log_max_mb``, it is compressed
+and a new one started, and the newest ``debug_log_keep`` compressed ones are kept.
 
 Exit codes: 0 all tenants ok; 1 any tenant not ok; 2 usage, configuration, script, sign-in,
 enumeration, tenants-file or tenant-selection error, or ``report()`` failed; 130 interrupted.
@@ -41,8 +42,11 @@ enumeration, tenants-file or tenant-selection error, or ``report()`` failed; 130
 from __future__ import annotations
 
 import argparse
+import gzip
 import logging
+import logging.handlers
 import os
+import shutil
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -108,6 +112,9 @@ _DEBUG_LOG_FORMAT = "%(asctime)s %(levelname)s [%(tenant)s] %(name)s: %(message)
 
 # The debug log's file name when ``debug_log_path`` names a folder.
 _DEBUG_LOG_NAME = "m365_gdap_runner_debug.log"
+
+# Bytes in one of ``debug_log_max_mb``'s megabytes.
+_MEGABYTE = 1024 * 1024
 
 # Settings a flag can override, with the flag's metavar.
 _SETTING_FLAGS = (
@@ -397,22 +404,93 @@ def _debug_log_file(setting: str) -> Path:
     return path
 
 
+class _DebugLogHandler(logging.handlers.RotatingFileHandler):
+    """Append to the debug log; past its size limit, compress it and start a new one.
+
+    The full log is compressed to ``<name>.1.gz``, the older ones move up a number, and the one
+    past ``backupCount`` is deleted. A log another run has open cannot be moved on Windows:
+    that is reported once, and the run goes on writing to it, past its limit.
+    """
+
+    def __init__(self, path: Path, *, max_bytes: int, keep: int) -> None:
+        """Open the log for appending.
+
+        Args:
+            path: The debug log.
+            max_bytes: Size past which the log is compressed and a new one started; 0 for no
+                limit.
+            keep: Compressed logs to keep.
+        """
+        super().__init__(path, maxBytes=max_bytes, backupCount=keep, encoding="utf-8")
+
+    def rotation_filename(self, default_name: str) -> str:
+        """Name an old log as compressed.
+
+        Args:
+            default_name: The standard library's name for it, such as ``debug.log.1``.
+
+        Returns:
+            The name with ``.gz`` added.
+        """
+        return default_name + ".gz"
+
+    def rotate(self, source: str, dest: str) -> None:
+        """Compress the full log to *dest* and delete it.
+
+        Args:
+            source: The full log.
+            dest: The compressed file to write.
+        """
+        with Path(source).open("rb") as plain, gzip.open(dest, "wb") as packed:
+            shutil.copyfileobj(plain, packed)
+        Path(source).unlink()
+
+    def doRollover(self) -> None:
+        """Compress the full log and start a new one; on failure, stop trying for this run."""
+        try:
+            super().doRollover()
+        except OSError as exc:
+            # Trying again would fail on every later record. With no limit, the log reopens as
+            # it is, and the warning below and the rest of the run go to it.
+            self.maxBytes = 0
+            logger.warning(
+                "Could not compress debug log %s; it grows past its limit for this run: %s",
+                self.baseFilename,
+                exc,
+            )
+
+
 def _start_debug_log(settings: Settings) -> None:
     """Append every log record, at every level, to the ``debug_log_path`` file, when set.
 
     The terminal shows what it did before: its handler from :func:`configure_logging`
     filters by level itself. Records logged before settings load reach only the terminal. A
-    file that cannot be opened is reported, and the run goes on without it.
+    file that cannot be opened is reported, and the run goes on without it. Past
+    ``debug_log_max_mb``, the file is compressed and a new one started (see
+    :class:`_DebugLogHandler`).
 
     Args:
         settings: Resolved settings.
+
+    Raises:
+        ConfigError: If ``debug_log_max_mb`` is negative or ``debug_log_keep`` is below 1.
     """
     if not settings.debug_log_path:
         return
+    if settings.debug_log_max_mb < 0:
+        raise ConfigError(
+            f"debug_log_max_mb must not be negative, not {settings.debug_log_max_mb!r}."
+        )
+    if settings.debug_log_keep < 1:
+        raise ConfigError(f"debug_log_keep must be at least 1, not {settings.debug_log_keep!r}.")
     path = _debug_log_file(settings.debug_log_path)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        handler = logging.FileHandler(path, mode="a", encoding="utf-8")
+        handler = _DebugLogHandler(
+            path,
+            max_bytes=int(settings.debug_log_max_mb * _MEGABYTE),
+            keep=settings.debug_log_keep,
+        )
     except OSError as exc:
         logger.warning("Could not open debug log %s: %s", path, exc)
         return
