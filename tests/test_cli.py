@@ -1217,7 +1217,7 @@ def test_a_group_member_without_gdap_gets_a_sign_in_of_its_own(
     assert fake_msal.interactive_tenants() == [PARTNER_TENANT, TENANT_C]
     # Gamma's blank m365_gdap means the partner sign-in is never tried there.
     assert fake_msal.silent_calls(TENANT_C, USER) == []
-    assert f"partner: m365_gdap is not TRUE; direct: signing in as {GAMMA_ADMIN}" in caplog.text
+    assert f"partner: m365_gdap is FALSE; direct: signing in as {GAMMA_ADMIN}" in caplog.text
     users = [bearer_tenant(r) for r in seen if r.url.path == "/v1.0/users"]
     assert sorted(users) == [TENANT_A, TENANT_C]
 
@@ -1323,8 +1323,7 @@ def test_a_tenant_with_no_gdap_and_no_username_is_left_out_with_a_warning(
     assert _main(recorder, "--include", "all", "--tenants-file", str(path)) == 0
     assert [(r.tenant.tenant_id, r.status) for r in _reported(recorder)] == [(TENANT_A, "ok")]
     assert (
-        "Skipping 1 tenant(s) with neither m365_gdap TRUE nor an m365_username: beta corp"
-        in caplog.text
+        "Skipping 1 tenant(s) with m365_gdap FALSE and no m365_username: beta corp" in caplog.text
     )
     assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
     assert fake_msal.silent_calls(TENANT_B) == []
@@ -1394,7 +1393,7 @@ def test_ctrl_c_then_enter_during_a_direct_sign_in_skips_that_tenant_only(
     assert _main(recorder, "--include", "pilot", "--tenants-file", str(path)) == 1
     assert [(r.status, r.error) for r in _reported(recorder)] == [
         ("ok", None),
-        ("auth_failed", "partner: m365_gdap is not TRUE; direct: skipped with Ctrl+C"),
+        ("auth_failed", "partner: m365_gdap is FALSE; direct: skipped with Ctrl+C"),
     ]
 
 

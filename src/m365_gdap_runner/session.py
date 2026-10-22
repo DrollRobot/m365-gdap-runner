@@ -461,7 +461,7 @@ class PartnerSession:
         if failure is not None:
             partner = brief(failure, grant_when_possible=grant_when_possible)
         elif not tenant.gdap:
-            partner = "m365_gdap is not TRUE"
+            partner = "m365_gdap is FALSE"
         else:
             partner = f"tenant is in the {tenant.cloud} cloud"
         if not tenant.username:

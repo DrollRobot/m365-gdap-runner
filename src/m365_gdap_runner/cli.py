@@ -658,7 +658,7 @@ def _select_tenants(
     no_access = [tenant for tenant in detailed if not (tenant.gdap or tenant.username)]
     if no_access:
         logger.warning(
-            "Skipping %d tenant(s) with neither m365_gdap TRUE nor an m365_username: %s",
+            "Skipping %d tenant(s) with m365_gdap FALSE and no m365_username: %s",
             len(no_access),
             ", ".join(tenant.display_name for tenant in no_access),
         )

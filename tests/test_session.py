@@ -323,7 +323,7 @@ def test_check_access_never_tries_the_partner_sign_in_where_gdap_is_false(
         list(session.check_access([ALPHA, beta], scopes=["User.Read.All"]))
     assert fake_msal.silent_calls(TENANT_B, USER) == []
     assert fake_msal.interactive_tenants() == [PARTNER_TENANT, TENANT_B]
-    assert f"partner: m365_gdap is not TRUE; direct: signing in as {BETA_ADMIN}" in caplog.text
+    assert f"partner: m365_gdap is FALSE; direct: signing in as {BETA_ADMIN}" in caplog.text
     with session.context_for(beta, scopes=["User.Read.All"]) as context:
         assert (context.auth.home is context.auth, context.auth.username) == (True, BETA_ADMIN)
 
@@ -354,7 +354,7 @@ def test_the_sign_in_checks_name_their_tenant_in_the_log(
     [
         (BETA, "no Graph consent"),
         (Tenant(TENANT_C, "Gamma", "USGov"), "tenant is in the USGov cloud"),
-        (Tenant(TENANT_B, "beta corp", "Commercial", gdap=False), "m365_gdap is not TRUE"),
+        (Tenant(TENANT_B, "beta corp", "Commercial", gdap=False), "m365_gdap is FALSE"),
     ],
 )
 def test_check_access_never_signs_in_directly_as_the_partner_account(
@@ -499,7 +499,7 @@ def test_ctrl_c_then_enter_during_a_direct_sign_in_skips_that_tenant(
     ]
     assert "Stopped the sign-in to beta corp. Press Enter to skip it" in capsys.readouterr().err
     with pytest.raises(
-        AuthError, match=r"^partner: m365_gdap is not TRUE; direct: skipped with Ctrl\+C$"
+        AuthError, match=r"^partner: m365_gdap is FALSE; direct: skipped with Ctrl\+C$"
     ):
         session.context_for(beta, scopes=["User.Read.All"])
     # Gamma's sign-in still opened, after beta corp's.
