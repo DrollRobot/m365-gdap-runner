@@ -252,6 +252,12 @@ access is settled, and never opens a sign-in window. With `--cache disk`, later 
 silent. A sign-in that fails, is cancelled, times out or is skipped with Ctrl+C then Enter
 leaves that tenant `auth_failed`; the rest run.
 
+Every sign-in, the partner's and each tenant's own, asks Microsoft for a new token for each
+client rather than trusting one saved by an earlier run. A saved token says nothing about
+whether Microsoft will still issue one: a Conditional Access policy may have started refusing
+the sign-in since. So that failure happens in the check, where a window may open, instead of
+inside `run()`, where none may.
+
 A tenant whose `m365_username` cell is blank gets no sign-in of its own: it is `auth_failed`,
 with the reason, and no sign-in window opens for it.
 

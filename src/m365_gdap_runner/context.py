@@ -177,12 +177,15 @@ class TenantContext:
         return client
 
     def probe(self) -> None:
-        """Get a token for every declared client without prompting.
+        """Get a new token from Entra for every declared client, without prompting.
 
         This is the check :meth:`~m365_gdap_runner.session.PartnerSession.check_access` makes
-        before the run: a context from azure-auth's ``get_tenant_context()`` never opens a
-        browser, so a scope that is not consented in this tenant, or a Conditional Access policy
-        that wants a fresh sign-in, fails here instead of inside the script.
+        before the run. Each client asks Entra for a new token even when the cache holds a
+        usable one: a cached token says nothing about whether Entra still issues them, and the
+        run trusts this check for up to an hour. A context from azure-auth's
+        ``get_tenant_context()`` never opens a browser, so a scope that is not consented in this
+        tenant, or a Conditional Access policy that has started refusing the sign-in, fails here
+        instead of inside the script.
 
         Raises:
             azure_auth.ConsentRequired: If consent is missing in this tenant.
@@ -190,7 +193,7 @@ class TenantContext:
             azure_auth.AuthError: For any other token failure.
         """
         for client in self._clients.values():
-            client.login()
+            client.login(fresh=True)
 
     def close(self) -> None:
         """Close every client's HTTP connections."""

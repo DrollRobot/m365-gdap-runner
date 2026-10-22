@@ -61,6 +61,16 @@ NOT_IN_TENANT: dict[str, Any] = {
     "error_codes": [50020],
 }
 
+# What Entra says when a policy has started refusing a sign-in the cache still holds a token for.
+REFRESH_REFUSED: dict[str, Any] = {
+    "error": "invalid_grant",
+    "error_description": (
+        "AADSTS70043: The refresh token has expired or is invalid due to sign-in frequency "
+        "checks by conditional access."
+    ),
+    "error_codes": [70043],
+}
+
 
 def make_settings(**overrides: Any) -> Settings:
     """Build Settings for the fake partner tenant, with field overrides."""
@@ -118,6 +128,10 @@ class Call:
     tenant_id: str
     client_id: str
     scopes: tuple[str, ...]
+    # The account a silent request was for, lower-cased, and whether it asked Entra for a new
+    # token instead of taking a cached one.
+    username: str = ""
+    force_refresh: bool = False
 
 
 class FakeApp:
@@ -142,14 +156,19 @@ class FakeApp:
     def acquire_token_silent_with_error(
         self, scopes: list[str], account: Mapping[str, Any], **kwargs: Any
     ) -> dict[str, Any] | None:
-        self.module.record("silent", self, scopes)
+        username = account["username"].lower()
+        fresh = bool(kwargs.get("force_refresh"))
+        self.module.record("silent", self, scopes, username=username, force_refresh=fresh)
         # A refresh token belongs to one account and one client id: no interactive sign-in
         # for both yet means MSAL finds nothing to redeem, whatever the tenant.
-        if (self.client_id, account["username"].lower()) not in self.module.signed_in:
+        if (self.client_id, username) not in self.module.signed_in:
             return None
-        error = self.module.account_errors.get(
-            (self.tenant_id.lower(), account["username"].lower())
-        ) or self.module.tenant_errors.get(self.tenant_id.lower())
+        tenant = self.tenant_id.lower()
+        error = self.module.account_errors.get((tenant, username))
+        if error is None and username == USER.lower():
+            error = self.module.tenant_errors.get(tenant)
+        if error is None and fresh:
+            error = self.module.refresh_errors.get((tenant, username))
         if error is not None:
             return dict(error)
         return {"access_token": self.module.access(self.tenant_id), "expires_in": 3600}
@@ -178,12 +197,17 @@ class FakeMsal:
     """Replacement for the ``msal`` module: one shared cache, scriptable per tenant.
 
     Attributes:
-        tenant_errors: Tenant id to the MSAL error result its silent requests return.
+        tenant_errors: Tenant id to the MSAL error result the partner account's silent
+            requests there return: a tenant the partner sign-in cannot reach. The tenant's own
+            accounts are not affected.
         account_errors: ``(tenant id, username)``, lower-cased, to the MSAL error result that
             account's silent requests in that tenant return, ahead of ``tenant_errors``.
         interactive_result: When set, what every interactive sign-in returns (a failure).
         interactive_errors: Tenant id to the MSAL error result its interactive sign-ins return.
         interactive_interrupts: Tenant ids whose interactive sign-ins end in Ctrl+C.
+        refresh_errors: ``(tenant id, username)``, lower-cased, to the MSAL error result that
+            account's requests for a new token in that tenant return while its cached token
+            still answers: what Entra says when it will not renew a sign-in.
         granted: Tenant id to the scopes it has granted, space-separated, which its tokens
             carry as their ``scp`` claim. A tenant not in it gets tokens with none.
         accounts: Cached accounts, shared by every application.
@@ -197,6 +221,7 @@ class FakeMsal:
     interactive_result: dict[str, Any] | None = None
     interactive_errors: dict[str, dict[str, Any]] = field(default_factory=dict)
     interactive_interrupts: set[str] = field(default_factory=set)
+    refresh_errors: dict[tuple[str, str], dict[str, Any]] = field(default_factory=dict)
     granted: dict[str, str] = field(default_factory=dict)
     accounts: list[dict[str, Any]] = field(default_factory=list)
     signed_in: set[tuple[str, str]] = field(default_factory=set)
@@ -219,9 +244,19 @@ class FakeMsal:
         """Return the fake access token for a tenant, with what it has granted."""
         return fake_access(tenant_id, self.granted.get(tenant_id.lower()))
 
-    def record(self, method: str, app: FakeApp, scopes: Sequence[str]) -> None:
+    def record(
+        self,
+        method: str,
+        app: FakeApp,
+        scopes: Sequence[str],
+        *,
+        username: str = "",
+        force_refresh: bool = False,
+    ) -> None:
         with self.lock:
-            self.calls.append(Call(method, app.tenant_id, app.client_id, tuple(scopes)))
+            self.calls.append(
+                Call(method, app.tenant_id, app.client_id, tuple(scopes), username, force_refresh)
+            )
 
     def sign_in(self, client_id: str, username: str = USER) -> None:
         """Put an account and a refresh token for *client_id* in the cache."""
@@ -234,12 +269,24 @@ class FakeMsal:
     def interactive_calls(self) -> int:
         return sum(1 for call in self.calls if call.method == "interactive")
 
-    def silent_calls(self, tenant_id: str) -> list[tuple[str, tuple[str, ...]]]:
-        """Return ``(client_id, scopes)`` of every silent request for a tenant."""
+    def silent_calls(
+        self, tenant_id: str, username: str | None = None
+    ) -> list[tuple[str, tuple[str, ...]]]:
+        """Return ``(client_id, scopes)`` of every silent request for a tenant, or one account's."""
         return [
             (call.client_id, call.scopes)
             for call in self.calls
-            if call.method == "silent" and call.tenant_id.lower() == tenant_id.lower()
+            if call.method == "silent"
+            and call.tenant_id.lower() == tenant_id.lower()
+            and (username is None or call.username == username.lower())
+        ]
+
+    def refreshed(self, tenant_id: str) -> list[tuple[str, tuple[str, ...]]]:
+        """Return ``(client_id, scopes)`` of every request for a new token for a tenant."""
+        return [
+            (call.client_id, call.scopes)
+            for call in self.calls
+            if call.force_refresh and call.tenant_id.lower() == tenant_id.lower()
         ]
 
     def interactive_tenants(self) -> list[str]:

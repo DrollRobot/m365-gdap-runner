@@ -11,7 +11,7 @@ from azure_auth.sync import ArmClient, ExchangeClient, GraphClient, IppsClient
 
 from m365_gdap_runner.context import CLIENT_KINDS, ClientNotDeclared, TenantContext, build_client
 from m365_gdap_runner.tenants import Tenant
-from tests._gdap_fakes import TENANT_A, USER, FakeMsal
+from tests._gdap_fakes import REFRESH_REFUSED, TENANT_A, USER, FakeMsal
 
 pytestmark = pytest.mark.unit
 
@@ -65,12 +65,33 @@ def test_probe_requests_a_token_for_every_declared_client(fake_msal: FakeMsal) -
     auth = AuthContext("partner.example", username=USER).get_tenant_context(TENANT_A)
     with TenantContext(ALPHA, auth, scopes=["User.Read.All"], clients=["graph", "exchange"]) as ctx:
         ctx.probe()
-    # The Graph client first asks .default what the tenant has granted.
+    # The Graph client first asks .default what the tenant has granted. Each client then asks
+    # Entra for a new token, after the one the cache answered with.
     assert fake_msal.silent_calls(TENANT_A) == [
         (GRAPH_CLI_CLIENT_ID, ("https://graph.microsoft.com/.default",)),
         (GRAPH_CLI_CLIENT_ID, ("https://graph.microsoft.com/User.Read.All",)),
+        (GRAPH_CLI_CLIENT_ID, ("https://graph.microsoft.com/User.Read.All",)),
+        (EXCHANGE_POWERSHELL_CLIENT_ID, ("https://outlook.office365.com/.default",)),
         (EXCHANGE_POWERSHELL_CLIENT_ID, ("https://outlook.office365.com/.default",)),
     ]
+    assert fake_msal.refreshed(TENANT_A) == [
+        (GRAPH_CLI_CLIENT_ID, ("https://graph.microsoft.com/User.Read.All",)),
+        (EXCHANGE_POWERSHELL_CLIENT_ID, ("https://outlook.office365.com/.default",)),
+    ]
+    assert fake_msal.interactive_calls == 0
+
+
+@pytest.mark.acceptance
+def test_probe_fails_when_entra_will_not_renew_a_cached_sign_in(fake_msal: FakeMsal) -> None:
+    # The cache still answers for Alpha; Entra, asked for a new token, refuses.
+    fake_msal.sign_in(GRAPH_CLI_CLIENT_ID)
+    fake_msal.refresh_errors[(TENANT_A, USER)] = REFRESH_REFUSED
+    auth = AuthContext("partner.example", username=USER).get_tenant_context(TENANT_A)
+    with (
+        TenantContext(ALPHA, auth, scopes=["User.Read.All"]) as ctx,
+        pytest.raises(InteractionRequired, match="AADSTS70043"),
+    ):
+        ctx.probe()
     assert fake_msal.interactive_calls == 0
 
 

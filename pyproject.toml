@@ -54,7 +54,7 @@ constraint-dependencies = [
 ]
 
 [tool.uv.sources]
-azure-auth = { git = "https://github.com/DrollRobot/azure-auth.git", tag = "v0.6.1" }
+azure-auth = { git = "https://github.com/DrollRobot/azure-auth.git", branch = "develop" }
 
 [project.scripts]
 m365-gdap-runner-customer-export = "m365_gdap_runner.cli:list_tenants"

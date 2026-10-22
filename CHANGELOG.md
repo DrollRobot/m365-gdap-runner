@@ -85,7 +85,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own sign-in, or, with `m365_username` blank too, leaves the tenant out of the run with a
   warning. It is also a group, so `--include m365_gdap` runs only the tenants it marks.
   While the silent checks run, a log line every 30 seconds says how many are done and about
-  how long the rest will take.
+  how long the rest will take. Every sign-in, the partner's and each tenant's own, asks
+  Microsoft for a new token for each client rather than trusting one saved by an earlier
+  run, so a sign-in that a policy has started refusing fails in the check, where a window
+  may open, instead of inside `run()`.
 - Column `m365_pw_url`, optional: the web page that holds a tenant's own account's password.
   When that tenant's own sign-in opens a window, the page opens right before it, once per
   tenant, and not at all when the sign-in comes from the cache. Settings `pw_browser_path` and
@@ -116,7 +119,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Authentication, token caching, tenant lookup, and the Graph, Exchange Online, Security &
   Compliance and Azure Resource Manager clients come from
-  [azure-auth](https://github.com/DrollRobot/azure-auth), pinned to v0.5.0. This package
-  no longer carries an MSAL session or a Graph client of its own.
+  [azure-auth](https://github.com/DrollRobot/azure-auth), pinned to a commit of its `develop`
+  branch. This package no longer carries an MSAL session or a Graph client of its own.
 
 [Unreleased]: https://github.com/DrollRobot/m365_gdap_runner/commits/HEAD

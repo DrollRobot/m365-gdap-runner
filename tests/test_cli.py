@@ -1215,7 +1215,7 @@ def test_a_group_member_without_gdap_gets_a_sign_in_of_its_own(
     # One browser sign-in for the partner, one for Gamma as its own account; none for Alpha.
     assert fake_msal.interactive_tenants() == [PARTNER_TENANT, TENANT_C]
     # Gamma's blank m365_gdap means the partner sign-in is never tried there.
-    assert fake_msal.silent_calls(TENANT_C) == []
+    assert fake_msal.silent_calls(TENANT_C, USER) == []
     assert f"Signing in to Gamma directly as {GAMMA_ADMIN}: partner: m365_gdap is not TRUE" in (
         caplog.text
     )
@@ -1239,7 +1239,7 @@ def test_a_tenant_in_another_cloud_is_signed_in_to_there(
     (gamma,) = _reported(recorder)
     assert (gamma.tenant.tenant_id, gamma.tenant.cloud, gamma.status) == (TENANT_C, "USGov", "ok")
     # Straight to the US Government sign-in: the commercial partner sign-in was never tried.
-    assert fake_msal.silent_calls(TENANT_C) == []
+    assert fake_msal.silent_calls(TENANT_C, USER) == []
     assert fake_msal.authority(TENANT_C) == f"https://login.microsoftonline.us/{TENANT_C}"
     (users,) = [r for r in seen if r.url.path == "/v1.0/users"]
     assert users.url.host == "graph.microsoft.us"
@@ -1280,7 +1280,7 @@ def test_a_gdap_tenant_marked_false_in_m365_gdap_skips_the_partner_sign_in(
         (TENANT_A, "ok"),
         (TENANT_B, "ok"),
     ]
-    assert fake_msal.silent_calls(TENANT_B) == []
+    assert fake_msal.silent_calls(TENANT_B, USER) == []
     assert fake_msal.interactive_tenants() == [PARTNER_TENANT, TENANT_B]
     assert row in path.read_text(encoding="utf-8-sig").splitlines()
 

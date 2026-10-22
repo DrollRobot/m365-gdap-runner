@@ -28,6 +28,7 @@ from tests._gdap_fakes import (
     CONSENT_REQUIRED,
     GAMMA_ADMIN,
     PARTNER_TENANT,
+    REFRESH_REFUSED,
     TENANT_A,
     TENANT_B,
     TENANT_C,
@@ -225,8 +226,13 @@ def test_check_access_reaches_gdap_tenants_through_the_partner_sign_in(
     with session.context_for(ALPHA, scopes=["User.Read.All"]) as alpha:
         assert alpha.auth.home is session.auth
     assert fake_msal.interactive_tenants() == [PARTNER_TENANT]
+    # The consent check, the token, then the token again from Entra rather than the cache.
     assert fake_msal.silent_calls(TENANT_B) == [
         (GRAPH_CLI_CLIENT_ID, ("https://graph.microsoft.com/.default",)),
+        (GRAPH_CLI_CLIENT_ID, ("https://graph.microsoft.com/User.Read.All",)),
+        (GRAPH_CLI_CLIENT_ID, ("https://graph.microsoft.com/User.Read.All",)),
+    ]
+    assert fake_msal.refreshed(TENANT_B) == [
         (GRAPH_CLI_CLIENT_ID, ("https://graph.microsoft.com/User.Read.All",)),
     ]
 
@@ -305,7 +311,7 @@ def test_check_access_never_tries_the_partner_sign_in_where_gdap_is_false(
     session = _signed_in(["graph"])
     with caplog.at_level(logging.INFO, logger="m365_gdap_runner.session"):
         list(session.check_access([ALPHA, beta], scopes=["User.Read.All"]))
-    assert fake_msal.silent_calls(TENANT_B) == []
+    assert fake_msal.silent_calls(TENANT_B, USER) == []
     assert fake_msal.interactive_tenants() == [PARTNER_TENANT, TENANT_B]
     assert (
         f"Signing in to beta corp directly as {BETA_ADMIN}: partner: m365_gdap is not TRUE"
@@ -382,11 +388,18 @@ def test_check_access_signs_in_to_another_cloud_once_per_client_as_its_account(
     session = _signed_in(["graph", "exchange"])
     list(session.check_access([GAMMA_GOV], scopes=["User.Read.All"], clients=["graph", "exchange"]))
     # Straight to Gamma's own sign-in, never through the commercial partner sign-in: Graph
-    # first, then Exchange, which has no refresh token of its own for this account yet.
+    # first, then Exchange, which has no refresh token of its own for this account yet. After
+    # each window, the new sign-in is asked for a new token, like a cached one would be.
     assert [(c.method, c.client_id) for c in fake_msal.calls if c.tenant_id == TENANT_C] == [
         ("interactive", GRAPH_CLI_CLIENT_ID),
+        ("silent", GRAPH_CLI_CLIENT_ID),
         ("silent", EXCHANGE_POWERSHELL_CLIENT_ID),
         ("interactive", EXCHANGE_POWERSHELL_CLIENT_ID),
+        ("silent", EXCHANGE_POWERSHELL_CLIENT_ID),
+    ]
+    assert [client for client, _ in fake_msal.refreshed(TENANT_C)] == [
+        GRAPH_CLI_CLIENT_ID,
+        EXCHANGE_POWERSHELL_CLIENT_ID,
     ]
     assert fake_msal.authority(TENANT_C) == f"https://login.microsoftonline.us/{TENANT_C}"
     with session.context_for(
@@ -394,6 +407,43 @@ def test_check_access_signs_in_to_another_cloud_once_per_client_as_its_account(
     ) as gamma:
         assert (gamma.auth.tenant.cloud.name, gamma.auth.username) == ("USGov", GAMMA_ADMIN)
         assert gamma.graph.request("GET", "/users").request.url.host == "graph.microsoft.us"
+
+
+@pytest.mark.acceptance
+@pytest.mark.regression
+def test_a_cached_direct_sign_in_entra_will_not_renew_opens_the_window_in_the_check(
+    fake_msal: FakeMsal,
+) -> None:
+    # beta corp's own account signed in on an earlier run, and its token is still in the
+    # cache, but the tenant's sign-in frequency policy has since started refusing new ones.
+    # Before, the check took the cached token and the script failed an hour later; the window
+    # opens here instead, where it may.
+    fake_msal.sign_in(GRAPH_CLI_CLIENT_ID, BETA_ADMIN)
+    fake_msal.refresh_errors[(TENANT_B, BETA_ADMIN)] = REFRESH_REFUSED
+    beta = Tenant(TENANT_B, "beta corp", "Commercial", BETA_ADMIN, gdap=False)
+    session = _signed_in(["graph"])
+    assert list(session.check_access([beta], scopes=["User.Read.All"])) == [beta]
+    assert fake_msal.interactive_tenants() == [PARTNER_TENANT, TENANT_B]
+    with session.context_for(beta, scopes=["User.Read.All"]) as context:
+        assert context.auth.username == BETA_ADMIN
+
+
+@pytest.mark.acceptance
+def test_a_partner_sign_in_entra_will_not_renew_sends_the_tenant_to_its_own_sign_in(
+    fake_msal: FakeMsal, caplog: pytest.LogCaptureFixture
+) -> None:
+    fake_msal.refresh_errors[(TENANT_B, USER)] = REFRESH_REFUSED
+    beta_with_admin = Tenant(TENANT_B, "beta corp", "Commercial", BETA_ADMIN)
+    session = _signed_in(["graph"])
+    with caplog.at_level(logging.INFO, logger="m365_gdap_runner.session"):
+        list(session.check_access([beta_with_admin], scopes=["User.Read.All"]))
+    assert (
+        f"Signing in to beta corp directly as {BETA_ADMIN}: partner: invalid_grant: AADSTS70043"
+        in caplog.text
+    )
+    assert fake_msal.interactive_tenants() == [PARTNER_TENANT, TENANT_B]
+    with session.context_for(beta_with_admin, scopes=["User.Read.All"]) as beta:
+        assert beta.auth.username == BETA_ADMIN
 
 
 def test_a_failed_direct_sign_in_is_what_context_for_raises(

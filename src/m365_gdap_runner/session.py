@@ -17,8 +17,10 @@ tenant's ``m365_pw_url``, if any, opens with it, once, in the ``pw_browser_path`
 browser, with ``pw_browser_args``, or the system default. Ctrl+C during a direct sign-in asks
 whether to skip that tenant or stop the run. All of that happens in
 :meth:`PartnerSession.check_access`, which hands each tenant to the run as soon as its way in
-is settled and opens every sign-in window itself, one at a time, so the tenants' ``run()``
-calls never open one.
+is settled and opens every sign-in window itself, one at a time. Every sign-in, the partner's
+and each tenant's own, asks Entra for a new token for each client rather than trusting one
+saved earlier, so a sign-in that a policy has started refusing fails there, and a tenant's
+``run()`` opens a window only when a sign-in that passed the check is refused later.
 
 Why sign in per client: Microsoft's first-party apps differ per resource (Graph PowerShell,
 Exchange Online PowerShell, Azure PowerShell) and a refresh token belongs to one app, so a
@@ -282,8 +284,9 @@ class PartnerSession:
     def login(self, clients: Iterable[str] = ()) -> None:
         """Sign in at the partner tenant, once per client id the payload needs.
 
-        Graph is always signed in, for listing customers. A sign-in window opens only for a
-        client id with no usable cached sign-in.
+        Graph is always signed in, for listing customers. Each client asks Entra for a new
+        token, so a sign-in window opens only for a client id with no usable cached sign-in,
+        or one Entra will not renew.
 
         Args:
             clients: The payload's ``CLIENTS``.
@@ -298,7 +301,7 @@ class PartnerSession:
             logger.debug("Signing in to the partner tenant for %s", kind)
             scopes = PARTNER_SCOPES if kind == "graph" else ()
             with build_client(kind, self.auth, scopes=scopes, transport=self._transport) as client:
-                client.login()
+                client.login(fresh=True)
 
     def list_tenants(self) -> list[Tenant]:
         """List the customer tenants with a GDAP relationship to the partner.
@@ -336,9 +339,9 @@ class PartnerSession:
         """Find a way into each tenant, and hand it out as soon as one is found.
 
         A tenant in the partner's cloud is checked first through the partner sign-in, silently
-        and the way the run will use it: every client the script uses must get a token
-        (:meth:`TenantContext.probe`). With *grant_when_possible*, a tenant whose grant lacks
-        some of *scopes* has them added to the app's grant there, when the app holds
+        and the way the run will use it: every client the script uses must get a new token
+        from Entra (:meth:`TenantContext.probe`). With *grant_when_possible*, a tenant whose
+        grant lacks some of *scopes* has them added to the app's grant there, when the app holds
         ``DelegatedPermissionGrant.ReadWrite.All``, and passes. A tenant that fails that
         check, for whatever reason, a tenant in another cloud, and a tenant whose ``gdap`` is
         False, which is never checked, then get a direct sign-in: a context of their own, in
@@ -512,6 +515,8 @@ class PartnerSession:
     ) -> AuthContext | str:
         """Sign in to a tenant on its own, as its own account, once per client the script uses.
 
+        Each client asks Entra for a new token, as :meth:`TenantContext.probe` does, so a
+        cached sign-in that Entra has stopped renewing opens the window here, where it may.
         Ctrl+C while it waits asks whether to skip the tenant or stop the run
         (:func:`_ask_to_skip`).
 
@@ -541,7 +546,7 @@ class PartnerSession:
             )
             for kind in clients:
                 with build_client(kind, auth, scopes=scopes, transport=self._transport) as client:
-                    client.login()
+                    client.login(fresh=True)
         except KeyboardInterrupt:
             _ask_to_skip(tenant)
             return "skipped with Ctrl+C"
