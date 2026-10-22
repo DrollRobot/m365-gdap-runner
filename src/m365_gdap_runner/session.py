@@ -8,6 +8,10 @@ which never prompt; they redeem the home sign-in's refresh token in the customer
 Every sign-in opens the browser: the system default, or the ``browser_path`` setting's, with
 ``browser_args``. The Windows broker is not offered: GDAP does not work through it.
 
+A customer whose Conditional Access policy finds the partner sign-in too old, or its
+multi-factor authentication (AADSTS70043, AADSTS50078), gets a new partner sign-in that asks
+for the password again, once a run, and is checked through it again.
+
 A tenant the partner sign-in cannot reach (no GDAP relationship, missing consent, a policy
 that wants a fresh sign-in, or another Microsoft cloud) gets a direct sign-in instead: a
 context of its own, in its own cloud, as the tenant's own account. So does a tenant whose
@@ -66,6 +70,11 @@ CACHE_KINDS = ("memory", "disk")
 
 # Seconds between progress lines while check_access() checks tenants.
 _PROGRESS_EVERY = 30.0
+
+# Entra's codes for a customer whose Conditional Access policy finds the partner's home sign-in
+# too old: its multi-factor authentication (50078) or the sign-in itself (70043). Both seen
+# live 2026-10-22. A new home sign-in that asks for the password again answers both.
+_STALE_SIGN_IN_CODES = frozenset({50078, 70043})
 
 
 def _place_cache_reminder(cache_file: Path, folder: str) -> None:
@@ -129,22 +138,21 @@ def _open_pw_page(tenant: Tenant, browser: Sequence[str] | None) -> None:
         logger.warning("Could not open the password page %s", tenant.pw_url)
 
 
-def _ask_to_skip(tenant: Tenant) -> None:
-    """Ask, after Ctrl+C during a tenant's direct sign-in, whether to skip it or stop the run.
+def _ask_to_skip(name: str) -> None:
+    """Ask, after Ctrl+C during a sign-in, whether to skip it or stop the run.
 
-    Enter skips the tenant. The question goes to stderr, with the logs, since stdout is the
+    Enter skips the sign-in. The question goes to stderr, with the logs, since stdout is the
     script's.
 
     Args:
-        tenant: The tenant whose sign-in was stopped.
+        name: What the sign-in was to: a tenant's display name, or the partner tenant.
 
     Raises:
         KeyboardInterrupt: On Ctrl+C at the question, or when nobody can answer it (stdin is
             closed), to stop the run.
     """
     print(
-        f"Stopped the sign-in to {tenant.display_name}. Press Enter to skip it, "
-        "or Ctrl+C to stop the run.",
+        f"Stopped the sign-in to {name}. Press Enter to skip it, or Ctrl+C to stop the run.",
         file=sys.stderr,
         flush=True,
     )
@@ -238,6 +246,9 @@ class PartnerSession:
         # writes and context_for() reads, on different threads, but never for the same tenant
         # at once: check_access() hands a tenant out only after writing its route.
         self._routes: dict[str, AuthContext | Exception] = {}
+        # Whether the partner tenant was signed in to again this run, for a customer that found
+        # the sign-in too old: None until one does, then whether it worked.
+        self._signed_in_again: bool | None = None
         self.auth = AuthContext(
             tenant,
             username=settings.username,
@@ -282,7 +293,7 @@ class PartnerSession:
             logger.debug("Could not look up the cloud of %s: %s", tenant_id, exc)
             return ""
 
-    def login(self, clients: Iterable[str] = ()) -> None:
+    def login(self, clients: Iterable[str] = (), *, reauthenticate: bool = False) -> None:
         """Sign in at the partner tenant, once per client id the payload needs.
 
         Graph is always signed in, for listing customers. Each client asks Entra for a new
@@ -291,6 +302,10 @@ class PartnerSession:
 
         Args:
             clients: The payload's ``CLIENTS``.
+            reauthenticate: Open a sign-in window for every client instead, and have Entra ask
+                for the password again, and for multi-factor authentication where the partner
+                tenant wants it, whatever the cache holds (azure-auth's ``login()`` option of
+                that name).
 
         Raises:
             azure_auth.AuthError: If a sign-in fails or is cancelled.
@@ -302,7 +317,8 @@ class PartnerSession:
             logger.debug("Signing in to the partner tenant for %s", kind)
             scopes = PARTNER_SCOPES if kind == "graph" else ()
             with build_client(kind, self.auth, scopes=scopes, transport=self._transport) as client:
-                client.login(fresh=True)
+                # A sign-in that asked for the password got its token from Entra already.
+                client.login(fresh=not reauthenticate, reauthenticate=reauthenticate)
 
     def list_tenants(self) -> list[Tenant]:
         """List the customer tenants with a GDAP relationship to the partner.
@@ -343,12 +359,14 @@ class PartnerSession:
         and the way the run will use it: every client the script uses must get a new token
         from Entra (:meth:`TenantContext.probe`). With *grant_when_possible*, a tenant whose
         grant lacks some of *scopes* has them added to the app's grant there, when the app holds
-        ``DelegatedPermissionGrant.ReadWrite.All``, and passes. A tenant that fails that
-        check, for whatever reason, a tenant in another cloud, and a tenant whose ``gdap`` is
-        False, which is never checked, then get a direct sign-in: a context of their own, in
-        their own cloud, as their ``username``, signed in once per client. One with no
-        ``username`` gets none, and no prompt. A sign-in window opens only where no cached
-        sign-in will do.
+        ``DelegatedPermissionGrant.ReadWrite.All``, and passes. A tenant whose policy finds the
+        partner sign-in too old (AADSTS70043, AADSTS50078) has the partner tenant signed in to
+        again, asking for the password, once a run (:meth:`_sign_in_again`), and is checked
+        again. A tenant that fails that check, for whatever reason, a tenant in another cloud,
+        and a tenant whose ``gdap`` is False, which is never checked, then get a direct
+        sign-in: a context of their own, in their own cloud, as their ``username``, signed in
+        once per client. One with no ``username`` gets none, and no prompt. A sign-in window
+        opens only where no cached sign-in will do.
 
         The silent checks run in the background, *jobs* at a time. Direct sign-ins run on the
         thread that iterates, one at a time, as soon as a tenant needs one: the tenants never
@@ -418,6 +436,12 @@ class PartnerSession:
                                 len(nearby),
                                 _time_left(left),
                             )
+                        if not isinstance(route, AuthContext) and self._sign_in_again(
+                            tenant, route, clients, grant_when_possible
+                        ):
+                            route = self._through_partner(
+                                tenant, scopes, clients, grant_when_possible
+                            )
                         if isinstance(route, AuthContext):
                             self._routes[tenant.tenant_id.lower()] = route
                             yield tenant
@@ -433,6 +457,56 @@ class PartnerSession:
                 # On Ctrl+C, or when the run stops early, the checks not yet started never start.
                 for future in checks:
                     future.cancel()
+
+    def _sign_in_again(
+        self,
+        tenant: Tenant,
+        failure: Exception,
+        clients: Sequence[str],
+        grant_when_possible: bool,
+    ) -> bool:
+        """Sign in at the partner tenant again, for a tenant that finds the sign-in too old.
+
+        Renewing the partner sign-in keeps the time of the first one, and of its multi-factor
+        authentication, so a customer whose policy allows less time refuses it however often
+        it is renewed. A new sign-in that asks for the password again resets both. It opens
+        one window per client, once a run, for the first tenant that needs it; a tenant that
+        needs it after that is checked again without one. Ctrl+C during it asks whether to
+        skip it, which sends the tenants that needed it to their own sign-in, or stop the run.
+
+        Args:
+            tenant: The tenant whose check through the partner sign-in failed.
+            failure: Why it failed.
+            clients: The script's ``CLIENTS``.
+            grant_when_possible: As for :meth:`check_access`, for the reason logged.
+
+        Returns:
+            Whether to check the tenant through the partner sign-in again: the failure is one a
+            new sign-in answers, and the partner tenant has been signed in to again.
+
+        Raises:
+            KeyboardInterrupt: When the person chooses to stop the run.
+        """
+        if not (isinstance(failure, AuthError) and failure.error_codes & _STALE_SIGN_IN_CODES):
+            return False
+        if self._signed_in_again is None:
+            with tag_logs(tenant):
+                logger.info(
+                    "partner: %s; signing in to the partner tenant again",
+                    brief(failure, grant_when_possible=grant_when_possible),
+                )
+            try:
+                self.login(clients, reauthenticate=True)
+            except KeyboardInterrupt:
+                _ask_to_skip("the partner tenant")
+                self._signed_in_again = False
+            except Exception as exc:
+                logger.debug("Signing in to the partner tenant again failed", exc_info=True)
+                logger.warning("Could not sign in to the partner tenant again: %s", brief(exc))
+                self._signed_in_again = False
+            else:
+                self._signed_in_again = True
+        return self._signed_in_again
 
     def _reach_directly(
         self,
@@ -546,7 +620,7 @@ class PartnerSession:
                 with build_client(kind, auth, scopes=scopes, transport=self._transport) as client:
                     client.login(fresh=True)
         except KeyboardInterrupt:
-            _ask_to_skip(tenant)
+            _ask_to_skip(tenant.display_name)
             return "skipped with Ctrl+C"
         except Exception as exc:
             logger.debug("The direct sign-in failed", exc_info=True)

@@ -89,6 +89,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Microsoft for a new token for each client rather than trusting one saved by an earlier
   run, so a sign-in that a policy has started refusing fails in the check, where a window
   may open, instead of inside `run()`.
+- A customer whose Conditional Access policy finds the partner sign-in, or its multi-factor
+  authentication, too old (AADSTS70043, AADSTS50078) no longer goes to its own sign-in for
+  that. The first one in a run opens a new partner sign-in that asks for the password again,
+  one window per client, and it and every later one refused for that reason are checked
+  through the partner sign-in again. Only a tenant still refused goes to its own sign-in.
+  Ctrl+C during that window, then Enter, skips it.
 - Column `m365_pw_url`, optional: the web page that holds a tenant's own account's password.
   When that tenant's own sign-in opens a window, the page opens right before it, once per
   tenant, and not at all when the sign-in comes from the cache. Settings `pw_browser_path` and

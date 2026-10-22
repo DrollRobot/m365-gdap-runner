@@ -258,6 +258,15 @@ whether Microsoft will still issue one: a Conditional Access policy may have sta
 the sign-in since. So that failure happens in the check, where a window may open, instead of
 inside `run()`, where none may.
 
+Renewing your partner sign-in keeps the time you first signed in, and did multi-factor
+authentication. A customer whose Conditional Access policy allows less time refuses it
+however often it is renewed (AADSTS70043, or AADSTS50078 for the multi-factor
+authentication). The first such customer in a run opens a new partner sign-in that asks for
+your password, and multi-factor authentication, again: one window per client in `CLIENTS`.
+That customer, and every later one refused for the same reason, is then checked through the
+partner sign-in again. Only a tenant still refused goes to its own sign-in. Ctrl+C during
+that window, then Enter, skips it, and those customers go to their own sign-in.
+
 A tenant whose `m365_username` cell is blank gets no sign-in of its own: it is `auth_failed`,
 with the reason, and no sign-in window opens for it.
 

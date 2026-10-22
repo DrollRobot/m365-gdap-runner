@@ -27,7 +27,9 @@ from m365_gdap_runner.session import PartnerSession
 from m365_gdap_runner.tenants import Tenant
 from tests._gdap_fakes import (
     CONSENT_REQUIRED,
+    DEVICE_NOT_TRUSTED,
     GAMMA_ADMIN,
+    MFA_TOO_OLD,
     PARTNER_TENANT,
     REFRESH_REFUSED,
     TENANT_A,
@@ -66,6 +68,17 @@ def test_login_signs_in_once_per_client_id(fake_msal: FakeMsal) -> None:
         EXCHANGE_POWERSHELL_CLIENT_ID,
         ("https://ps.compliance.protection.outlook.com/.default",),
     ) in fake_msal.silent_calls(PARTNER_TENANT)
+
+
+def test_login_can_ask_for_the_password_again_for_every_client(fake_msal: FakeMsal) -> None:
+    session = _signed_in(["graph", "exchange"])
+    fake_msal.calls.clear()
+    session.login(["exchange"], reauthenticate=True)
+    # A window per client, whatever the cache holds, and no request after it.
+    assert [(c.method, c.client_id, c.prompt) for c in fake_msal.calls] == [
+        ("interactive", GRAPH_CLI_CLIENT_ID, "login"),
+        ("interactive", EXCHANGE_POWERSHELL_CLIENT_ID, "login"),
+    ]
 
 
 def test_login_always_covers_graph_for_listing_tenants(fake_msal: FakeMsal) -> None:
@@ -455,20 +468,109 @@ def test_a_cached_direct_sign_in_entra_will_not_renew_opens_the_window_in_the_ch
         assert context.auth.username == BETA_ADMIN
 
 
+BETA_WITH_ADMIN = Tenant(TENANT_B, "beta corp", "Commercial", BETA_ADMIN)
+
+
 @pytest.mark.acceptance
-def test_a_partner_sign_in_entra_will_not_renew_sends_the_tenant_to_its_own_sign_in(
-    fake_msal: FakeMsal, caplog: pytest.LogCaptureFixture
+@pytest.mark.parametrize(
+    ("refusal", "code"),
+    [(REFRESH_REFUSED, "70043"), (MFA_TOO_OLD, "50078")],
+    ids=["sign-in", "mfa"],
+)
+def test_a_customer_that_finds_the_partner_sign_in_too_old_gets_a_new_one(
+    fake_msal: FakeMsal, caplog: pytest.LogCaptureFixture, refusal: dict[str, Any], code: str
 ) -> None:
-    fake_msal.refresh_errors[(TENANT_B, USER)] = REFRESH_REFUSED
-    beta_with_admin = Tenant(TENANT_B, "beta corp", "Commercial", BETA_ADMIN)
+    fake_msal.refresh_errors[(TENANT_B, USER)] = refusal
+    caplog.handler.addFilter(TenantLogFilter())
     session = _signed_in(["graph"])
     with caplog.at_level(logging.INFO, logger="m365_gdap_runner.session"):
-        list(session.check_access([beta_with_admin], scopes=["User.Read.All"]))
-    assert "partner: invalid_grant: AADSTS70043" in caplog.text
-    assert f"; direct: signing in as {BETA_ADMIN}" in caplog.text
+        list(session.check_access([BETA_WITH_ADMIN], scopes=["User.Read.All"]))
+    # The partner tenant again, asking for the password; beta corp's own account never.
+    assert fake_msal.interactive_prompts() == [(PARTNER_TENANT, None), (PARTNER_TENANT, "login")]
+    with session.context_for(BETA_WITH_ADMIN, scopes=["User.Read.All"]) as beta:
+        assert beta.auth.home is session.auth
+    (tag, message) = next((tag, message) for tag, message in _tagged(caplog) if "again" in message)
+    assert tag == "beta corp"
+    assert message.startswith(f"partner: invalid_grant: AADSTS{code}: ")
+    assert message.endswith("; signing in to the partner tenant again")
+
+
+def test_the_partner_tenant_is_signed_in_to_again_once_a_run(fake_msal: FakeMsal) -> None:
+    fake_msal.refresh_errors[(TENANT_A, USER)] = MFA_TOO_OLD
+    fake_msal.refresh_errors[(TENANT_B, USER)] = REFRESH_REFUSED
+    session = _signed_in(["graph"])
+    assert list(session.check_access([ALPHA, BETA], scopes=["User.Read.All"])) == [ALPHA, BETA]
+    assert fake_msal.interactive_prompts() == [(PARTNER_TENANT, None), (PARTNER_TENANT, "login")]
+    for tenant in (ALPHA, BETA):
+        with session.context_for(tenant, scopes=["User.Read.All"]) as context:
+            assert context.auth.home is session.auth
+
+
+def test_a_refusal_no_new_sign_in_answers_goes_straight_to_the_direct_sign_in(
+    fake_msal: FakeMsal,
+) -> None:
+    fake_msal.refresh_errors[(TENANT_B, USER)] = DEVICE_NOT_TRUSTED
+    session = _signed_in(["graph"])
+    list(session.check_access([BETA_WITH_ADMIN], scopes=["User.Read.All"]))
     assert fake_msal.interactive_tenants() == [PARTNER_TENANT, TENANT_B]
-    with session.context_for(beta_with_admin, scopes=["User.Read.All"]) as beta:
+    with session.context_for(BETA_WITH_ADMIN, scopes=["User.Read.All"]) as beta:
         assert beta.auth.username == BETA_ADMIN
+
+
+def test_a_tenant_still_refused_after_the_new_sign_in_goes_to_its_own(
+    fake_msal: FakeMsal, caplog: pytest.LogCaptureFixture
+) -> None:
+    # The new sign-in succeeds, but the tenant refuses again, for a reason it does not answer.
+    fake_msal.refresh_errors[(TENANT_B, USER)] = MFA_TOO_OLD
+    session = _signed_in(["graph"])
+    original = session.login
+
+    def login_then_refuse(*args: Any, **kwargs: Any) -> None:
+        original(*args, **kwargs)
+        fake_msal.refresh_errors[(TENANT_B, USER)] = DEVICE_NOT_TRUSTED
+
+    session.login = login_then_refuse  # type: ignore[method-assign]
+    with caplog.at_level(logging.INFO, logger="m365_gdap_runner.session"):
+        list(session.check_access([BETA_WITH_ADMIN], scopes=["User.Read.All"]))
+    assert fake_msal.interactive_tenants() == [PARTNER_TENANT, PARTNER_TENANT, TENANT_B]
+    # The direct sign-in's line gives the second refusal.
+    assert "partner: invalid_grant: AADSTS530004" in caplog.text
+    with session.context_for(BETA_WITH_ADMIN, scopes=["User.Read.All"]) as beta:
+        assert beta.auth.username == BETA_ADMIN
+
+
+def test_a_failed_new_partner_sign_in_sends_each_tenant_to_its_own(
+    fake_msal: FakeMsal, caplog: pytest.LogCaptureFixture
+) -> None:
+    fake_msal.refresh_errors[(TENANT_A, USER)] = MFA_TOO_OLD
+    fake_msal.refresh_errors[(TENANT_B, USER)] = MFA_TOO_OLD
+    alpha = Tenant(TENANT_A, "Alpha", "Commercial", "admin@alpha.example")
+    session = _signed_in(["graph"])
+    fake_msal.interactive_errors[PARTNER_TENANT] = {
+        "error": "access_denied",
+        "error_description": "no",
+    }
+    with caplog.at_level(logging.WARNING, logger="m365_gdap_runner.session"):
+        list(session.check_access([alpha, BETA_WITH_ADMIN], scopes=["User.Read.All"]))
+    # One try at the partner tenant, then each tenant's own sign-in.
+    assert fake_msal.interactive_tenants() == [PARTNER_TENANT, PARTNER_TENANT, TENANT_A, TENANT_B]
+    assert "Could not sign in to the partner tenant again: access_denied: no" in caplog.text
+
+
+def test_ctrl_c_then_enter_during_the_new_partner_sign_in_skips_it(
+    fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake_msal.refresh_errors[(TENANT_B, USER)] = MFA_TOO_OLD
+    monkeypatch.setattr("builtins.input", lambda: "")
+    session = _signed_in(["graph"])
+    fake_msal.interactive_interrupts.add(PARTNER_TENANT)
+    assert list(session.check_access([BETA_WITH_ADMIN], scopes=["User.Read.All"])) == [
+        BETA_WITH_ADMIN
+    ]
+    err = capsys.readouterr().err
+    assert "Stopped the sign-in to the partner tenant. Press Enter to skip it" in err
+    # Skipping it sends beta corp to its own sign-in.
+    assert fake_msal.interactive_tenants() == [PARTNER_TENANT, PARTNER_TENANT, TENANT_B]
 
 
 def test_a_failed_direct_sign_in_is_what_context_for_raises(

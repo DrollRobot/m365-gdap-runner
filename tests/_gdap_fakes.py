@@ -71,6 +71,26 @@ REFRESH_REFUSED: dict[str, Any] = {
     "error_codes": [70043],
 }
 
+# What Entra says when a policy finds the multi-factor authentication of a sign-in too old.
+MFA_TOO_OLD: dict[str, Any] = {
+    "error": "invalid_grant",
+    "error_description": (
+        "AADSTS50078: Presented multi-factor authentication has expired due to policies "
+        "configured by your administrator, you must refresh your multi-factor authentication "
+        "to access '00000003-0000-0000-c000-000000000000'."
+    ),
+    "error_codes": [50078],
+}
+
+# What Entra says when a policy wants a compliant device, which no new sign-in gives.
+DEVICE_NOT_TRUSTED: dict[str, Any] = {
+    "error": "invalid_grant",
+    "error_description": (
+        "AADSTS530004: AcceptCompliantDevice setting isn't configured for this organization."
+    ),
+    "error_codes": [530004],
+}
+
 
 def make_settings(**overrides: Any) -> Settings:
     """Build Settings for the fake partner tenant, with field overrides."""
@@ -132,6 +152,8 @@ class Call:
     # token instead of taking a cached one.
     username: str = ""
     force_refresh: bool = False
+    # The OpenID Connect prompt an interactive sign-in asked for.
+    prompt: str | None = None
 
 
 class FakeApp:
@@ -174,7 +196,7 @@ class FakeApp:
         return {"access_token": self.module.access(self.tenant_id), "expires_in": 3600}
 
     def acquire_token_interactive(self, scopes: list[str], **kwargs: Any) -> dict[str, Any]:
-        self.module.record("interactive", self, scopes)
+        self.module.record("interactive", self, scopes, prompt=kwargs.get("prompt"))
         if self.module.interactive_result is not None:
             return dict(self.module.interactive_result)
         refused = self.module.interactive_errors.get(self.tenant_id.lower())
@@ -185,6 +207,12 @@ class FakeApp:
         # The person signs in as the account the page was pre-filled with.
         username = kwargs.get("login_hint") or USER
         self.module.sign_in(self.client_id, username)
+        if kwargs.get("prompt") == "login":
+            # A new sign-in, with the password, is what a policy that found the old one too old
+            # wants: Entra renews it everywhere again.
+            with self.module.lock:
+                for key in [k for k in self.module.refresh_errors if k[1] == username.lower()]:
+                    del self.module.refresh_errors[key]
         return {
             "access_token": self.module.access(self.tenant_id),
             "expires_in": 3600,
@@ -207,7 +235,8 @@ class FakeMsal:
         interactive_interrupts: Tenant ids whose interactive sign-ins end in Ctrl+C.
         refresh_errors: ``(tenant id, username)``, lower-cased, to the MSAL error result that
             account's requests for a new token in that tenant return while its cached token
-            still answers: what Entra says when it will not renew a sign-in.
+            still answers: what Entra says when it will not renew a sign-in. An interactive
+            sign-in that asks for the password again (``prompt="login"``) clears the account's.
         granted: Tenant id to the scopes it has granted, space-separated, which its tokens
             carry as their ``scp`` claim. A tenant not in it gets tokens with none.
         accounts: Cached accounts, shared by every application.
@@ -252,10 +281,19 @@ class FakeMsal:
         *,
         username: str = "",
         force_refresh: bool = False,
+        prompt: str | None = None,
     ) -> None:
         with self.lock:
             self.calls.append(
-                Call(method, app.tenant_id, app.client_id, tuple(scopes), username, force_refresh)
+                Call(
+                    method,
+                    app.tenant_id,
+                    app.client_id,
+                    tuple(scopes),
+                    username,
+                    force_refresh,
+                    prompt,
+                )
             )
 
     def sign_in(self, client_id: str, username: str = USER) -> None:
@@ -292,6 +330,12 @@ class FakeMsal:
     def interactive_tenants(self) -> list[str]:
         """Return the tenant of every interactive sign-in, in order."""
         return [call.tenant_id for call in self.calls if call.method == "interactive"]
+
+    def interactive_prompts(self) -> list[tuple[str, str | None]]:
+        """Return the tenant and prompt of every interactive sign-in, in order."""
+        return [
+            (call.tenant_id, call.prompt) for call in self.calls if call.method == "interactive"
+        ]
 
     def authority(self, tenant_id: str) -> str:
         """Return the sign-in authority the applications for a tenant were built with."""
