@@ -48,5 +48,3 @@
 ```
 ssh-add -T "$(git config user.signingkey)" && git commit
 ```
-
-- After committing, push to origin.
