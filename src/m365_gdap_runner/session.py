@@ -298,7 +298,8 @@ class PartnerSession:
 
         Graph is always signed in, for listing customers. Each client asks Entra for a new
         token, so a sign-in window opens only for a client id with no usable cached sign-in,
-        or one Entra will not renew.
+        or one Entra will not renew. Each client's sign-in is written to the disk cache at
+        once, so a run killed later keeps it.
 
         Args:
             clients: The payload's ``CLIENTS``.
@@ -319,6 +320,7 @@ class PartnerSession:
             with build_client(kind, self.auth, scopes=scopes, transport=self._transport) as client:
                 # A sign-in that asked for the password got its token from Entra already.
                 client.login(fresh=not reauthenticate, reauthenticate=reauthenticate)
+            self.auth.flush_cache()
 
     def list_tenants(self) -> list[Tenant]:
         """List the customer tenants with a GDAP relationship to the partner.
@@ -619,6 +621,8 @@ class PartnerSession:
             for kind in clients:
                 with build_client(kind, auth, scopes=scopes, transport=self._transport) as client:
                     client.login(fresh=True)
+            # Written now, so a run killed later keeps the sign-in it may have asked for.
+            auth.flush_cache()
         except KeyboardInterrupt:
             _ask_to_skip(tenant.display_name)
             return "skipped with Ctrl+C"

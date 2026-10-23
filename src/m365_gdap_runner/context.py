@@ -196,9 +196,15 @@ class TenantContext:
             client.login(fresh=True)
 
     def close(self) -> None:
-        """Close every client's HTTP connections."""
+        """Close every client's HTTP connections, and write the tenant's tokens to the disk cache.
+
+        The disk cache is written once here for every token the tenant got, rather than once
+        per token (azure-auth's ``flush_cache()``). With the memory cache there is nothing to
+        write.
+        """
         for client in self._clients.values():
             client.close()
+        self.auth.flush_cache()
 
     def __enter__(self) -> Self:
         """Enter the context manager.

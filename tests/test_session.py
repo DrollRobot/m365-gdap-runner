@@ -1000,3 +1000,41 @@ def test_a_reminder_that_cannot_be_placed_is_a_warning(
         )
     assert session.partner_tenant_id == PARTNER_TENANT
     assert f"Could not put the token cache reminder in {desktop}" in caplog.text
+
+
+# --- writing the disk cache ------------------------------------------------------------
+
+
+@pytest.fixture
+def flushes(monkeypatch: pytest.MonkeyPatch) -> list[str | None]:
+    """The username of every context whose cache the session wrote, in order.
+
+    azure-auth's ``flush_cache()`` does the writing; what is recorded here is each call.
+    """
+    flushed: list[str | None] = []
+    monkeypatch.setattr(AuthContext, "flush_cache", lambda self: flushed.append(self.username))
+    return flushed
+
+
+def test_each_partner_sign_in_is_written_at_once(
+    fake_msal: FakeMsal, flushes: list[str | None]
+) -> None:
+    # A sign-in that opened a window is worth keeping even if the run is killed later, so it
+    # is written as soon as it is done, once per client.
+    session = PartnerSession(make_settings(), transport=TRANSPORT)
+    session.login(["graph", "exchange"])
+
+    assert flushes == [USER, USER]
+
+
+def test_a_direct_sign_in_is_written_at_once(
+    fake_msal: FakeMsal, flushes: list[str | None]
+) -> None:
+    fake_msal.tenant_errors[TENANT_B] = CONSENT_REQUIRED
+    beta = Tenant(TENANT_B, "beta corp", "Commercial", "admin@beta.example")
+    session = _signed_in(["graph"])
+    del flushes[:]
+
+    list(session.check_access([beta], scopes=["User.Read.All"]))
+
+    assert "admin@beta.example" in flushes

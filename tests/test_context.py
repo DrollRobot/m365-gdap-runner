@@ -54,6 +54,18 @@ def test_close_closes_every_client() -> None:
     assert arm._http.is_closed
 
 
+def test_close_writes_the_tenants_tokens_to_the_disk_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The disk cache is written once per tenant, when its context closes, rather than once per
+    # token. azure-auth's flush_cache() does the writing; what is checked here is the call.
+    flushed: list[AuthContext] = []
+    monkeypatch.setattr(AuthContext, "flush_cache", lambda self: flushed.append(self))
+    auth = _auth()
+
+    TenantContext(ALPHA, auth, clients=["graph"]).close()
+
+    assert flushed == [auth]
+
+
 def test_build_client_rejects_unknown_kind() -> None:
     with pytest.raises(ValueError, match="Unknown client kind 'teams'"):
         build_client("teams", _auth())

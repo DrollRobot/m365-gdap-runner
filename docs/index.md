@@ -90,6 +90,11 @@ the `cache` setting, or `--cache`, set to `disk` keeps them in an encrypted file
 runs skip the sign-in. That includes each tenant's own sign-in: a tenant the partner sign-in
 cannot reach uses its cached sign-in, and opens the browser only when there is none.
 
+The file is written after each sign-in, after each tenant, and when the run ends, so a run
+that is killed keeps what was written before. A run that finds the file empty, which a run
+killed while writing it could once leave, says so and names the file: delete it and sign in
+again.
+
 The file holds refresh tokens, which sign in without a password. Two settings help keep
 track of it:
 

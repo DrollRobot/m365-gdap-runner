@@ -101,7 +101,7 @@ wheels = [
 [[package]]
 name = "azure-auth"
 version = "0.7.0"
-source = { git = "https://github.com/DrollRobot/azure-auth.git?branch=develop#6781f0b7339907f8f156caa30b07dda0e9ac7def" }
+source = { git = "https://github.com/DrollRobot/azure-auth.git?branch=develop#7b7933c4e8b3cac642209d64e8459199b0b6343a" }
 dependencies = [
     { name = "azure-core" },
     { name = "cryptography" },

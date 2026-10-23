@@ -31,6 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `cache_reminder_path`, a folder in plain sight where every run with the disk cache puts
   `M365-GDAP-RUNNER_MSAL_CACHE_DELETEME`, a link to the cache's folder, so the file is not
   forgotten.
+- With the disk cache, each sign-in and each tenant's tokens are written to the file as they
+  come, and at the end of the run, so a run that is killed keeps what was written before it.
+  A run that finds the file empty, which a run killed while writing it could once leave,
+  ends with a message naming the file; the debug log has the error whole.
 - Settings `browser_path`, the browser sign-ins open in place of the system default, and
   `browser_args`, the arguments it is started with, such as a profile.
 - Setting `browser_timeout`: the seconds a sign-in window waits to be completed before that

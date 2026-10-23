@@ -751,6 +751,7 @@ def _run(
         tenant_file = _load_tenant_file(settings, session, tenants)
         selected = _select_tenants(args, tenants, tenant_file, session.cloud_name)
     except SETUP_ERRORS as exc:
+        logger.debug("Setup failed", exc_info=exc)
         logger.error("%s", exc)
         return EXIT_USAGE
 
@@ -865,6 +866,7 @@ def list_tenants(
         tenants = session.list_tenants()
         _update_tenant_file(settings, session, tenants)
     except SETUP_ERRORS as exc:
+        logger.debug("Setup failed", exc_info=exc)
         logger.error("%s", exc)
         return EXIT_USAGE
     except KeyboardInterrupt:
