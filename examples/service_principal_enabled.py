@@ -12,14 +12,14 @@ expressions given, and reports whether users can sign in to it: the "Enabled for
 sign-in?" switch, which is ``accountEnabled`` on the service principal. By default it only
 reads::
 
-    uv run service_principal_enabled.py "ConnectWise Cloud Backup" --include pilot
+    uv run service_principal_enabled.py "Contoso Cloud Backup" --include pilot
 
 ``--disable`` also turns sign-in off on every match where it is on::
 
-    uv run service_principal_enabled.py "ConnectWise Cloud Backup" --include pilot --disable
+    uv run service_principal_enabled.py "Contoso Cloud Backup" --include pilot --disable
 
 A pattern is case-insensitive and matches anywhere in the value, so ``Backup`` matches every
-app with Backup in its name; anchor it (``^ConnectWise Cloud Backup$``) to match one name
+app with Backup in its name; anchor it (``^Contoso Cloud Backup$``) to match one name
 exactly. Run without ``--disable`` first to see what the patterns match.
 
 Nothing is written while tenants run. After the last, one workbook goes in the current

@@ -474,11 +474,11 @@ def test_sp_enabled_reports_every_match_and_changes_nothing(
     patches: list[httpx.Request] = []
     apps = {
         TENANT_A: [
-            _sp("sp-a1", "ConnectWise Cloud Backup", BACKUP_APP_ID, enabled=True),
+            _sp("sp-a1", "Contoso Cloud Backup", BACKUP_APP_ID, enabled=True),
             _sp("sp-a2", "Reporter", REPORTER_APP_ID, enabled=False),
             _sp("sp-a3", "Mail", MAIL_APP_ID, enabled=True),
         ],
-        TENANT_B: [_sp("sp-b1", "ConnectWise Cloud Backup", BACKUP_APP_ID, enabled=False)],
+        TENANT_B: [_sp("sp-b1", "Contoso Cloud Backup", BACKUP_APP_ID, enabled=False)],
     }
 
     assert _run_all(sp_enabled, _sp_services(apps, patches)) == 0
@@ -489,7 +489,7 @@ def test_sp_enabled_reports_every_match_and_changes_nothing(
     assert capsys.readouterr().out == f"Wrote {path}\n"
     assert _sheets(path) == {
         "Tenants": [
-            ("Tenant", "Status", "TenantId", "ConnectWise Cloud Backup", "Reporter"),
+            ("Tenant", "Status", "TenantId", "Contoso Cloud Backup", "Reporter"),
             ("Alpha", "ok", TENANT_A, "enabled", "disabled"),
             ("beta corp", "ok", TENANT_B, "disabled", None),
         ]
@@ -510,10 +510,10 @@ def test_sp_enabled_disable_turns_sign_in_off_where_it_is_on(
     patches: list[httpx.Request] = []
     apps = {
         TENANT_A: [
-            _sp("sp-a1", "ConnectWise Cloud Backup", BACKUP_APP_ID, enabled=True),
+            _sp("sp-a1", "Contoso Cloud Backup", BACKUP_APP_ID, enabled=True),
             _sp("sp-a2", "Reporter", REPORTER_APP_ID, enabled=False),
         ],
-        TENANT_B: [_sp("sp-b1", "ConnectWise Cloud Backup", BACKUP_APP_ID, enabled=True)],
+        TENANT_B: [_sp("sp-b1", "Contoso Cloud Backup", BACKUP_APP_ID, enabled=True)],
     }
 
     assert _run_all(sp_enabled, _sp_services(apps, patches)) == 0
@@ -545,7 +545,7 @@ def test_sp_enabled_exports_each_match_whole_keyed_by_tenant_id(
     _disable(monkeypatch, sp_enabled)
     apps = {
         TENANT_A: [
-            _sp("sp-a1", "ConnectWise Cloud Backup", BACKUP_APP_ID, enabled=True),
+            _sp("sp-a1", "Contoso Cloud Backup", BACKUP_APP_ID, enabled=True),
             _sp("sp-a3", "Mail", MAIL_APP_ID, enabled=True),
         ]
     }
@@ -554,7 +554,7 @@ def test_sp_enabled_exports_each_match_whole_keyed_by_tenant_id(
 
     path = _output(tmp_path, "json")
     assert capsys.readouterr().out == f"Wrote {_output(tmp_path)}\nWrote {path}\n"
-    backup = _sp("sp-a1", "ConnectWise Cloud Backup", BACKUP_APP_ID, enabled=False)
+    backup = _sp("sp-a1", "Contoso Cloud Backup", BACKUP_APP_ID, enabled=False)
     assert json.loads(path.read_text(encoding="utf-8")) == {
         TENANT_A: [{**backup, "tags": ["WindowsAzureActiveDirectoryApp"]}],
         TENANT_B: [],
@@ -613,7 +613,7 @@ def _refused_in_alpha(transport: httpx.MockTransport) -> httpx.MockTransport:
 def test_sp_enabled_report_goes_on_after_a_tenant_error(
     fake_msal: FakeMsal, sp_enabled: Any, tmp_path: Path
 ) -> None:
-    apps = {TENANT_B: [_sp("sp-b1", "ConnectWise Cloud Backup", BACKUP_APP_ID, enabled=True)]}
+    apps = {TENANT_B: [_sp("sp-b1", "Contoso Cloud Backup", BACKUP_APP_ID, enabled=True)]}
 
     assert _run_all(sp_enabled, _refused_in_alpha(_sp_services(apps, []))) == 1
 
@@ -627,7 +627,7 @@ def test_sp_enabled_disable_goes_on_after_a_tenant_error(
 ) -> None:
     _disable(monkeypatch, sp_enabled)
     patches: list[httpx.Request] = []
-    apps = {TENANT_B: [_sp("sp-b1", "ConnectWise Cloud Backup", BACKUP_APP_ID, enabled=True)]}
+    apps = {TENANT_B: [_sp("sp-b1", "Contoso Cloud Backup", BACKUP_APP_ID, enabled=True)]}
 
     assert _run_all(sp_enabled, _refused_in_alpha(_sp_services(apps, patches))) == 1
 

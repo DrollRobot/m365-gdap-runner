@@ -44,7 +44,7 @@ def test_example_header_installs_the_runner_from_a_release(path: Path) -> None:
 
 def test_service_principal_pattern_is_case_insensitive_and_rejects_a_bad_regex() -> None:
     module = load_script(ROOT / "examples" / "service_principal_enabled.py")
-    assert module.pattern("BACKUP$").search("ConnectWise Cloud Backup")
+    assert module.pattern("BACKUP$").search("Contoso Cloud Backup")
     with pytest.raises(argparse.ArgumentTypeError, match=r"not a valid regular expression: '\('"):
         module.pattern("(")
 
