@@ -47,7 +47,8 @@ dev = [
 [tool.uv]
 constraint-dependencies = [
     "cryptography>=50.0.0",  # GHSA-g6cj-pr64-35w5; prune when upstream requires it
-    "virtualenv>=21.14.7",  # GHSA-p58f-9548-mpm2, GHSA-94p9-xgh2-xp45, GHSA-9h9j-4vrj-gf7g, GHSA-vxj4-q4g9-crj7; prune when pre-commit requires it
+    "virtualenv>=21.14.13",  # GHSA-p58f-9548-mpm2, GHSA-94p9-xgh2-xp45, GHSA-9h9j-4vrj-gf7g, GHSA-vxj4-q4g9-crj7, GHSA-cx6f-vjhg-g3cc; prune when pre-commit requires it
+    "filelock>=4.2.1",  # GHSA-v4x8-3wr5-3wq8, GHSA-9vhv-jxww-xfm5, GHSA-567q-5qvw-pf92; prune when virtualenv requires it
     "pyjwt>=2.14.0",  # 26 advisories, e.g. GHSA-9j54-fg26-wv3r; prune when msal requires it
     "urllib3>=2.8.0",  # GHSA-8988-9cw3-xx77, GHSA-gh4c-6fx4-qh6g, GHSA-vxq7-64xx-v4gw; prune when requests requires it
     "certifi>=2026.10.19",  # GHSA-6q48-6c7w-9gw2; prune when httpx and requests require it
