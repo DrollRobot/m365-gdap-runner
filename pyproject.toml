@@ -112,9 +112,11 @@ files = ["src", "tests", "scripts", "examples"]
 mypy_path = ["scripts", "scripts/template_setup"]
 
 # AGENTS: ONLY ADD OVERRIDES IF, AFTER RESEARCHING, THERE IS NO TYPES STUB AVAILABLE.
-# [[tool.mypy.overrides]]
-# module = [""]
-# ignore_missing_imports = true
+[[tool.mypy.overrides]]
+# msal and msal-extensions ship no py.typed marker and have no stub package on PyPI
+# (types-msal, types-msal-extensions: both 404).
+module = ["msal", "msal.*", "msal_extensions", "msal_extensions.*"]
+ignore_missing_imports = true
 
 [tool.vulture]
 # tests/ is left out on purpose: a test calling otherwise-unused code would
