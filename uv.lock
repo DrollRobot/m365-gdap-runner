@@ -101,8 +101,8 @@ wheels = [
 
 [[package]]
 name = "azure-auth"
-version = "0.8.0"
-source = { git = "https://github.com/DrollRobot/azure-auth.git?branch=develop#d7f6766b7242a1c8dacb44e5adb1e64399038cc5" }
+version = "0.9.0"
+source = { git = "https://github.com/DrollRobot/azure-auth.git?tag=v0.9.0#0f5dcb18b93a708319a548d216865fcea3f6cb60" }
 dependencies = [
     { name = "azure-core" },
     { name = "cryptography" },
@@ -923,7 +923,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "azure-auth", git = "https://github.com/DrollRobot/azure-auth.git?branch=develop" },
+    { name = "azure-auth", git = "https://github.com/DrollRobot/azure-auth.git?tag=v0.9.0" },
     { name = "httpx", specifier = ">=0.28.1,<1" },
     { name = "openpyxl", specifier = ">=3.1.5,<4" },
     { name = "platformdirs", specifier = ">=4.3,<5" },
