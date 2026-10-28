@@ -32,8 +32,9 @@ whole, as Graph returns them, in one JSON object keyed by tenant ID.
 
 A tenant's error does not stop the others, with or without ``--disable``: a tenant that
 refuses, say for want of a role, is no reason to leave an app enabled in the rest.
-``--disable`` asks for ``Application.ReadWrite.All`` in place of ``Application.Read.All``, and
-changing an app also needs a GDAP role such as Cloud Application Administrator.
+Reading asks each tenant for ``Application.Read.All``, or ``Application.ReadWrite.All``
+where that is the one granted. ``--disable`` asks for ``Application.ReadWrite.All`` alone,
+and changing an app also needs a GDAP role such as Cloud Application Administrator.
 """
 
 from __future__ import annotations
@@ -54,8 +55,9 @@ from m365_gdap_runner import TenantContext, TenantResult
 
 CLIENTS = ["graph"]
 
-# Read access to service principals. ``--disable`` swaps in Application.ReadWrite.All.
-SCOPES = ["Application.Read.All"]
+# Read access to service principals: either scope will do, the first preferred.
+# ``--disable`` swaps in Application.ReadWrite.All alone.
+SCOPES: list[str | tuple[str, ...]] = [("Application.Read.All", "Application.ReadWrite.All")]
 
 # Matched against each service principal's display name and app ID. The command line sets
 # them before the run.

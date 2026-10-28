@@ -10,7 +10,11 @@ A script defines ``run(ctx)`` and declares what it uses:
   these scopes per tenant, so a scope missing consent fails the tenant before
   ``run()`` starts; ``.default`` would bypass that check and is rejected. An empty list
   needs no scope in particular: Graph then gets whatever the app holds in the tenant,
-  and only a tenant where it holds nothing fails.
+  and only a tenant where it holds nothing fails. An entry may be a tuple of scopes, any
+  one of which will do: ``("Application.Read.All", "Application.ReadWrite.All")``. Each
+  tenant is asked for the first scope in the tuple it has granted, or the first scope in
+  the tuple where it has granted none, so a consent screen, a consent error or a
+  self-grant names that one (:func:`choose_scopes`).
 
 It may also define ``report(results)``, called once after the last tenant with every
 tenant's :class:`~m365_gdap_runner.runner.TenantResult`, failed ones included. The library
@@ -30,10 +34,10 @@ adds them to the app's grant instead of failing the tenant. ``--grant-when-possi
 from __future__ import annotations
 
 import inspect
-from collections.abc import Callable
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from types import ModuleType
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeAlias
 
 from m365_gdap_runner.context import CLIENT_KINDS, TenantContext
 
@@ -45,6 +49,9 @@ RESERVED_SCOPES = frozenset({"openid", "profile", "offline_access"})
 
 # What a script gets when it declares no ``CLIENTS``.
 DEFAULT_CLIENTS: tuple[str, ...] = ("graph",)
+
+# One ``SCOPES`` entry: a scope, or a tuple of scopes any one of which will do.
+Scope: TypeAlias = str | tuple[str, ...]
 
 
 class PayloadInvalid(ValueError):
@@ -58,7 +65,8 @@ class Payload:
     Attributes:
         name: The script's file name without ``.py``.
         run: The script's ``run(ctx)`` function.
-        scopes: Delegated Graph scopes the script needs in each tenant.
+        scopes: Delegated Graph scopes the script needs in each tenant; a tuple entry
+            lists scopes any one of which will do.
         clients: Client kinds the script uses (``graph``, ``exchange``, ``ipps``, ``arm``).
         report: The script's ``report(results)`` function, or None when it has none.
         continue_on_error: Whether the run goes on after an error in ``run()``.
@@ -68,7 +76,7 @@ class Payload:
 
     name: str
     run: Callable[[TenantContext], object]
-    scopes: tuple[str, ...]
+    scopes: tuple[Scope, ...]
     clients: tuple[str, ...] = DEFAULT_CLIENTS
     report: Callable[[list[TenantResult]], object] | None = None
     continue_on_error: bool = False
@@ -186,7 +194,7 @@ def validate_clients(value: object, name: str) -> tuple[str, ...]:
     return tuple(clients)
 
 
-def validate_scopes(value: object, name: str, *, graph: bool = True) -> tuple[str, ...]:
+def validate_scopes(value: object, name: str, *, graph: bool = True) -> tuple[Scope, ...]:
     """Validate a script's ``SCOPES``.
 
     Args:
@@ -196,11 +204,12 @@ def validate_scopes(value: object, name: str, *, graph: bool = True) -> tuple[st
             allowed otherwise, because they only mean something to Graph.
 
     Returns:
-        The scopes, stripped, as a tuple; empty when *graph* is false or ``SCOPES`` is empty.
+        The scopes, stripped, as a tuple; a tuple entry as a tuple of scopes; empty when
+        *graph* is false or ``SCOPES`` is empty.
 
     Raises:
-        PayloadInvalid: If ``SCOPES`` is missing or not a list, holds a non-string,
-            uses ``.default``, lists a scope MSAL reserves, or is given by a
+        PayloadInvalid: If ``SCOPES`` is missing or not a list, holds a non-string or an
+            empty tuple, uses ``.default``, lists a scope MSAL reserves, or is given by a
             script that does not use Graph.
     """
     if not graph:
@@ -215,21 +224,74 @@ def validate_scopes(value: object, name: str, *, graph: bool = True) -> tuple[st
             f"Script {name!r} must define SCOPES, a list of delegated Graph scopes "
             "([] for none in particular)."
         )
-    scopes: list[str] = []
-    for scope in value:
-        if not isinstance(scope, str) or not scope.strip():
-            raise PayloadInvalid(
-                f"Script {name!r}: every SCOPES entry must be a non-empty string, got {scope!r}."
-            )
-        scope = scope.strip()
-        if scope == ".default" or scope.endswith("/.default"):
-            raise PayloadInvalid(
-                f"Script {name!r}: SCOPES must not use {scope!r}; list specific scopes so "
-                "consent is checked in each tenant, or use [] for none in particular."
-            )
-        if scope.lower() in RESERVED_SCOPES:
-            raise PayloadInvalid(
-                f"Script {name!r}: {scope!r} is added automatically; remove it from SCOPES."
-            )
-        scopes.append(scope)
+    scopes: list[Scope] = []
+    for entry in value:
+        if isinstance(entry, list | tuple):
+            if not entry:
+                raise PayloadInvalid(
+                    f"Script {name!r}: a SCOPES tuple must list at least one scope."
+                )
+            scopes.append(tuple(_scope(scope, name) for scope in entry))
+        else:
+            scopes.append(_scope(entry, name))
     return tuple(scopes)
+
+
+def _scope(value: object, name: str) -> str:
+    """Validate one scope in ``SCOPES``.
+
+    Args:
+        value: The scope.
+        name: Script name for error messages.
+
+    Returns:
+        The scope, stripped.
+
+    Raises:
+        PayloadInvalid: If it is not a non-empty string, uses ``.default``, or is a scope
+            MSAL reserves.
+    """
+    if not isinstance(value, str) or not value.strip():
+        raise PayloadInvalid(
+            f"Script {name!r}: every SCOPES entry must be a non-empty string, got {value!r}."
+        )
+    scope = value.strip()
+    if scope == ".default" or scope.endswith("/.default"):
+        raise PayloadInvalid(
+            f"Script {name!r}: SCOPES must not use {scope!r}; list specific scopes so "
+            "consent is checked in each tenant, or use [] for none in particular."
+        )
+    if scope.lower() in RESERVED_SCOPES:
+        raise PayloadInvalid(
+            f"Script {name!r}: {scope!r} is added automatically; remove it from SCOPES."
+        )
+    return scope
+
+
+def choose_scopes(scopes: Sequence[Scope], granted: Collection[str] | None) -> tuple[str, ...]:
+    """Pick the scope to ask a tenant for from each tuple in ``SCOPES``.
+
+    Args:
+        scopes: The script's ``SCOPES``, as :func:`validate_scopes` returns them.
+        granted: The scopes the tenant has granted the app, as short names; None when
+            nobody can tell, as for a tenant not signed in to yet.
+
+    Returns:
+        One scope per entry: a plain entry as it is; for a tuple, the first scope in it the
+        tenant has granted, or its first scope when it has granted none or *granted* is
+        None. A scope is matched by its short name, ignoring case, so
+        ``https://graph.microsoft.com/User.Read`` and ``user.read`` are the same.
+    """
+    held = {_short(scope) for scope in granted or ()}
+    chosen: list[str] = []
+    for entry in scopes:
+        if isinstance(entry, str):
+            chosen.append(entry)
+            continue
+        chosen.append(next((s for s in entry if _short(s) in held), entry[0]))
+    return tuple(chosen)
+
+
+def _short(scope: str) -> str:
+    """Return a scope's short name, lower-cased: ``user.read`` for either spelling."""
+    return scope.rsplit("/", 1)[-1].lower()

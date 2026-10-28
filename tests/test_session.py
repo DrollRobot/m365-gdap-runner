@@ -1076,3 +1076,98 @@ def test_a_direct_sign_in_is_written_at_once(
     list(session.check_access([beta], scopes=["User.Read.All"]))
 
     assert "admin@beta.example" in flushes
+
+
+# --- A tuple in SCOPES: any of its scopes will do ----------------------------------------
+
+EITHER = ("Application.Read.All", "Application.ReadWrite.All")
+READ = "https://graph.microsoft.com/Application.Read.All"
+READ_WRITE = "https://graph.microsoft.com/Application.ReadWrite.All"
+DEFAULT = "https://graph.microsoft.com/.default"
+
+
+def _interactive_scopes(fake_msal: FakeMsal, tenant_id: str) -> list[tuple[str, ...]]:
+    """The scopes of every sign-in window a tenant opened, in order."""
+    return [
+        call.scopes
+        for call in fake_msal.calls
+        if call.method == "interactive" and call.tenant_id.lower() == tenant_id.lower()
+    ]
+
+
+@pytest.mark.acceptance
+def test_a_tenant_holding_the_second_scope_in_a_tuple_is_asked_for_that_one(
+    fake_msal: FakeMsal,
+) -> None:
+    fake_msal.granted[TENANT_B] = "Application.ReadWrite.All"
+    session = _signed_in(["graph"])
+    assert list(session.check_access([BETA], scopes=[EITHER])) == [BETA]
+    # The grant is read once, for the choice and azure-auth's own check; then the token for
+    # the scope the tenant holds, and that token again from Entra.
+    assert fake_msal.silent_calls(TENANT_B) == [
+        (GRAPH_CLI_CLIENT_ID, (DEFAULT,)),
+        (GRAPH_CLI_CLIENT_ID, (READ_WRITE,)),
+        (GRAPH_CLI_CLIENT_ID, (READ_WRITE,)),
+    ]
+    assert fake_msal.interactive_tenants() == [PARTNER_TENANT]
+    with session.context_for(BETA, scopes=[EITHER]) as beta:
+        assert beta.auth.home is session.auth
+        assert beta.graph.scopes == (READ_WRITE,)
+
+
+def test_a_tenant_holding_both_scopes_in_a_tuple_is_asked_for_the_first(
+    fake_msal: FakeMsal,
+) -> None:
+    fake_msal.granted[TENANT_B] = "User.Read.All Application.ReadWrite.All Application.Read.All"
+    session = _signed_in(["graph"])
+    assert list(session.check_access([BETA], scopes=["User.Read.All", EITHER])) == [BETA]
+    with session.context_for(BETA, scopes=["User.Read.All", EITHER]) as beta:
+        assert beta.graph.scopes == ("https://graph.microsoft.com/User.Read.All", READ)
+
+
+@pytest.mark.acceptance
+def test_a_tenant_holding_neither_scope_in_a_tuple_consents_to_the_first_in_its_own_sign_in(
+    fake_msal: FakeMsal, caplog: pytest.LogCaptureFixture
+) -> None:
+    fake_msal.granted[TENANT_B] = "User.Read.All"
+    session = _signed_in(["graph"])
+    with caplog.at_level(logging.INFO, logger="m365_gdap_runner.session"):
+        list(session.check_access([BETA_WITH_ADMIN], scopes=[EITHER]))
+    assert (
+        "partner: missing 1 of 1 Graph scopes, can't self-grant; "
+        f"direct: signing in as {BETA_ADMIN}{TICK}" in caplog.text
+    )
+    assert fake_msal.interactive_prompts() == [(PARTNER_TENANT, None), (TENANT_B, "consent")]
+    assert _interactive_scopes(fake_msal, TENANT_B) == [(READ,)]
+    with session.context_for(BETA_WITH_ADMIN, scopes=[EITHER]) as beta:
+        assert beta.auth.home is beta.auth
+        assert beta.graph.scopes == (READ,)
+
+
+def test_a_tenant_whose_grant_cannot_be_read_is_asked_for_the_first_scope_in_a_tuple(
+    fake_msal: FakeMsal,
+) -> None:
+    # Alpha's tokens carry no scopes, so nobody can tell what it has granted, and the check
+    # asks for the first scope as it would for a plain entry.
+    session = _signed_in(["graph"])
+    assert list(session.check_access([ALPHA], scopes=[EITHER])) == [ALPHA]
+    assert fake_msal.interactive_tenants() == [PARTNER_TENANT]
+    with session.context_for(ALPHA, scopes=[EITHER]) as alpha:
+        assert alpha.graph.scopes == (READ,)
+
+
+def test_a_tenant_never_checked_is_asked_for_the_first_scope_in_a_tuple(
+    fake_msal: FakeMsal,
+) -> None:
+    fake_msal.granted[TENANT_B] = "Application.ReadWrite.All"
+    session = _signed_in(["graph"])
+    with session.context_for(BETA, scopes=[EITHER]) as beta:
+        assert beta.graph.scopes == (READ,)
+
+
+def test_a_script_without_a_tuple_never_reads_the_grant_first(fake_msal: FakeMsal) -> None:
+    fake_msal.granted[TENANT_B] = "User.Read.All"
+    session = _signed_in(["graph"])
+    assert list(session.check_access([BETA], scopes=["User.Read.All"])) == [BETA]
+    assert fake_msal.silent_calls(TENANT_B)[0] == (GRAPH_CLI_CLIENT_ID, (DEFAULT,))
+    assert fake_msal.silent_calls(TENANT_B)[1] != (GRAPH_CLI_CLIENT_ID, (DEFAULT,))

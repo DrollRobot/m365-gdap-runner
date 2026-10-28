@@ -61,6 +61,7 @@ from m365_gdap_runner.cache_reminder import place_reminder
 from m365_gdap_runner.config import ConfigError, Settings
 from m365_gdap_runner.context import CLIENT_KINDS, TenantContext, build_client
 from m365_gdap_runner.error_text import brief
+from m365_gdap_runner.loader import Scope, choose_scopes
 from m365_gdap_runner.runner import tag_logs
 from m365_gdap_runner.tenants import Tenant
 
@@ -250,6 +251,10 @@ class PartnerSession:
         # writes and context_for() reads, on different threads, but never for the same tenant
         # at once: check_access() hands a tenant out only after writing its route.
         self._routes: dict[str, AuthContext | Exception] = {}
+        # The Graph scopes each tenant is asked for, by lower-cased tenant ID: the script's,
+        # with one scope chosen from each tuple (:func:`choose_scopes`). Written and read as
+        # ``_routes`` is.
+        self._scopes: dict[str, tuple[str, ...]] = {}
         # Whether the partner tenant was signed in to again this run, for a customer that found
         # the sign-in too old: None until one does, then whether it worked.
         self._signed_in_again: bool | None = None
@@ -354,7 +359,7 @@ class PartnerSession:
         self,
         tenants: Sequence[Tenant],
         *,
-        scopes: Sequence[str] = (),
+        scopes: Sequence[Scope] = (),
         clients: Sequence[str] = ("graph",),
         jobs: int = 1,
         grant_when_possible: bool = False,
@@ -363,7 +368,10 @@ class PartnerSession:
 
         A tenant in the partner's cloud is checked first through the partner sign-in, silently
         and the way the run will use it: every client the script uses must get a new token
-        from Entra (:meth:`TenantContext.probe`). With *grant_when_possible*, a tenant whose
+        from Entra (:meth:`TenantContext.probe`). Where *scopes* has a tuple, the check reads
+        what the tenant has granted first and asks for the first scope in the tuple it holds,
+        or the first scope in the tuple where it holds none (:func:`choose_scopes`); a direct
+        sign-in asks for the first scope in each tuple. With *grant_when_possible*, a tenant whose
         grant lacks some of *scopes* has them added to the app's grant there, when the app holds
         ``DelegatedPermissionGrant.ReadWrite.All``, and passes. A tenant whose policy finds the
         partner sign-in too old (AADSTS70043, AADSTS50078) has the partner tenant signed in to
@@ -520,11 +528,14 @@ class PartnerSession:
         self,
         tenant: Tenant,
         failure: Exception | None,
-        scopes: Sequence[str],
+        scopes: Sequence[Scope],
         clients: Sequence[str],
         grant_when_possible: bool,
     ) -> AuthContext | Exception:
         """Give a tenant the partner sign-in does not reach a sign-in of its own, if it can.
+
+        The sign-in asks for the first scope in each tuple in *scopes*: what the tenant has
+        granted cannot be read before it.
 
         Args:
             tenant: The tenant.
@@ -548,6 +559,8 @@ class PartnerSession:
             partner = f"tenant is in the {tenant.cloud} cloud"
         if not tenant.username:
             return AuthError(f"partner: {partner}; direct: no m365_username")
+        chosen = choose_scopes(scopes, None)
+        self._scopes[tenant.tenant_id.lower()] = chosen
         consent = isinstance(failure, ConsentRequired)
         with tag_logs(tenant):
             if consent:
@@ -559,7 +572,7 @@ class PartnerSession:
                 )
             else:
                 logger.info("partner: %s; direct: signing in as %s", partner, tenant.username)
-            route = self._sign_in_directly(tenant, scopes, clients, consent=consent)
+            route = self._sign_in_directly(tenant, chosen, clients, consent=consent)
         if isinstance(route, AuthContext):
             return route
         return AuthError(f"partner: {partner}; direct: {route}")
@@ -567,7 +580,7 @@ class PartnerSession:
     def _through_partner(
         self,
         tenant: Tenant,
-        scopes: Sequence[str],
+        scopes: Sequence[Scope],
         clients: Sequence[str],
         grant_when_possible: bool,
     ) -> AuthContext | Exception:
@@ -585,10 +598,12 @@ class PartnerSession:
         with tag_logs(tenant):
             try:
                 auth = self.auth.get_tenant_context(tenant.tenant_id)
+                chosen = self._choose_scopes(auth, scopes, clients)
+                self._scopes[tenant.tenant_id.lower()] = chosen
                 with TenantContext(
                     tenant,
                     auth,
-                    scopes=scopes,
+                    scopes=chosen,
                     clients=clients,
                     grant_when_possible=grant_when_possible,
                     transport=self._transport,
@@ -598,6 +613,37 @@ class PartnerSession:
                 logger.debug("The partner sign-in cannot reach the tenant", exc_info=True)
                 return exc
             return auth
+
+    def _choose_scopes(
+        self, auth: AuthContext, scopes: Sequence[Scope], clients: Sequence[str]
+    ) -> tuple[str, ...]:
+        """Pick the scope to ask a tenant for from each tuple in the script's scopes.
+
+        Where *scopes* has a tuple and the script uses Graph, the tenant's grant is read
+        through *auth* (azure-auth's ``granted_scopes()``: one silent request to Entra, no
+        prompt). A grant that cannot be read leaves each tuple its first scope, and the check
+        that follows raises the reason, if it is one.
+
+        Args:
+            auth: The tenant's context, through the partner sign-in.
+            scopes: The script's Graph scopes.
+            clients: The script's ``CLIENTS``.
+
+        Returns:
+            One scope per entry (:func:`choose_scopes`).
+        """
+        if "graph" not in clients or all(isinstance(entry, str) for entry in scopes):
+            return choose_scopes(scopes, None)
+        granted: frozenset[str] | None = None
+        try:
+            with build_client("graph", auth, transport=self._transport) as client:
+                assert isinstance(client, GraphClient)  # noqa: S101
+                granted = client.granted_scopes()
+        except AuthError:
+            logger.debug("The tenant's grant cannot be read", exc_info=True)
+        chosen = choose_scopes(scopes, granted)
+        logger.debug("Asking for Graph scopes %s", ", ".join(chosen))
+        return chosen
 
     def _sign_in_directly(
         self,
@@ -686,7 +732,7 @@ class PartnerSession:
         return open_once
 
     def context_for(
-        self, tenant: Tenant, *, scopes: Sequence[str] = (), clients: Sequence[str] = ("graph",)
+        self, tenant: Tenant, *, scopes: Sequence[Scope] = (), clients: Sequence[str] = ("graph",)
     ) -> TenantContext:
         """Build the context a script receives for one customer tenant.
 
@@ -697,8 +743,9 @@ class PartnerSession:
 
         Returns:
             The context, with one client per declared kind: on the route
-            :meth:`check_access` found, or through the partner sign-in for a tenant it did
-            not check. No network call is made.
+            :meth:`check_access` found, asking for the scopes it chose there, or through the
+            partner sign-in for a tenant it did not check, asking for the first scope in each
+            tuple. No network call is made.
 
         Raises:
             Exception: Why :meth:`check_access` could not reach the tenant.
@@ -706,10 +753,11 @@ class PartnerSession:
         route = self._routes.get(tenant.tenant_id.lower())
         if isinstance(route, Exception):
             raise route
+        chosen = self._scopes.get(tenant.tenant_id.lower()) or choose_scopes(scopes, None)
         return TenantContext(
             tenant,
             route or self.auth.get_tenant_context(tenant.tenant_id),
-            scopes=scopes,
+            scopes=chosen,
             clients=clients,
             transport=self._transport,
         )

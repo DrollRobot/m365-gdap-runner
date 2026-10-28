@@ -7,7 +7,7 @@ from types import ModuleType
 
 import pytest
 
-from m365_gdap_runner.loader import PayloadInvalid, payload_from_module
+from m365_gdap_runner.loader import PayloadInvalid, Scope, choose_scopes, payload_from_module
 
 pytestmark = pytest.mark.unit
 
@@ -139,3 +139,69 @@ def test_run_with_optional_parameters_is_accepted() -> None:
 def test_invalid_scripts_are_rejected(body: str, message: str) -> None:
     with pytest.raises(PayloadInvalid, match=message):
         _payload(body)
+
+
+def test_a_tuple_entry_lists_scopes_any_of_which_will_do() -> None:
+    body = """
+        SCOPES = [
+            "User.Read.All",
+            (" Application.Read.All", "Application.ReadWrite.All "),
+            ["Mail.Read"],
+        ]
+
+        def run(ctx):
+            return None
+    """
+    assert payload_from_module(_module(body), "script").scopes == (
+        "User.Read.All",
+        ("Application.Read.All", "Application.ReadWrite.All"),
+        ("Mail.Read",),
+    )
+
+
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        ("SCOPES = [()]\ndef run(ctx):\n    pass\n", "at least one scope"),
+        ('SCOPES = [("User.Read.All", 1)]\ndef run(ctx):\n    pass\n', "non-empty string"),
+        (
+            'SCOPES = [("User.Read.All", "https://graph.microsoft.com/.default")]\n'
+            "def run(ctx):\n    pass\n",
+            "must not use",
+        ),
+        ('SCOPES = [("User.Read.All", "openid")]\ndef run(ctx):\n    pass\n', "automatically"),
+    ],
+)
+def test_invalid_tuple_entries_are_rejected(body: str, message: str) -> None:
+    with pytest.raises(PayloadInvalid, match=message):
+        _payload(body)
+
+
+EITHER = ("Application.Read.All", "Application.ReadWrite.All")
+
+
+@pytest.mark.parametrize(
+    ("scopes", "granted", "chosen"),
+    [
+        (["User.Read.All", EITHER], None, ("User.Read.All", "Application.Read.All")),
+        ([EITHER], {"User.Read.All"}, ("Application.Read.All",)),
+        ([EITHER], {"Application.ReadWrite.All"}, ("Application.ReadWrite.All",)),
+        (
+            [EITHER],
+            {"Application.ReadWrite.All", "Application.Read.All"},
+            ("Application.Read.All",),
+        ),
+        ([EITHER], {"application.readwrite.all"}, ("Application.ReadWrite.All",)),
+        (
+            [tuple(f"https://graph.microsoft.com/{scope}" for scope in EITHER)],
+            {"Application.ReadWrite.All"},
+            ("https://graph.microsoft.com/Application.ReadWrite.All",),
+        ),
+        (["User.Read.All"], {"Application.ReadWrite.All"}, ("User.Read.All",)),
+    ],
+    ids=["unknown", "neither", "second", "both", "case", "qualified", "plain"],
+)
+def test_choose_scopes_takes_the_first_scope_the_tenant_holds(
+    scopes: list[Scope], granted: set[str] | None, chosen: tuple[str, ...]
+) -> None:
+    assert choose_scopes(scopes, granted) == chosen

@@ -69,6 +69,18 @@ them fails before `run()`. `SCOPES = []` asks for none in particular: Graph gets
 the app holds in the tenant, and only a tenant where it holds nothing fails. That suits a
 script that reads what the app holds, with `ctx.graph.granted_scopes()`.
 
+An entry may be a tuple of scopes, any one of which will do:
+
+```python
+SCOPES = [("Application.Read.All", "Application.ReadWrite.All")]
+```
+
+The check reads what each tenant has granted and asks for the first scope in the tuple
+the tenant holds. A tenant that holds none is asked for the first scope in the tuple, so
+the consent screen, the consent error and a self-grant name that one. Put the
+least-privileged scope first. A tenant that signs in on its own is asked for the first
+scope in each tuple, since what it has granted cannot be read before the sign-in.
+
 Sign-ins open the system's default browser. The Windows sign-in window (the broker) is not
 offered: GDAP does not work through it. To use another browser, or another profile of it:
 

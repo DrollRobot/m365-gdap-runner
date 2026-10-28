@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   optional `report(results)`, called once after the last tenant with every tenant's
   `TenantResult`, failed ones included. The library writes no output of its own: `run()`
   writes any per-tenant report and `report()` the run's.
+- A `SCOPES` entry may be a tuple of scopes, any one of which will do, such as
+  `("Application.Read.All", "Application.ReadWrite.All")`. The check before the run reads
+  what each tenant has granted and asks for the first scope in the tuple it holds, or the
+  first scope in the tuple where it holds none, so the consent screen, the consent error and
+  a self-grant name that one. A tenant that signs in on its own is asked for the first.
 - `TenantContext`: the tenant, its azure-auth context (`ctx.auth`, usable with any
   azure-auth or Azure SDK client), and one ready-made client per declared kind, each
   checked in the customer tenant before the first `run()` starts.

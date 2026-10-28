@@ -37,7 +37,7 @@ from azure_auth import AuthError
 
 from m365_gdap_runner.context import TenantContext
 from m365_gdap_runner.error_text import brief
-from m365_gdap_runner.loader import Payload
+from m365_gdap_runner.loader import Payload, Scope
 from m365_gdap_runner.tenants import Tenant
 
 logger = logging.getLogger(__name__)
@@ -55,7 +55,7 @@ class ContextFactory(Protocol):
     """What the runner needs from a session: a context per tenant."""
 
     def context_for(
-        self, tenant: Tenant, *, scopes: Sequence[str] = (), clients: Sequence[str] = ("graph",)
+        self, tenant: Tenant, *, scopes: Sequence[Scope] = (), clients: Sequence[str] = ("graph",)
     ) -> TenantContext:
         """Build the context a payload receives for one tenant."""
         ...

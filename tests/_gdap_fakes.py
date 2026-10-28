@@ -29,6 +29,7 @@ from azure_auth.clouds import COMMERCIAL, Cloud
 
 from m365_gdap_runner.config import Settings
 from m365_gdap_runner.context import TenantContext
+from m365_gdap_runner.loader import Scope
 from m365_gdap_runner.tenants import Tenant
 
 PARTNER_TENANT = "11111111-1111-1111-1111-111111111111"
@@ -422,11 +423,11 @@ class FakeSession:
     def __init__(self, auth_errors: Mapping[str, Exception] | None = None) -> None:
         self.auth_errors = dict(auth_errors or {})
         self.contexts: dict[str, FakeContext] = {}
-        self.requests: list[tuple[str, tuple[str, ...], tuple[str, ...]]] = []
+        self.requests: list[tuple[str, tuple[Scope, ...], tuple[str, ...]]] = []
         self.lock = threading.Lock()
 
     def context_for(
-        self, tenant: Tenant, *, scopes: Sequence[str] = (), clients: Sequence[str] = ("graph",)
+        self, tenant: Tenant, *, scopes: Sequence[Scope] = (), clients: Sequence[str] = ("graph",)
     ) -> TenantContext:
         with self.lock:
             self.requests.append((tenant.tenant_id, tuple(scopes), tuple(clients)))
