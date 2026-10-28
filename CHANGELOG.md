@@ -125,7 +125,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `examples/service_principal_enabled.py` (Graph; whether users can sign in to the
   enterprise apps whose name or app ID matches the regular expressions given, as one Excel
   workbook with a column per app; `--disable` turns sign-in off where it is on, and
-  `--export-json` also writes the matched service principals, keyed by tenant ID).
+  `--export-json` also writes the matched service principals, keyed by tenant ID), and
+  `examples/app_scopes.py` (Graph; which of the requested scopes an app, by default Microsoft
+  Graph Command Line Tools, holds in each tenant, as one Excel workbook; `--write` asks for
+  them at sign-in, adding them to the app's grant where it can and asking the tenant's own
+  account to consent elsewhere; `--export-json` and `--import-json` save and reload a run).
 - Supports Python 3.11 and newer. CI tests every supported version, 3.11 through 3.14, on
   Ubuntu, macOS and Windows.
 
