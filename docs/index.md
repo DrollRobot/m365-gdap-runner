@@ -272,6 +272,13 @@ That customer, and every later one refused for the same reason, is then checked 
 partner sign-in again. Only a tenant still refused goes to its own sign-in. Ctrl+C during
 that window, then Enter, skips it, and those customers go to their own sign-in.
 
+A GDAP tenant whose grant lacks some of the script's scopes, where the app cannot add them
+itself, goes to its own sign-in with Entra's consent screen, whatever the cache holds. Tick
+"Consent on behalf of your organization" there. An administrator who consents for themselves
+alone leaves the partner sign-in without the scopes, and Entra never shows the screen again
+by itself for consent that exists. Granted for the organization, the tenant passes the
+partner check on the next run.
+
 A tenant whose `m365_username` cell is blank gets no sign-in of its own: it is `auth_failed`,
 with the reason, and no sign-in window opens for it.
 

@@ -99,6 +99,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one window per client, and it and every later one refused for that reason are checked
   through the partner sign-in again. Only a tenant still refused goes to its own sign-in.
   Ctrl+C during that window, then Enter, skips it.
+- A GDAP tenant refused for missing consent gets its own sign-in with Entra's consent screen,
+  whatever the cache holds, so an administrator can consent on behalf of the organization
+  there; the log line says to tick the box. Consent given for one user alone never shows the
+  screen again by itself, and leaves the partner sign-in without the scopes.
 - Column `m365_pw_url`, optional: the web page that holds a tenant's own account's password.
   When that tenant's own sign-in opens a window, the page opens right before it, once per
   tenant, and not at all when the sign-in comes from the cache. Settings `pw_browser_path` and

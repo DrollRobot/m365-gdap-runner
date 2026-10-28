@@ -47,6 +47,8 @@ from tests._gdap_fakes import (
 pytestmark = pytest.mark.integration
 
 PARTNER_SCOPE = "https://graph.microsoft.com/DelegatedAdminRelationship.Read.All"
+# What the log line adds for a direct sign-in that shows the consent screen.
+TICK = '; tick "Consent on behalf of your organization" in the consent screen'
 TRANSPORT = httpx.MockTransport(fake_services)
 
 
@@ -313,15 +315,48 @@ def test_check_access_tries_the_partner_sign_in_then_a_cached_direct_one(
 ) -> None:
     # beta corp's own account signed in on an earlier run, and the disk cache kept it.
     fake_msal.sign_in(GRAPH_CLI_CLIENT_ID, BETA_ADMIN)
-    fake_msal.account_errors[(TENANT_B, USER)] = CONSENT_REQUIRED
+    fake_msal.account_errors[(TENANT_B, USER)] = DEVICE_NOT_TRUSTED
     beta_with_admin = Tenant(TENANT_B, "beta corp", "Commercial", BETA_ADMIN)
     session = PartnerSession(make_settings(cache="disk"), transport=TRANSPORT)
     session.login(["graph"])
     with caplog.at_level(logging.INFO, logger="m365_gdap_runner.session"):
         list(session.check_access([beta_with_admin], scopes=["User.Read.All"]))
-    assert f"partner: no Graph consent; direct: signing in as {BETA_ADMIN}" in caplog.text
+    assert (
+        "AADSTS530004: AcceptCompliantDevice setting isn't configured for this organization; "
+        f"direct: signing in as {BETA_ADMIN}"
+    ) in caplog.text
     # Only the partner sign-in opened a window; beta corp's own came from the cache.
     assert fake_msal.interactive_tenants() == [PARTNER_TENANT]
+    with session.context_for(beta_with_admin, scopes=["User.Read.All"]) as beta:
+        assert (beta.auth.home is beta.auth, beta.auth.username) == (True, BETA_ADMIN)
+
+
+@pytest.mark.acceptance
+def test_a_tenant_lacking_consent_gets_the_consent_screen_in_its_own_sign_in(
+    fake_msal: FakeMsal, caplog: pytest.LogCaptureFixture
+) -> None:
+    # beta corp's administrator consented for themselves alone on an earlier run, so their
+    # cached sign-in holds every scope while the partner sign-in has none of them. Entra
+    # shows the consent screen again only when asked to.
+    fake_msal.sign_in(GRAPH_CLI_CLIENT_ID, BETA_ADMIN)
+    fake_msal.account_errors[(TENANT_B, USER)] = CONSENT_REQUIRED
+    beta_with_admin = Tenant(TENANT_B, "beta corp", "Commercial", BETA_ADMIN)
+    session = _signed_in(["graph", "exchange"])
+    with caplog.at_level(logging.INFO, logger="m365_gdap_runner.session"):
+        list(
+            session.check_access(
+                [beta_with_admin], scopes=["User.Read.All"], clients=["graph", "exchange"]
+            )
+        )
+    assert f"partner: no Graph consent; direct: signing in as {BETA_ADMIN}{TICK}" in caplog.text
+    # Graph's window opens for the consent screen, cached sign-in or not; Exchange has no
+    # consent screen, and its window opens only because this account has no sign-in for it.
+    assert fake_msal.interactive_prompts() == [
+        (PARTNER_TENANT, None),
+        (PARTNER_TENANT, None),
+        (TENANT_B, "consent"),
+        (TENANT_B, None),
+    ]
     with session.context_for(beta_with_admin, scopes=["User.Read.All"]) as beta:
         assert (beta.auth.home is beta.auth, beta.auth.username) == (True, BETA_ADMIN)
 
@@ -354,9 +389,10 @@ def test_the_sign_in_checks_name_their_tenant_in_the_log(
     tagged = _tagged(caplog)
     # The partner check runs on a worker thread; the direct sign-in on this one.
     assert ("beta corp", "The partner sign-in cannot reach the tenant") in tagged
-    assert ("beta corp", f"partner: no Graph consent; direct: signing in as {BETA_ADMIN}") in (
-        tagged
-    )
+    assert (
+        "beta corp",
+        f"partner: no Graph consent; direct: signing in as {BETA_ADMIN}{TICK}",
+    ) in tagged
     # A line about no one tenant names none.
     assert ("-", "Checking access to 1 tenant(s)") in tagged
 
@@ -658,9 +694,11 @@ def test_a_direct_sign_in_does_not_wait_for_the_other_checks(
             assert beta_signed_in.wait(5), "beta corp's sign-in waited for Alpha's check"
         return through_partner(self, tenant, *args)
 
-    def sign_in(self: PartnerSession, tenant: Tenant, *args: Any) -> AuthContext | str:
+    def sign_in(
+        self: PartnerSession, tenant: Tenant, *args: Any, **kwargs: Any
+    ) -> AuthContext | str:
         try:
-            return sign_in_directly(self, tenant, *args)
+            return sign_in_directly(self, tenant, *args, **kwargs)
         finally:
             beta_signed_in.set()
 

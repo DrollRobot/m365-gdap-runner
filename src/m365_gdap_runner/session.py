@@ -16,10 +16,14 @@ A tenant the partner sign-in cannot reach (no GDAP relationship, missing consent
 that wants a fresh sign-in, or another Microsoft cloud) gets a direct sign-in instead: a
 context of its own, in its own cloud, as the tenant's own account. So does a tenant whose
 ``m365_gdap`` cell in the tenants file is not TRUE, without trying the partner sign-in. A
-tenant with no account of its own gets none. When a direct sign-in opens a window, the
-tenant's ``m365_pw_url``, if any, opens with it, once, in the ``pw_browser_path`` setting's
-browser, with ``pw_browser_args``, or the system default. Ctrl+C during a direct sign-in asks
-whether to skip that tenant or stop the run. All of that happens in
+tenant with no account of its own gets none. Where the partner sign-in lacks consent, the
+direct sign-in opens Entra's consent screen whatever the cache holds, so an administrator can
+tick "Consent on behalf of your organization": a tenant whose consent is one user's own never
+shows the screen again by itself, and the partner sign-in needs the tenant-wide grant. When a
+direct sign-in opens a window, the tenant's ``m365_pw_url``, if any, opens with it, once, in
+the ``pw_browser_path`` setting's browser, with ``pw_browser_args``, or the system default.
+Ctrl+C during a direct sign-in asks whether to skip that tenant or stop the run. All of that
+happens in
 :meth:`PartnerSession.check_access`, which hands each tenant to the run as soon as its way in
 is settled and opens every sign-in window itself, one at a time. Every sign-in, the partner's
 and each tenant's own, asks Entra for a new token for each client rather than trusting one
@@ -48,7 +52,7 @@ from typing import Literal, cast
 
 import azure_auth
 import httpx
-from azure_auth import AuthContext, AuthError
+from azure_auth import AuthContext, AuthError, ConsentRequired
 from azure_auth.auth.cache import default_cache_path
 from azure_auth.clouds import Cloud, get_cloud
 from azure_auth.sync import GraphClient
@@ -368,7 +372,9 @@ class PartnerSession:
         and a tenant whose ``gdap`` is False, which is never checked, then get a direct
         sign-in: a context of their own, in their own cloud, as their ``username``, signed in
         once per client. One with no ``username`` gets none, and no prompt. A sign-in window
-        opens only where no cached sign-in will do.
+        opens only where no cached sign-in will do, except for a tenant whose check failed for
+        missing consent: its Graph sign-in opens Entra's consent screen whatever the cache
+        holds, for the tenant-wide grant (:meth:`_sign_in_directly`).
 
         The silent checks run in the background, *jobs* at a time. Direct sign-ins run on the
         thread that iterates, one at a time, as soon as a tenant needs one: the tenants never
@@ -542,9 +548,18 @@ class PartnerSession:
             partner = f"tenant is in the {tenant.cloud} cloud"
         if not tenant.username:
             return AuthError(f"partner: {partner}; direct: no m365_username")
+        consent = isinstance(failure, ConsentRequired)
         with tag_logs(tenant):
-            logger.info("partner: %s; direct: signing in as %s", partner, tenant.username)
-            route = self._sign_in_directly(tenant, scopes, clients)
+            if consent:
+                logger.info(
+                    'partner: %s; direct: signing in as %s; tick "Consent on behalf of your '
+                    'organization" in the consent screen',
+                    partner,
+                    tenant.username,
+                )
+            else:
+                logger.info("partner: %s; direct: signing in as %s", partner, tenant.username)
+            route = self._sign_in_directly(tenant, scopes, clients, consent=consent)
         if isinstance(route, AuthContext):
             return route
         return AuthError(f"partner: {partner}; direct: {route}")
@@ -585,12 +600,21 @@ class PartnerSession:
             return auth
 
     def _sign_in_directly(
-        self, tenant: Tenant, scopes: Sequence[str], clients: Sequence[str]
+        self,
+        tenant: Tenant,
+        scopes: Sequence[str],
+        clients: Sequence[str],
+        *,
+        consent: bool = False,
     ) -> AuthContext | str:
         """Sign in to a tenant on its own, as its own account, once per client the script uses.
 
         Each client asks Entra for a new token, as :meth:`TenantContext.probe` does, so a
         cached sign-in that Entra has stopped renewing opens the window here, where it may.
+        With *consent*, the Graph sign-in opens the window whatever the cache holds and has
+        Entra show its consent screen for the script's scopes (azure-auth's ``login()`` option
+        of that name): a tenant whose consent is one user's own never shows it again by
+        itself, and an administrator can tick "Consent on behalf of your organization" there.
         Ctrl+C while it waits asks whether to skip the tenant or stop the run
         (:func:`_ask_to_skip`).
 
@@ -598,6 +622,8 @@ class PartnerSession:
             tenant: The tenant, with its cloud and username filled in.
             scopes: The script's Graph scopes.
             clients: The script's ``CLIENTS``.
+            consent: Whether the partner sign-in failed for missing consent, so the Graph
+                sign-in should show the consent screen.
 
         Returns:
             The tenant's own context, signed in to every client, else what went wrong, in
@@ -620,7 +646,10 @@ class PartnerSession:
             )
             for kind in clients:
                 with build_client(kind, auth, scopes=scopes, transport=self._transport) as client:
-                    client.login(fresh=True)
+                    # The consent screen is Graph's; a sign-in that showed it got its token
+                    # from Entra already.
+                    wants_consent = consent and kind == "graph"
+                    client.login(consent=wants_consent, fresh=not wants_consent)
             # Written now, so a run killed later keeps the sign-in it may have asked for.
             auth.flush_cache()
         except KeyboardInterrupt:
