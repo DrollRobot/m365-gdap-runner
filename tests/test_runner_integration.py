@@ -175,6 +175,17 @@ def _sheets(path: Path) -> dict[str, list[tuple[Any, ...]]]:
     return {sheet.title: list(sheet.iter_rows(values_only=True)) for sheet in workbook.worksheets}
 
 
+def _assert_consolas(path: Path) -> None:
+    """Check a workbook is in Consolas throughout: every cell, and its default font."""
+    for sheet in load_workbook(path).worksheets:
+        cells = [cell for row in sheet.iter_rows() for cell in row]
+        assert {cell.font.name for cell in cells} == {"Consolas"}
+        # A theme scheme would make Excel show the theme's font, Calibri, in Consolas's place.
+        assert {cell.font.scheme for cell in cells} == {None}
+        # A cell nothing was written to has the workbook's default font.
+        assert sheet["Z99"].font.name == "Consolas"
+
+
 @pytest.fixture
 def mailbox_audit_gaps(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
     """The example, writing its workbooks to a temp dir, as ``--out`` makes it."""
@@ -334,6 +345,8 @@ def test_mailbox_audit_keeps_an_earlier_runs_workbooks(
     assert capsys.readouterr().out == f"Wrote {summary}\n"
     # The summary names the workbook the tenant got.
     assert _sheets(summary)["Tenants"][1][8] == alpha.name
+    _assert_consolas(alpha)
+    _assert_consolas(summary)
 
 
 # --- unified_audit_log.py --------------------------------------------------------------
@@ -440,6 +453,7 @@ def test_unified_audit_log_keeps_an_earlier_workbook(
     assert sorted(p.name for p in (tmp_path / "reports").iterdir()) == [first.name, second.name]
     assert first.read_bytes() == earlier
     assert capsys.readouterr().out == f"Wrote {first}\nWrote {second}\n"
+    _assert_consolas(second)
 
 
 # --- service_principal_enabled.py --------------------------------------------------------
@@ -671,6 +685,7 @@ def test_sp_enabled_keeps_an_earlier_runs_files(
     assert capsys.readouterr().out == f"Wrote {workbook}\nWrote {exported}\n"
     assert json.loads(exported.read_text(encoding="utf-8")) == {TENANT_A: [app]}
     assert _sheets(workbook)["Tenants"][1] == ("Alpha", "ok", TENANT_A, "enabled")
+    _assert_consolas(workbook)
 
 
 def _refused_in_alpha(transport: httpx.MockTransport) -> httpx.MockTransport:
@@ -1166,6 +1181,7 @@ def test_app_scopes_workbook_lists_every_tenant(
     assert sheet.freeze_panes == "A2"
     (table,) = sheet.tables.values()
     assert table.ref == "A1:G3"
+    _assert_consolas(path)
 
 
 def test_app_scopes_keeps_an_earlier_runs_files(
@@ -1189,3 +1205,4 @@ def test_app_scopes_keeps_an_earlier_runs_files(
     workbook, exported = (path.with_name(f"{path.stem}_2{path.suffix}") for path in earlier)
     assert capsys.readouterr().out == f"Wrote {workbook}\nWrote {exported}\n"
     assert app_scopes.load_results(exported) == _app_scopes_results()
+    _assert_consolas(workbook)

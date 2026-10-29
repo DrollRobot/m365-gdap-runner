@@ -2,7 +2,7 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #   "m365-gdap-runner @ git+https://github.com/DrollRobot/m365-gdap-runner.git@v0.1.0",
-#   "openpyxl>=3.1.5",
+#   "xlsxwriter>=3.3.1",
 # ]
 # ///
 """Example script: is the unified audit log on in each tenant?
@@ -24,13 +24,12 @@ reports ``UnifiedAuditLogIngestionEnabled`` as False.
 from __future__ import annotations
 
 import datetime
+import io
 import logging
 from pathlib import Path
 from typing import BinaryIO
 
-from openpyxl import Workbook
-from openpyxl.utils import get_column_letter
-from openpyxl.worksheet.table import Table, TableStyleInfo
+import xlsxwriter
 
 from m365_gdap_runner import TenantContext, TenantResult
 
@@ -47,6 +46,10 @@ OUT_DIR = Path("reports")
 
 # The workbook's columns, in order.
 COLUMNS = ["Tenant", "TenantId", "Status", "UnifiedAuditLogIngestionEnabled", "Error"]
+
+# The workbook's font, and its size in points.
+FONT = "Consolas"
+FONT_SIZE = 11
 
 
 def run(ctx: TenantContext) -> bool:
@@ -77,32 +80,51 @@ def report(results: list[TenantResult]) -> None:
     if not results:
         print("No tenants ran; no workbook written.")
         return
-    workbook = Workbook()
-    sheet = workbook.active
-    assert sheet is not None  # noqa: S101 (a new workbook always has a sheet)
-    sheet.title = "Tenants"
-    sheet.append(COLUMNS)
-    for result in results:
-        sheet.append(
-            [
-                result.tenant.display_name,
-                result.tenant.tenant_id,
-                result.status,
-                result.result if isinstance(result.result, bool) else None,
-                result.error,
-            ]
+    rows = [
+        [
+            result.tenant.display_name,
+            result.tenant.tenant_id,
+            result.status,
+            result.result if isinstance(result.result, bool) else None,
+            result.error,
+        ]
+        for result in results
+    ]
+    options = {
+        # Every cell's font, unless its format says otherwise. With no font scheme, Excel shows
+        # FONT itself, not the theme's font, Calibri.
+        "default_format_properties": {
+            "font_name": FONT,
+            "font_size": FONT_SIZE,
+            "font_scheme": "none",
+        },
+        # Text stays text, never a formula or a link.
+        "strings_to_formulas": False,
+        "strings_to_urls": False,
+    }
+    data = io.BytesIO()
+    with xlsxwriter.Workbook(data, options) as workbook:
+        sheet = workbook.add_worksheet("Tenants")
+        sheet.add_table(
+            0,
+            0,
+            len(rows),
+            len(COLUMNS) - 1,
+            {
+                "name": "Tenants",
+                "style": "Table Style Medium 8",
+                "columns": [{"header": column} for column in COLUMNS],
+                "data": rows,
+            },
         )
-    table = Table(displayName="Tenants", ref=sheet.dimensions)
-    table.tableStyleInfo = TableStyleInfo(name="TableStyleMedium8", showRowStripes=True)
-    sheet.add_table(table)
-    sheet.freeze_panes = "A2"
-    for number, column in enumerate(sheet.iter_cols(values_only=True), start=1):
-        longest = max(len(str(value)) for value in column if value is not None)
-        sheet.column_dimensions[get_column_letter(number)].width = min(longest + 2, 80)
+        sheet.freeze_panes(1, 0)
+        for number, column in enumerate(zip(COLUMNS, *rows, strict=True)):
+            longest = max(len(str(value)) for value in column if value is not None)
+            sheet.set_column(number, number, min(longest + 2, 80))
 
     path, file = _create(f"UnifiedAuditLog_{datetime.date.today().isoformat()}", ".xlsx")
     with file:
-        workbook.save(file)
+        file.write(data.getvalue())
     print(f"Wrote {path}")
 
 

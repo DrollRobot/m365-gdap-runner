@@ -2,7 +2,7 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #   "m365-gdap-runner @ git+https://github.com/DrollRobot/m365-gdap-runner.git@v0.1.0",
-#   "openpyxl>=3.1.5",
+#   "xlsxwriter>=3.3.1",
 # ]
 # ///
 """Example script: can users sign in to an enterprise app, in each tenant?
@@ -43,15 +43,14 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import io
 import json
 import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, BinaryIO
 
-from openpyxl import Workbook
-from openpyxl.utils import get_column_letter
-from openpyxl.worksheet.table import Table, TableStyleInfo
+import xlsxwriter
 
 from m365_gdap_runner import TenantContext, TenantResult
 
@@ -85,6 +84,10 @@ PAGE_SIZE = 999
 
 # Output files are named this, then today's date.
 FILE_STEM = "ServicePrincipalEnabled"
+
+# The workbook's font, and its size in points.
+FONT = "Consolas"
+FONT_SIZE = 11
 
 
 def run(ctx: TenantContext) -> list[dict[str, Any]]:
@@ -125,32 +128,52 @@ def report(results: list[TenantResult]) -> None:
         return
     cells = [_cells(result) for result in results]
     names = sorted({name for row in cells for name in row}, key=str.casefold)
-    workbook = Workbook()
-    sheet = workbook.active
-    assert sheet is not None  # noqa: S101 (a new workbook always has a sheet)
-    sheet.title = "Tenants"
-    sheet.append(["Tenant", "Status", "TenantId", *names])
-    for result, row in zip(results, cells, strict=True):
-        sheet.append(
-            [
-                result.tenant.display_name,
-                result.status,
-                result.tenant.tenant_id,
-                *(row.get(name) for name in names),
-            ]
+    columns = ["Tenant", "Status", "TenantId", *names]
+    rows = [
+        [
+            result.tenant.display_name,
+            result.status,
+            result.tenant.tenant_id,
+            *(row.get(name) for name in names),
+        ]
+        for result, row in zip(results, cells, strict=True)
+    ]
+    options = {
+        # Every cell's font, unless its format says otherwise. With no font scheme, Excel shows
+        # FONT itself, not the theme's font, Calibri.
+        "default_format_properties": {
+            "font_name": FONT,
+            "font_size": FONT_SIZE,
+            "font_scheme": "none",
+        },
+        # Text stays text, never a formula or a link.
+        "strings_to_formulas": False,
+        "strings_to_urls": False,
+    }
+    data = io.BytesIO()
+    with xlsxwriter.Workbook(data, options) as workbook:
+        sheet = workbook.add_worksheet("Tenants")
+        sheet.add_table(
+            0,
+            0,
+            len(rows),
+            len(columns) - 1,
+            {
+                "name": "Tenants",
+                "style": "Table Style Medium 8",
+                "columns": [{"header": column} for column in columns],
+                "data": rows,
+            },
         )
-    table = Table(displayName="Tenants", ref=sheet.dimensions)
-    table.tableStyleInfo = TableStyleInfo(name="TableStyleMedium8", showRowStripes=True)
-    sheet.add_table(table)
-    sheet.freeze_panes = "A2"
-    for number, column in enumerate(sheet.iter_cols(values_only=True), start=1):
-        longest = max(len(str(value)) for value in column if value is not None)
-        sheet.column_dimensions[get_column_letter(number)].width = min(longest + 2, 80)
+        sheet.freeze_panes(1, 0)
+        for number, column in enumerate(zip(columns, *rows, strict=True)):
+            longest = max(len(str(value)) for value in column if value is not None)
+            sheet.set_column(number, number, min(longest + 2, 80))
 
     today = datetime.date.today().isoformat()
     path, file = _create(f"{FILE_STEM}_{today}", ".xlsx")
     with file:
-        workbook.save(file)
+        file.write(data.getvalue())
     print(f"Wrote {path}")
     if EXPORT_JSON:
         exported = {

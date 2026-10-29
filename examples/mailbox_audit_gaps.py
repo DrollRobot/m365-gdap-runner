@@ -2,7 +2,7 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #   "m365-gdap-runner @ git+https://github.com/DrollRobot/m365-gdap-runner.git@v0.1.0",
-#   "openpyxl>=3.1.5",
+#   "xlsxwriter>=3.3.1",
 # ]
 # ///
 """Example script: mailboxes whose audit action sets lag Microsoft's defaults.
@@ -41,6 +41,7 @@ Note:
 from __future__ import annotations
 
 import datetime
+import io
 import logging
 import re
 from collections.abc import Iterable, Mapping, Sequence
@@ -48,9 +49,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO
 
-from openpyxl import Workbook
-from openpyxl.utils import get_column_letter
-from openpyxl.worksheet.table import Table, TableStyleInfo
+import xlsxwriter
 
 from m365_gdap_runner import TenantContext, TenantResult
 
@@ -75,10 +74,14 @@ AUDIT_PROPERTIES = ["DefaultAuditSet", "UserPrincipalName", "RecipientTypeDetail
 OUT_DIR = Path("reports")
 
 # The look ImportExcel gave the PowerShell report: a striped table with filters on each sheet.
-TABLE_STYLE = "TableStyleMedium8"
+TABLE_STYLE = "Table Style Medium 8"
 
 # Widest a column is made to fit its longest value, in characters.
 MAX_COLUMN_WIDTH = 80
+
+# The workbook's font, and its size in points.
+FONT = "Consolas"
+FONT_SIZE = 11
 
 
 @dataclass(frozen=True)
@@ -143,19 +146,20 @@ def run(ctx: TenantContext) -> TenantAudit:
         key=lambda row: row["Name"].casefold(),
     )
 
-    workbook = _workbook()
-    settings = {
+    settings: dict[str, object] = {
         "Tenant": tenant,
         "Collected": datetime.datetime.now().replace(microsecond=0),
         "AuditDisabled": audit_disabled,
         "UnifiedAuditLogIngestionEnabled": unified_audit_log,
     }
-    _add_sheet(workbook, "Tenant", "TenantSettings", [settings])
+    sheets: list[tuple[str, str, Sequence[Mapping[str, object]]]] = [
+        ("Tenant", "TenantSettings", [settings])
+    ]
     if gaps:
-        _add_sheet(workbook, "Audit Gaps", "AuditGaps", gaps)
+        sheets.append(("Audit Gaps", "AuditGaps", gaps))
     if bypassed:
-        _add_sheet(workbook, "Audit Bypass", "AuditBypass", bypassed)
-    path = _save(workbook, f"MailboxAuditGaps_{_file_safe(tenant)}")
+        sheets.append(("Audit Bypass", "AuditBypass", bypassed))
+    path = _save(f"MailboxAuditGaps_{_file_safe(tenant)}", sheets)
     logger.info(
         "Wrote %s: %d mailboxes, %d with gaps, %d bypassed",
         path,
@@ -195,11 +199,12 @@ def report(results: list[TenantResult]) -> None:
         )
         if audit:
             gaps += [{"Tenant": result.tenant.display_name, **row} for row in audit.gaps]
-    workbook = _workbook()
-    _add_sheet(workbook, "Tenants", "Tenants", tenants)
+    sheets: list[tuple[str, str, Sequence[Mapping[str, object]]]] = [
+        ("Tenants", "Tenants", tenants)
+    ]
     if gaps:
-        _add_sheet(workbook, "Audit Gaps", "AuditGaps", gaps)
-    path = _save(workbook, "MailboxAuditGaps_summary")
+        sheets.append(("Audit Gaps", "AuditGaps", gaps))
+    path = _save("MailboxAuditGaps_summary", sheets)
     print(f"Wrote {path}")
 
 
@@ -302,20 +307,11 @@ def _file_safe(tenant: str) -> str:
     return re.sub(r"[^\w-]", "_", tenant.split(".")[0])
 
 
-def _workbook() -> Workbook:
-    """Return a workbook with no sheets, ready for :func:`_add_sheet`.
-
-    Returns:
-        The workbook.
-    """
-    workbook = Workbook()
-    for sheet in list(workbook.worksheets):
-        workbook.remove(sheet)
-    return workbook
-
-
 def _add_sheet(
-    workbook: Workbook, title: str, table_name: str, rows: Sequence[Mapping[str, object]]
+    workbook: xlsxwriter.Workbook,
+    title: str,
+    table_name: str,
+    rows: Sequence[Mapping[str, object]],
 ) -> None:
     """Add a sheet holding *rows* as a styled table, filters on, top row frozen.
 
@@ -325,20 +321,25 @@ def _add_sheet(
         table_name: The table's name, unique in the workbook and without spaces.
         rows: At least one row; the first row's keys are the columns.
     """
-    sheet = workbook.create_sheet(title)
+    sheet = workbook.add_worksheet(title)
     columns = list(rows[0])
-    sheet.append(columns)
-    for row in rows:
-        sheet.append([row.get(column) for column in columns])
-    last_cell = f"{get_column_letter(len(columns))}{len(rows) + 1}"
-    table = Table(displayName=table_name, ref=f"A1:{last_cell}")
-    table.tableStyleInfo = TableStyleInfo(name=TABLE_STYLE, showRowStripes=True)
-    sheet.add_table(table)
-    sheet.freeze_panes = "A2"
-    for number, column in enumerate(columns, start=1):
+    data = [[row.get(column) for column in columns] for row in rows]
+    sheet.add_table(
+        0,
+        0,
+        len(data),
+        len(columns) - 1,
+        {
+            "name": table_name,
+            "style": TABLE_STYLE,
+            "columns": [{"header": column} for column in columns],
+            "data": data,
+        },
+    )
+    sheet.freeze_panes(1, 0)
+    for number, column in enumerate(columns):
         longest = max(len(_text(value)) for value in [column, *(row.get(column) for row in rows)])
-        width = min(longest + 2, MAX_COLUMN_WIDTH)
-        sheet.column_dimensions[get_column_letter(number)].width = width
+        sheet.set_column(number, number, min(longest + 2, MAX_COLUMN_WIDTH))
 
 
 def _text(value: object) -> str:
@@ -357,19 +358,38 @@ def _text(value: object) -> str:
     return str(value)
 
 
-def _save(workbook: Workbook, stem: str) -> Path:
-    """Save a workbook in :data:`OUT_DIR`, named with today's date, never over another file.
+def _save(stem: str, sheets: Sequence[tuple[str, str, Sequence[Mapping[str, object]]]]) -> Path:
+    """Write a workbook in :data:`OUT_DIR`, named with today's date, never over another file.
 
     Args:
-        workbook: The workbook.
         stem: The file name before the date.
+        sheets: Each sheet's name, its table's name and its rows, as :func:`_add_sheet` takes
+            them.
 
     Returns:
-        Where it was saved.
+        Where it was written.
     """
+    options = {
+        # Every cell's font, unless its format says otherwise. With no font scheme, Excel shows
+        # FONT itself, not the theme's font, Calibri.
+        "default_format_properties": {
+            "font_name": FONT,
+            "font_size": FONT_SIZE,
+            "font_scheme": "none",
+        },
+        # Text stays text, never a formula or a link.
+        "strings_to_formulas": False,
+        "strings_to_urls": False,
+        # A date and time shows as one, not as the number Excel keeps it as.
+        "default_date_format": "yyyy-mm-dd hh:mm:ss",
+    }
+    data = io.BytesIO()
+    with xlsxwriter.Workbook(data, options) as workbook:
+        for title, table_name, rows in sheets:
+            _add_sheet(workbook, title, table_name, rows)
     path, file = _create(f"{stem}_{datetime.date.today().isoformat()}", ".xlsx")
     with file:
-        workbook.save(file)
+        file.write(data.getvalue())
     return path
 
 
