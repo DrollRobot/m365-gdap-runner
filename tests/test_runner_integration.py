@@ -38,7 +38,6 @@ from tests._gdap_fakes import (
 pytestmark = pytest.mark.integration
 
 EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
-LICENSED_USERS = EXAMPLES / "licensed_users.py"
 AUDIT_DISABLED = EXAMPLES / "audit_disabled.py"
 MAILBOX_AUDIT_GAPS = EXAMPLES / "mailbox_audit_gaps.py"
 UNIFIED_AUDIT_LOG = EXAMPLES / "unified_audit_log.py"
@@ -61,16 +60,17 @@ def _isolated_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv(CONFIG_DIR_ENV, str(tmp_path))
 
 
-def test_graph_example_runs_through_session_and_azure_auth(fake_msal: FakeMsal) -> None:
+def test_graph_example_runs_through_session_and_azure_auth(
+    fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     fake_msal.tenant_errors[TENANT_B] = CONSENT_REQUIRED
-    seen: list[httpx.Request] = []
+    reads: list[httpx.Request] = []
+    transport = _directory_audit_services({TENANT_A: [_directory_audit(1)]}, reads)
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        seen.append(request)
-        return fake_services(request)
-
-    payload = _example(LICENSED_USERS)
-    session = PartnerSession(make_settings(), transport=httpx.MockTransport(handler))
+    module = load_script(ENTRA_AUDIT_LOGS)
+    monkeypatch.setattr(module, "OUT_DIR", tmp_path)
+    payload = payload_from_module(module, ENTRA_AUDIT_LOGS.stem)
+    session = PartnerSession(make_settings(), transport=transport)
     session.login(payload.clients)
     tenants = session.list_tenants()
     ready = session.check_access(tenants, scopes=payload.scopes, clients=payload.clients)
@@ -78,20 +78,11 @@ def test_graph_example_runs_through_session_and_azure_auth(fake_msal: FakeMsal) 
 
     assert [t.tenant_id for t in tenants] == [TENANT_A, TENANT_B]
     assert [r.status for r in results] == ["ok", "auth_failed"]
-    assert results[0].result == [
-        {
-            "userPrincipalName": f"admin@{TENANT_A}.example",
-            "displayName": "Admin",
-            "skuIds": "sku-1;sku-2",
-        }
-    ]
-    assert results[1].error is not None
+    assert results[0].result == 1
     # Consent was checked in the tenant, which has none, and beta corp has no account to try.
     assert results[1].error == "partner: no Graph consent; direct: no m365_username"
     # The script never ran for the tenant that refused the token.
-    users_requests = [r for r in seen if r.url.path == "/v1.0/users"]
-    assert [bearer_tenant(r) for r in users_requests] == [TENANT_A]
-    assert users_requests[0].headers["ConsistencyLevel"] == "eventual"
+    assert [bearer_tenant(r) for r in reads] == [TENANT_A]
     assert fake_msal.interactive_calls == 1
 
 

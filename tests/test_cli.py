@@ -50,8 +50,8 @@ EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
 
 # Microsoft Graph's own application ID: the resource of an app's Graph grant.
 GRAPH_APP_ID = "00000003-0000-0000-c000-000000000000"
-LICENSED_USERS = load_script(EXAMPLES / "licensed_users.py")
 AUDIT_DISABLED = load_script(EXAMPLES / "audit_disabled.py")
+ENTRA_AUDIT_LOGS = load_script(EXAMPLES / "entra_audit_logs.py")
 
 # The real one: the fixture below replaces it so tests do not stack handlers on the root logger.
 CONFIGURE_LOGGING = cli.configure_logging
@@ -157,8 +157,8 @@ def test_the_parser_refuses_bad_values(argv: list[str]) -> None:
 
 @pytest.mark.unit
 def test_the_parser_main_builds_is_described_by_the_scripts_docstring() -> None:
-    parser = cli._parser(LICENSED_USERS)
-    assert parser.description == "Example script: licensed users in each tenant."
+    parser = cli._parser(AUDIT_DISABLED)
+    assert parser.description == ("Example script: is mailbox auditing switched off tenant-wide?")
     assert "--include" in parser.format_help()
 
 
@@ -168,7 +168,7 @@ def test_main_returns_130_on_interrupt(monkeypatch: pytest.MonkeyPatch) -> None:
         raise KeyboardInterrupt
 
     monkeypatch.setattr(cli, "_run", interrupted)
-    assert cli.main(LICENSED_USERS, _args("--include", "all")) == 130
+    assert cli.main(AUDIT_DISABLED, _args("--include", "all")) == 130
 
 
 @contextlib.contextmanager
@@ -319,18 +319,18 @@ def test_a_script_adds_flags_of_its_own(fake_msal: FakeMsal, tmp_path: Path) -> 
 @pytest.mark.integration
 @pytest.mark.acceptance
 def test_main_requires_a_tenant_selection(
-    fake_msal: FakeMsal, caplog: pytest.LogCaptureFixture
+    fake_msal: FakeMsal, recorder: ModuleType, caplog: pytest.LogCaptureFixture
 ) -> None:
-    assert _main(LICENSED_USERS) == 2
+    assert _main(recorder) == 2
     assert "Choose tenants with --include: a tenant, a group, or all." in caplog.text
     assert fake_msal.interactive_calls == 0
 
 
 @pytest.mark.integration
 def test_main_refuses_exclude_all_before_sign_in(
-    fake_msal: FakeMsal, caplog: pytest.LogCaptureFixture
+    fake_msal: FakeMsal, recorder: ModuleType, caplog: pytest.LogCaptureFixture
 ) -> None:
-    assert _main(LICENSED_USERS, "--include", "Alpha", "--exclude", " ALL ") == 2
+    assert _main(recorder, "--include", "Alpha", "--exclude", " ALL ") == 2
     assert "--exclude all would leave no tenant to run." in caplog.text
     assert fake_msal.interactive_calls == 0
 
@@ -481,11 +481,11 @@ def test_a_run_that_logged_no_warning_prints_none_again(
 
 @pytest.mark.integration
 def test_a_run_that_stops_before_its_tenants_prints_no_warnings_again(
-    fake_msal: FakeMsal, capsys: pytest.CaptureFixture[str]
+    fake_msal: FakeMsal, recorder: ModuleType, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # The missing tenants file is a warning, and the unknown tenant ends the run before any
     # tenant runs: its error is the last line already.
-    assert _main(LICENSED_USERS, "--include", "Contoso") == 2
+    assert _main(recorder, "--include", "Contoso") == 2
     assert "Warnings and errors" not in capsys.readouterr().err
 
 
@@ -503,20 +503,27 @@ def test_the_warning_log_is_removed_after_the_run(
 
 @pytest.mark.integration
 def test_runs_the_graph_example_and_its_report(
-    fake_msal: FakeMsal, capsys: pytest.CaptureFixture[str]
+    fake_msal: FakeMsal,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    assert _main(LICENSED_USERS, "--include", "all", "--jobs", "2") == 0
-    rows = json.loads(capsys.readouterr().out)
-    assert [(r["tenantId"], r["tenant"], r["status"]) for r in rows] == [
-        (TENANT_A, "Alpha", "ok"),
-        (TENANT_B, "beta corp", "ok"),
-    ]
-    assert rows[1]["users"] == [
-        {
-            "userPrincipalName": f"admin@{TENANT_B}.example",
-            "displayName": "Admin",
-            "skuIds": "sku-1;sku-2",
-        }
+    monkeypatch.setattr(ENTRA_AUDIT_LOGS, "OUT_DIR", tmp_path)
+    monkeypatch.setattr(ENTRA_AUDIT_LOGS, "FILTER", "result eq 'success'")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1.0/auditLogs/directoryAudits":
+            event = {"id": f"da-{bearer_tenant(request)}", "result": "success"}
+            return httpx.Response(200, json={"value": [event]})
+        return fake_services(request)
+
+    argv = ("--include", "all", "--jobs", "2")
+    assert _main(ENTRA_AUDIT_LOGS, *argv, handler=handler) == 0
+    (workbook,) = tmp_path.glob("*.xlsx")
+    assert capsys.readouterr().out == f"Wrote {workbook}\n"
+    assert list(load_workbook(workbook)["Tenants"].iter_rows(min_row=3, values_only=True)) == [
+        ("Alpha", TENANT_A, "ok", 1, None),
+        ("beta corp", TENANT_B, "ok", 1, None),
     ]
     assert fake_msal.interactive_calls == 1
 
@@ -545,14 +552,16 @@ def test_tenant_filters(fake_msal: FakeMsal, recorder: ModuleType) -> None:
 
 
 @pytest.mark.integration
-def test_exit_2_on_unknown_tenant_before_running_the_script(fake_msal: FakeMsal) -> None:
+def test_exit_2_on_unknown_tenant_before_running_the_script(
+    fake_msal: FakeMsal, recorder: ModuleType
+) -> None:
     seen: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request.url.path)
         return fake_services(request)
 
-    assert _main(LICENSED_USERS, "--include", "Contoso", handler=handler) == 2
+    assert _main(recorder, "--include", "Contoso", handler=handler) == 2
     assert "/v1.0/users" not in seen
 
 
@@ -669,17 +678,20 @@ def test_a_grant_graph_refuses_says_the_self_grant_failed(
 
 @pytest.mark.integration
 def test_exit_2_on_missing_config(
-    fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    fake_msal: FakeMsal,
+    monkeypatch: pytest.MonkeyPatch,
+    recorder: ModuleType,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     monkeypatch.delenv(ENV_PREFIX + "USERNAME")
-    assert _main(LICENSED_USERS, "--include", "all") == 2
+    assert _main(recorder, "--include", "all") == 2
     assert "username" in caplog.text
 
 
 @pytest.mark.integration
-def test_exit_2_on_failed_sign_in(fake_msal: FakeMsal) -> None:
+def test_exit_2_on_failed_sign_in(fake_msal: FakeMsal, recorder: ModuleType) -> None:
     fake_msal.interactive_result = {"error": "access_denied", "error_description": "cancelled"}
-    assert _main(LICENSED_USERS, "--include", "all") == 2
+    assert _main(recorder, "--include", "all") == 2
 
 
 # A script whose run() fails in Alpha, the first tenant, and works in beta corp.
@@ -755,10 +767,13 @@ def test_jobs_come_from_the_setting_or_the_flag(
 
 @pytest.mark.integration
 def test_exit_2_when_the_jobs_setting_is_below_1(
-    fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    fake_msal: FakeMsal,
+    monkeypatch: pytest.MonkeyPatch,
+    recorder: ModuleType,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     monkeypatch.setenv(ENV_PREFIX + "JOBS", "0")
-    assert _main(LICENSED_USERS, "--include", "all") == 2
+    assert _main(recorder, "--include", "all") == 2
     assert "jobs must be at least 1, not 0." in caplog.text
     assert fake_msal.interactive_calls == 0
 
@@ -1361,14 +1376,14 @@ def test_include_m365_gdap_runs_only_the_tenants_it_marks(
 
 @pytest.mark.integration
 def test_exit_2_when_a_name_is_both_a_tenant_and_a_group(
-    fake_msal: FakeMsal, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    fake_msal: FakeMsal, tmp_path: Path, recorder: ModuleType, caplog: pytest.LogCaptureFixture
 ) -> None:
     path = _tenants_csv(
         tmp_path / "tenants.csv",
         "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,Alpha",
         f"{TENANT_A},Alpha,,Commercial,TRUE",
     )
-    assert _main(LICENSED_USERS, "--include", "alpha", "--tenants-file", str(path)) == 2
+    assert _main(recorder, "--include", "alpha", "--tenants-file", str(path)) == 2
     assert f"'alpha' could mean tenant Alpha ({TENANT_A}) or group column 'Alpha'" in caplog.text
 
 
@@ -1408,14 +1423,14 @@ def test_all_runs_gdap_tenants_only(
 
 @pytest.mark.integration
 def test_exit_2_when_the_groups_select_nothing(
-    fake_msal: FakeMsal, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    fake_msal: FakeMsal, tmp_path: Path, recorder: ModuleType, caplog: pytest.LogCaptureFixture
 ) -> None:
     path = _tenants_csv(
         tmp_path / "tenants.csv",
         "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,pilot",
         f"{TENANT_A},Alpha,,Commercial,FALSE",
     )
-    assert _main(LICENSED_USERS, "--include", "pilot", "--tenants-file", str(path)) == 2
+    assert _main(recorder, "--include", "pilot", "--tenants-file", str(path)) == 2
     assert "--include pilot selects no tenant." in caplog.text
 
 
@@ -1494,12 +1509,13 @@ def test_list_tenants_adds_the_columns_the_file_lacks(
 def test_exit_2_on_a_bad_tenants_file(
     fake_msal: FakeMsal,
     tmp_path: Path,
+    recorder: ModuleType,
     caplog: pytest.LogCaptureFixture,
     lines: tuple[str, ...],
     message: str,
 ) -> None:
     path = _tenants_csv(tmp_path / "tenants.csv", *lines)
-    assert _main(LICENSED_USERS, "--include", "pilot", "--tenants-file", str(path)) == 2
+    assert _main(recorder, "--include", "pilot", "--tenants-file", str(path)) == 2
     assert message in caplog.text
 
 

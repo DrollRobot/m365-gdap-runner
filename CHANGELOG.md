@@ -121,7 +121,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `grant_when_possible`, instead of failing the tenant. `--grant-when-possible` and
   `--no-grant-when-possible` override it.
 - Example scripts, each with the header `uv run` builds its environment from:
-  `examples/licensed_users.py` (Graph; its `report()` prints every tenant's users as JSON),
   `examples/audit_disabled.py` (Exchange Online; no `report()`, its log is the report),
   `examples/mailbox_audit_gaps.py` (mailboxes whose audit actions lag Microsoft's defaults,
   read through Exchange's REST endpoint; an Excel workbook per tenant and a summary
