@@ -998,3 +998,50 @@ def test_audit_logs_writes_nothing_when_no_tenant_ran(
     audit_logs.report([])
     assert not (tmp_path / "reports").exists()
     assert capsys.readouterr().out == "No tenants ran; no workbook written.\n"
+
+
+def test_sign_in_logs_keeps_an_earlier_runs_files(
+    fake_msal: FakeMsal,
+    sign_in_logs: Any,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO)
+    earlier_json = _sign_in_output(tmp_path, "Alpha")
+    earlier_workbook = _sign_in_output(tmp_path)
+    earlier_json.parent.mkdir(parents=True)
+    earlier_json.write_bytes(b"earlier sign-ins")
+    earlier_workbook.write_bytes(b"earlier workbook")
+
+    transport = _sign_in_services({TENANT_A: [_sign_in(1)]}, [])
+    assert _run_all(sign_in_logs, transport) == 0
+
+    assert earlier_json.read_bytes() == b"earlier sign-ins"
+    assert earlier_workbook.read_bytes() == b"earlier workbook"
+    new_json = earlier_json.with_name(f"{earlier_json.stem}_2.json")
+    new_workbook = earlier_workbook.with_name(f"{earlier_workbook.stem}_2.xlsx")
+    assert json.loads(new_json.read_text(encoding="utf-8")) == [_sign_in(1)]
+    assert _sheets(new_workbook)["Tenants"][0][0] == SIGN_IN_FILTER
+    assert capsys.readouterr().out == f"Wrote {new_workbook}\n"
+    assert f"1 sign-ins match; wrote {new_json}" in caplog.messages
+
+
+def test_sign_in_logs_numbers_a_file_past_every_name_taken(
+    sign_in_logs: Any, tmp_path: Path
+) -> None:
+    out = tmp_path / "reports"
+    out.mkdir()
+    for name in ("Alpha.json", "Alpha_2.json", "Alpha_4.json"):
+        (out / name).write_bytes(name.encode())
+
+    paths = []
+    for _ in range(3):
+        path, file = sign_in_logs._create("Alpha", ".json")
+        with file:
+            file.write(b"new")
+        paths.append(path.name)
+
+    assert paths == ["Alpha_3.json", "Alpha_5.json", "Alpha_6.json"]
+    for name in ("Alpha.json", "Alpha_2.json", "Alpha_4.json"):
+        assert (out / name).read_bytes() == name.encode()

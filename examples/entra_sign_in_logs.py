@@ -14,7 +14,8 @@ endpoint::
     uv run entra_sign_in_logs.py "signInEventTypes/any(t: t eq 'nonInteractiveUser')" --beta
 
 Writes one JSON file per tenant with matches, and one workbook of match counts per tenant
-with the filter in its title row, in the current folder or ``--out``.
+with the filter in its title row, in the current folder or ``--out``. A file never replaces
+another: where its name is taken, it gets the first free ``_2``, ``_3``, and so on.
 
 Needs ``AuditLog.Read.All``, a GDAP role such as Reports Reader, and Entra ID P1 or P2.
 
@@ -65,6 +66,7 @@ import json
 import logging
 import re
 from pathlib import Path
+from typing import BinaryIO
 
 from openpyxl import Workbook
 from openpyxl.styles import Font
@@ -115,9 +117,9 @@ def run(ctx: TenantContext) -> int:
     if not sign_ins:
         logger.info("No sign-ins match")
         return 0
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    path = OUT_DIR / f"{FILE_STEM}_{_file_safe(ctx.tenant.display_name)}_{_today()}.json"
-    path.write_text(json.dumps(sign_ins, indent=2), encoding="utf-8")
+    path, file = _create(f"{FILE_STEM}_{_file_safe(ctx.tenant.display_name)}_{_today()}", ".json")
+    with file:
+        file.write(json.dumps(sign_ins, indent=2).encode("utf-8"))
     logger.info("%d sign-ins match; wrote %s", len(sign_ins), path)
     return len(sign_ins)
 
@@ -161,9 +163,9 @@ def report(results: list[TenantResult]) -> None:
         width = min(longest + 2, MAX_COLUMN_WIDTH)
         sheet.column_dimensions[get_column_letter(number)].width = width
 
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    path = OUT_DIR / f"{FILE_STEM}_{_today()}.xlsx"
-    workbook.save(path)
+    path, file = _create(f"{FILE_STEM}_{_today()}", ".xlsx")
+    with file:
+        workbook.save(file)
     print(f"Wrote {path}")
 
 
@@ -181,6 +183,32 @@ def _collection(ctx: TenantContext) -> str:
     if BETA:
         return f"{ctx.auth.tenant.cloud.graph}/beta/auditLogs/signIns"
     return "/auditLogs/signIns"
+
+
+def _create(stem: str, suffix: str) -> tuple[Path, BinaryIO]:
+    """Create a new file in :data:`OUT_DIR`, never one that is already there.
+
+    Each name is created only if it does not exist, so neither an earlier run's file nor one
+    another tenant of the same name just wrote is replaced.
+
+    Args:
+        stem: The file name before its suffix, such as ``EntraSignInLogs_2026-10-29``.
+        suffix: The file name's suffix, such as ``.xlsx``.
+
+    Returns:
+        Where the file is, and the file, open for writing bytes. The name is *stem* and
+        *suffix*, or where that is taken, the first free one with ``_2``, ``_3``, and so on
+        between them.
+    """
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    path = OUT_DIR / f"{stem}{suffix}"
+    number = 1
+    while True:
+        try:
+            return path, path.open("xb")
+        except FileExistsError:
+            number += 1
+            path = OUT_DIR / f"{stem}_{number}{suffix}"
 
 
 def _file_safe(name: str) -> str:
