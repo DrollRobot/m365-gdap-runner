@@ -1,89 +1,15 @@
 # m365-gdap-runner
 
-<!-- FIXME: point these badges at your own repo, and drop the ones you don't use -->
-[![CI](https://github.com/DrollRobot/m365_gdap_runner/actions/workflows/ci.yml/badge.svg)](https://github.com/DrollRobot/m365_gdap_runner/actions/workflows/ci.yml)
+[![CI](https://github.com/DrollRobot/m365-gdap-runner/actions/workflows/ci.yml/badge.svg)](https://github.com/DrollRobot/m365-gdap-runner/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
-<!-- FIXME: match the badge and the link below to the license you chose -->
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 Run a Python script across every customer tenant you reach through GDAP, from a single
-partner sign-in. The library owns the loop: sign-in, tenant listing, consent checks, error
-isolation and parallelism. Authentication and the service clients come from
-[azure-auth](https://github.com/DrollRobot/azure-auth); scripts contain neither, only the
-work for one tenant and their own reports.
+partner sign-in. The runner handles the sign-ins, tenant selection, consent checks, error
+isolation and parallelism; a script holds only the work for one tenant and its own reports.
 
-## Installation
-
-<!-- FIXME: replace with the real install command once the package is published -->
-```bash
-uv add git+https://github.com/DrollRobot/m365_gdap_runner.git
-```
-
-## Usage
-
-A script declares which clients it uses and, for Graph, which scopes, implements `run(ctx)`
-for one tenant and, optionally, `report(results)` for the whole run, and hands itself to the
-library from its `__main__` block. Its header tells uv what it needs:
-
-```python
-# /// script
-# requires-python = ">=3.11"
-# dependencies = [
-#   "m365-gdap-runner @ git+https://github.com/DrollRobot/m365-gdap-runner.git@v0.1.0",
-# ]
-# ///
-from m365_gdap_runner import TenantContext, TenantResult
-
-CLIENTS = ["graph"]
-SCOPES = ["User.Read.All"]
-
-
-def run(ctx: TenantContext) -> list[str]:
-    users = ctx.graph.get_all("/users", params={"$select": "userPrincipalName"})
-    return [u["userPrincipalName"] for u in users]
-
-
-def report(results: list[TenantResult]) -> None:
-    for result in results:
-        print(result.tenant.display_name, result.status, len(result.result or []))
-
-
-if __name__ == "__main__":
-    from m365_gdap_runner import main
-
-    raise SystemExit(main(__name__))
-```
-
-```bash
-m365-gdap-runner-config init           # partner tenant and sign-in name
-m365-gdap-runner-customer-export       # creates tenants.csv; add TRUE/FALSE group columns
-uv run users.py --include pilot
-```
-
-Tenants are chosen with `--include`, less `--exclude`. Each takes a tenant (display name or
-ID) or a group (a TRUE/FALSE column of the tenants CSV or `.xlsx`), and `--include all`
-means every GDAP tenant. A tenant the partner sign-in cannot reach, including one without
-GDAP or in another cloud, gets a sign-in of its own before the run, as the account in its
-row's `m365_username` cell. The `m365_gdap` column marks the tenants the partner sign-in
-reaches, so `--include m365_gdap` runs only those. FALSE or blank there skips the partner sign-in; with
-`m365_username` blank too, the tenant is left out of the run. The library writes no output of its own: `run()` writes any per-tenant report,
-`report()` the run's. A script with flags of its own adds the library's to its parser with
-`add_arguments()`. `ctx` also offers `exchange`, `ipps` and `arm` clients when declared in
-`CLIENTS`, and `ctx.auth`, the azure-auth context, for anything else. See
-[docs/index.md](docs/index.md) and `examples/`.
-
-## Development
-
-```bash
-uv sync                                     # create the venv, install dev/test deps
-uv run pre-commit install                   # commit hooks
-uv run pre-commit install --hook-type pre-push
-uv run pytest -m "not live"                 # offline tests
-```
-
-<!-- FIXME: anything a contributor needs that the commands above don't cover --
-     required config options, credentials, external services, test fixtures -->
+See the [documentation](docs/index.md).
 
 ## License
 
-<!-- FIXME: name the license you chose; the full text is in LICENSE -->
+MIT; the full text is in [LICENSE](LICENSE).

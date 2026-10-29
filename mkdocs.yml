@@ -13,6 +13,9 @@ theme:
 
 nav:
   - Home: index.md
+  - Getting started: getting-started.md
+  - Usage: usage.md
+  - Development: development.md
   - Reference: reference/m365_gdap_runner.md
 
 markdown_extensions:
