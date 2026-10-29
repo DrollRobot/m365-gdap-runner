@@ -1,6 +1,5 @@
-# FIXME: set site_name, site_description, and repo_url for your project
 site_name: m365-gdap-runner
-site_description: FIXME
+site_description: Run Python scripts across GDAP customer tenants from a single partner sign-in.
 repo_url: https://github.com/DrollRobot/m365-gdap-runner
 
 theme:
