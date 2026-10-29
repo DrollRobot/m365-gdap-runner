@@ -1123,6 +1123,7 @@ def test_audit_logs_workbook_has_the_filter_title_and_a_table_below_it(
     sheet = load_workbook(_audit_logs_output(tmp_path))["Tenants"]
     assert sheet["A1"].value == AUDIT_FILTER
     assert sheet["A1"].font.b
+    assert (sheet["A1"].font.sz, sheet["B3"].font.sz) == (20, 11)
     assert [str(cells) for cells in sheet.merged_cells.ranges] == ["A1:E1"]
     assert list(sheet.iter_rows(min_row=3, values_only=True)) == [
         ("Alpha", TENANT_A, "ok", 2, None),
@@ -1133,6 +1134,7 @@ def test_audit_logs_workbook_has_the_filter_title_and_a_table_below_it(
     assert table.ref == "A2:E4"
     assert table.tableStyleInfo is not None
     assert table.tableStyleInfo.name == "TableStyleMedium8"
+    _assert_consolas(_audit_logs_output(tmp_path))
 
 
 def test_audit_logs_writes_nothing_when_no_tenant_ran(
@@ -1141,6 +1143,34 @@ def test_audit_logs_writes_nothing_when_no_tenant_ran(
     audit_logs.report([])
     assert not (tmp_path / "reports").exists()
     assert capsys.readouterr().out == "No tenants ran; no workbook written.\n"
+
+
+def test_audit_logs_keeps_an_earlier_runs_files(
+    fake_msal: FakeMsal,
+    audit_logs: Any,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO)
+    earlier_json = _audit_logs_output(tmp_path, "Alpha")
+    earlier_workbook = _audit_logs_output(tmp_path)
+    earlier_json.parent.mkdir(parents=True)
+    earlier_json.write_bytes(b"earlier audit events")
+    earlier_workbook.write_bytes(b"earlier workbook")
+
+    transport = _directory_audit_services({TENANT_A: [_directory_audit(1)]}, [])
+    assert _run_all(audit_logs, transport) == 0
+
+    assert earlier_json.read_bytes() == b"earlier audit events"
+    assert earlier_workbook.read_bytes() == b"earlier workbook"
+    new_json = earlier_json.with_name(f"{earlier_json.stem}_2.json")
+    new_workbook = earlier_workbook.with_name(f"{earlier_workbook.stem}_2.xlsx")
+    assert json.loads(new_json.read_text(encoding="utf-8")) == [_directory_audit(1)]
+    assert _sheets(new_workbook)["Tenants"][0][0] == AUDIT_FILTER
+    assert capsys.readouterr().out == f"Wrote {new_workbook}\n"
+    assert f"1 audit events match; wrote {new_json}" in caplog.messages
+    _assert_consolas(new_workbook)
 
 
 # --- app_scopes.py -----------------------------------------------------------------------

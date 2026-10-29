@@ -315,6 +315,6 @@ TRUE. A tenant there whose partner sign-in fails still gets a sign-in of its own
 `ctx.auth` is the azure-auth context for the tenant. Hand it to any azure-auth client, or to
 an Azure SDK client as `credential=`, for resources the four properties do not cover.
 
-See `examples/` for four Graph scripts and three Exchange Online scripts. In this repository,
+See `examples/` for five Graph scripts and three Exchange Online scripts. In this repository,
 `uv run python examples/licensed_users.py ...` runs one against the working copy instead of
 the release its header names.
