@@ -28,6 +28,7 @@ docs = [
 test = [
     "pytest>=9.0.3,<10",  # GHSA-6w46-j5rx-g56g
     "pytest-cov>=7.1,<8",
+    "xlsxwriter>=3.3.1,<4",  # the examples write workbooks with it
 ]
 secrets = [
     "detect-secrets>=1.5,<2",
@@ -113,9 +114,9 @@ mypy_path = ["scripts", "scripts/template_setup"]
 
 # AGENTS: ONLY ADD OVERRIDES IF, AFTER RESEARCHING, THERE IS NO TYPES STUB AVAILABLE.
 [[tool.mypy.overrides]]
-# msal and msal-extensions ship no py.typed marker and have no stub package on PyPI
-# (types-msal, types-msal-extensions: both 404).
-module = ["msal", "msal.*", "msal_extensions", "msal_extensions.*"]
+# msal, msal-extensions and xlsxwriter ship no py.typed marker and have no stub package on
+# PyPI (types-msal, types-msal-extensions, types-xlsxwriter, xlsxwriter-stubs: all 404).
+module = ["msal", "msal.*", "msal_extensions", "msal_extensions.*", "xlsxwriter", "xlsxwriter.*"]
 ignore_missing_imports = true
 
 [tool.vulture]

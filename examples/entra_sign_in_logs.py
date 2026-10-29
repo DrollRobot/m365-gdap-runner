@@ -2,7 +2,7 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #   "m365-gdap-runner @ git+https://github.com/DrollRobot/m365-gdap-runner.git@v0.1.0",
-#   "openpyxl>=3.1.5",
+#   "xlsxwriter>=3.3.1",
 # ]
 # ///
 """Example script: the Entra sign-in logs that match a filter, in each tenant.
@@ -62,16 +62,14 @@ Microsoft's docs: listing sign-ins, sign-in properties and their operators (beta
 from __future__ import annotations
 
 import datetime
+import io
 import json
 import logging
 import re
 from pathlib import Path
 from typing import BinaryIO
 
-from openpyxl import Workbook
-from openpyxl.styles import Font
-from openpyxl.utils import get_column_letter
-from openpyxl.worksheet.table import Table, TableStyleInfo
+import xlsxwriter
 
 from m365_gdap_runner import TenantContext, TenantResult
 
@@ -102,6 +100,11 @@ COLUMNS = ["Tenant", "TenantId", "Status", "SignIns", "Error"]
 
 # Widest a column is made to fit its longest value, in characters.
 MAX_COLUMN_WIDTH = 80
+
+# The workbook's font, its size in points, and the title row's size.
+FONT = "Consolas"
+FONT_SIZE = 11
+TITLE_FONT_SIZE = 20
 
 
 def run(ctx: TenantContext) -> int:
@@ -134,38 +137,54 @@ def report(results: list[TenantResult]) -> None:
     if not results:
         print("No tenants ran; no workbook written.")
         return
-    workbook = Workbook()
-    sheet = workbook.active
-    assert sheet is not None  # noqa: S101 (a new workbook always has a sheet)
-    sheet.title = "Tenants"
-    sheet.append([FILTER])
-    sheet["A1"].font = Font(bold=True)
-    sheet.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(COLUMNS))
-    sheet.append(COLUMNS)
-    for result in results:
-        sheet.append(
-            [
-                result.tenant.display_name,
-                result.tenant.tenant_id,
-                result.status,
-                result.result if isinstance(result.result, int) else None,
-                result.error,
-            ]
+    rows = [
+        [
+            result.tenant.display_name,
+            result.tenant.tenant_id,
+            result.status,
+            result.result if isinstance(result.result, int) else None,
+            result.error,
+        ]
+        for result in results
+    ]
+    options = {
+        # Every cell's font, unless its format says otherwise. With no font scheme, Excel shows
+        # FONT itself, not the theme's font, Calibri.
+        "default_format_properties": {
+            "font_name": FONT,
+            "font_size": FONT_SIZE,
+            "font_scheme": "none",
+        },
+        # Text stays text, never a formula or a link.
+        "strings_to_formulas": False,
+        "strings_to_urls": False,
+    }
+    data = io.BytesIO()
+    with xlsxwriter.Workbook(data, options) as workbook:
+        sheet = workbook.add_worksheet("Tenants")
+        title = workbook.add_format({"bold": True, "font_size": TITLE_FONT_SIZE})
+        sheet.merge_range(0, 0, 0, len(COLUMNS) - 1, FILTER, title)
+        sheet.add_table(
+            1,
+            0,
+            len(rows) + 1,
+            len(COLUMNS) - 1,
+            {
+                "name": "Tenants",
+                "style": "Table Style Medium 8",
+                "columns": [{"header": column} for column in COLUMNS],
+                "data": rows,
+            },
         )
-    last_cell = sheet.cell(sheet.max_row, len(COLUMNS)).coordinate
-    table = Table(displayName="Tenants", ref=f"A2:{last_cell}")
-    table.tableStyleInfo = TableStyleInfo(name="TableStyleMedium8", showRowStripes=True)
-    sheet.add_table(table)
-    sheet.freeze_panes = "A3"
-    # The title row spans the table, so it is left out of the widths.
-    for number, column in enumerate(sheet.iter_cols(min_row=2, values_only=True), start=1):
-        longest = max(len(str(value)) for value in column if value is not None)
-        width = min(longest + 2, MAX_COLUMN_WIDTH)
-        sheet.column_dimensions[get_column_letter(number)].width = width
+        sheet.freeze_panes(2, 0)
+        # The title row spans the table, so it is left out of the widths.
+        for number, column in enumerate(zip(COLUMNS, *rows, strict=True)):
+            longest = max(len(str(value)) for value in column if value is not None)
+            sheet.set_column(number, number, min(longest + 2, MAX_COLUMN_WIDTH))
 
     path, file = _create(f"{FILE_STEM}_{_today()}", ".xlsx")
     with file:
-        workbook.save(file)
+        file.write(data.getvalue())
     print(f"Wrote {path}")
 
 

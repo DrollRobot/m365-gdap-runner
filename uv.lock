@@ -907,6 +907,7 @@ dev = [
     { name = "ruff" },
     { name = "types-openpyxl" },
     { name = "vulture" },
+    { name = "xlsxwriter" },
 ]
 docs = [
     { name = "mkdocs" },
@@ -919,6 +920,7 @@ secrets = [
 test = [
     { name = "pytest" },
     { name = "pytest-cov" },
+    { name = "xlsxwriter" },
 ]
 
 [package.metadata]
@@ -944,6 +946,7 @@ dev = [
     { name = "ruff", specifier = ">=0.15,<1" },
     { name = "types-openpyxl", specifier = ">=3.1.5,<4" },
     { name = "vulture", specifier = ">=2.16,<3" },
+    { name = "xlsxwriter", specifier = ">=3.3.1,<4" },
 ]
 docs = [
     { name = "mkdocs", specifier = ">=1.6,<2" },
@@ -954,6 +957,7 @@ secrets = [{ name = "detect-secrets", specifier = ">=1.5,<2" }]
 test = [
     { name = "pytest", specifier = ">=9.0.3,<10" },
     { name = "pytest-cov", specifier = ">=7.1,<8" },
+    { name = "xlsxwriter", specifier = ">=3.3.1,<4" },
 ]
 
 [[package]]
@@ -1717,4 +1721,13 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/07/f6/d0e5b343768e8bcb4cda79f0f2f55051bf26177ecd5651f84c07567461cf/watchdog-6.0.0-py3-none-win32.whl", hash = "sha256:07df1fdd701c5d4c8e55ef6cf55b8f0120fe1aef7ef39a1c6fc6bc2e606d517a", size = 79065, upload-time = "2024-11-01T14:07:09.525Z" },
     { url = "https://files.pythonhosted.org/packages/db/d9/c495884c6e548fce18a8f40568ff120bc3a4b7b99813081c8ac0c936fa64/watchdog-6.0.0-py3-none-win_amd64.whl", hash = "sha256:cbafb470cf848d93b5d013e2ecb245d4aa1c8fd0504e863ccefa32445359d680", size = 79070, upload-time = "2024-11-01T14:07:10.686Z" },
     { url = "https://files.pythonhosted.org/packages/33/e8/e40370e6d74ddba47f002a32919d91310d6074130fe4e17dabcafc15cbf1/watchdog-6.0.0-py3-none-win_ia64.whl", hash = "sha256:a1914259fa9e1454315171103c6a30961236f508b9b623eae470268bbcc6a22f", size = 79067, upload-time = "2024-11-01T14:07:11.845Z" },
+]
+
+[[package]]
+name = "xlsxwriter"
+version = "3.3.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/9c/fb/31bdbf3737222d92ef7d2db4d50089b2253dbbb63ceb6d20a4447f6b7ed0/xlsxwriter-3.3.1.tar.gz", hash = "sha256:0867761912cceac76f97ffa76eeda18c623ae9217f601be8512f55b1af4bdb6e", size = 223040, upload-time = "2026-10-28T22:52:46.592Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/88/eb/1e6af9959a567901a7e7c7cef2e75883e487df223ed67f9a8977ff863bd8/xlsxwriter-3.3.1-py3-none-any.whl", hash = "sha256:8e2c89e59d733fe59e112317218c64fbbc276d90a8c144ebd6f7fa15e7ab184a", size = 180583, upload-time = "2026-10-28T22:52:45.048Z" },
 ]

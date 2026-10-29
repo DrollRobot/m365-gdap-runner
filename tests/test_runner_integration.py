@@ -800,6 +800,11 @@ def test_sign_in_logs_workbook_has_the_filter_title_and_a_table_below_it(
     sheet = load_workbook(_sign_in_output(tmp_path))["Tenants"]
     assert sheet["A1"].value == SIGN_IN_FILTER
     assert sheet["A1"].font.b
+    assert (sheet["A1"].font.sz, sheet["B3"].font.sz) == (20, 11)
+    assert {cell.font.name for row in sheet.iter_rows() for cell in row} == {"Consolas"}
+    # A theme scheme would make Excel show the theme's font, Calibri, in Consolas's place.
+    assert {cell.font.scheme for row in sheet.iter_rows() for cell in row} == {None}
+    assert sheet.column_dimensions["B"].width >= len(TENANT_A) + 2
     assert [str(cells) for cells in sheet.merged_cells.ranges] == ["A1:E1"]
     assert list(sheet.iter_rows(min_row=3, values_only=True)) == [
         ("Alpha", TENANT_A, "ok", 2, None),
@@ -810,6 +815,9 @@ def test_sign_in_logs_workbook_has_the_filter_title_and_a_table_below_it(
     assert table.ref == "A2:E4"
     assert table.tableStyleInfo is not None
     assert table.tableStyleInfo.name == "TableStyleMedium8"
+    # The workbook's default font: a cell nothing was written to has it too. Reading it
+    # creates the cell, so this comes last.
+    assert sheet["Z99"].font.name == "Consolas"
 
 
 def test_sign_in_logs_writes_nothing_when_no_tenant_ran(
