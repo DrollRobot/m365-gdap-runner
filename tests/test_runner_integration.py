@@ -44,7 +44,7 @@ UNIFIED_AUDIT_LOG = EXAMPLES / "unified_audit_log.py"
 SERVICE_PRINCIPAL_ENABLED = EXAMPLES / "service_principal_enabled.py"
 ENTRA_SIGN_IN_LOGS = EXAMPLES / "entra_sign_in_logs.py"
 ENTRA_AUDIT_LOGS = EXAMPLES / "entra_audit_logs.py"
-APP_SCOPES = EXAMPLES / "app_scopes.py"
+GRAPH_SCOPES = EXAMPLES / "graph_scopes.py"
 
 
 def _example(path: Path) -> Payload:
@@ -1176,19 +1176,19 @@ def test_audit_logs_keeps_an_earlier_runs_files(
     _assert_consolas(new_workbook)
 
 
-# --- app_scopes.py -----------------------------------------------------------------------
+# --- graph_scopes.py ---------------------------------------------------------------------
 
 
 @pytest.fixture
-def app_scopes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
+def graph_scopes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
     """The example, checking for two scopes and writing to a temp dir."""
-    module = load_script(APP_SCOPES)
+    module = load_script(GRAPH_SCOPES)
     monkeypatch.setattr(module, "OUT_DIR", tmp_path / "reports")
     monkeypatch.setattr(module, "REQUESTED_SCOPES", ["User.Read.All", "Mail.Read"])
     return module
 
 
-def _app_scopes_results() -> list[TenantResult]:
+def _graph_scopes_results() -> list[TenantResult]:
     """Return one tenant whose app lacks Mail.Read, and one that failed."""
     held = {"appId": "app-1", "scopes": ["Policy.Read.All", "User.Read.All"]}
     return [
@@ -1197,13 +1197,13 @@ def _app_scopes_results() -> list[TenantResult]:
     ]
 
 
-def test_app_scopes_workbook_lists_every_tenant(
-    app_scopes: Any, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+def test_graph_scopes_workbook_lists_every_tenant(
+    graph_scopes: Any, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    app_scopes.report(_app_scopes_results())
+    graph_scopes.report(_graph_scopes_results())
 
     (path,) = (tmp_path / "reports").iterdir()
-    assert path.name == f"AppScopes_{datetime.date.today().isoformat()}.xlsx"
+    assert path.name == f"GraphScopes_{datetime.date.today().isoformat()}.xlsx"
     assert capsys.readouterr().out == f"Wrote {path}\n"
     sheet = load_workbook(path)["Tenants"]
     assert list(sheet.iter_rows(values_only=True)) == [
@@ -1217,25 +1217,25 @@ def test_app_scopes_workbook_lists_every_tenant(
     _assert_consolas(path)
 
 
-def test_app_scopes_keeps_an_earlier_runs_files(
-    app_scopes: Any,
+def test_graph_scopes_keeps_an_earlier_runs_files(
+    graph_scopes: Any,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.setattr(app_scopes, "EXPORT_JSON", True)
+    monkeypatch.setattr(graph_scopes, "EXPORT_JSON", True)
     today = datetime.date.today().isoformat()
     reports = tmp_path / "reports"
     reports.mkdir()
-    earlier = [reports / f"AppScopes_{today}.xlsx", reports / f"AppScopes_{today}.json"]
+    earlier = [reports / f"GraphScopes_{today}.xlsx", reports / f"GraphScopes_{today}.json"]
     for path in earlier:
         path.write_bytes(path.name.encode())
 
-    app_scopes.report(_app_scopes_results())
+    graph_scopes.report(_graph_scopes_results())
 
     for path in earlier:
         assert path.read_bytes() == path.name.encode()
     workbook, exported = (path.with_name(f"{path.stem}_2{path.suffix}") for path in earlier)
     assert capsys.readouterr().out == f"Wrote {workbook}\nWrote {exported}\n"
-    assert app_scopes.load_results(exported) == _app_scopes_results()
+    assert graph_scopes.load_results(exported) == _graph_scopes_results()
     _assert_consolas(workbook)

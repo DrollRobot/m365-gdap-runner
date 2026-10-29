@@ -12,11 +12,11 @@ another app, and checks the scopes it holds in each tenant for the ones in
 :data:`REQUESTED_SCOPES`; ``--scopes`` replaces the list. By default it only reads, asking
 for no scope in particular, so every tenant where the app holds any scope reports::
 
-    uv run app_scopes.py --include pilot
+    uv run graph_scopes.py --include pilot
 
 ``--write`` asks for every requested scope at sign-in instead::
 
-    uv run app_scopes.py --include pilot --write
+    uv run graph_scopes.py --include pilot --write
 
 Where a tenant's grant lacks some of them and the app holds
 ``DelegatedPermissionGrant.ReadWrite.All`` there, they are added to the app's tenant-wide
@@ -104,7 +104,7 @@ CONTINUE_ON_ERROR = True
 OUT_DIR = Path()
 
 # Output files are named this, then today's date.
-FILE_STEM = "AppScopes"
+FILE_STEM = "GraphScopes"
 
 # The workbook's font, and its size in points.
 FONT = "Consolas"
@@ -266,7 +266,7 @@ def _create(stem: str, suffix: str) -> tuple[Path, BinaryIO]:
     replaced.
 
     Args:
-        stem: The file name before its suffix, such as ``AppScopes_2026-10-29``.
+        stem: The file name before its suffix, such as ``GraphScopes_2026-10-29``.
         suffix: The file name's suffix, such as ``.xlsx``.
 
     Returns:

@@ -130,7 +130,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   enterprise apps whose name or app ID matches the regular expressions given, as one Excel
   workbook with a column per app; `--disable` turns sign-in off where it is on, and
   `--export-json` also writes the matched service principals, keyed by tenant ID),
-  `examples/app_scopes.py` (Graph; which of the requested scopes an app, by default Microsoft
+  `examples/graph_scopes.py` (Graph; which of the requested scopes an app, by default Microsoft
   Graph Command Line Tools, holds in each tenant, as one Excel workbook; `--write` asks for
   them at sign-in, adding them to the app's grant where it can and asking the tenant's own
   account to consent elsewhere; `--export-json` and `--import-json` save and reload a run),
