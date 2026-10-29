@@ -4,7 +4,7 @@ Thank you for your interest in contributing!
 ## Setting up a development environment
 Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/).
 ```
-git clone https://github.com/FIXME/m365-gdap-runner.git
+git clone https://github.com/DrollRobot/m365-gdap-runner.git
 cd m365-gdap-runner
 uv sync --all-groups --all-extras
 uv run pre-commit install
