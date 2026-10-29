@@ -122,10 +122,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--no-grant-when-possible` override it.
 - Example scripts, each with the header `uv run` builds its environment from:
   `examples/audit_disabled.py` (Exchange Online; no `report()`, its log is the report),
-  `examples/mailbox_audit_gaps.py` (mailboxes whose audit actions lag Microsoft's defaults,
-  read through Exchange's REST endpoint; an Excel workbook per tenant and a summary
-  workbook, in the folder its own `--out` flag names), `examples/unified_audit_log.py`
-  (whether the unified audit log is on in each tenant; one Excel workbook for the run), and
+  `examples/unified_audit_log.py` (whether the unified audit log is on in each tenant; one
+  Excel workbook for the run), and
   `examples/service_principal_enabled.py` (Graph; whether users can sign in to the
   enterprise apps whose name or app ID matches the regular expressions given, as one Excel
   workbook with a column per app; `--disable` turns sign-in off where it is on, and

@@ -130,8 +130,7 @@ needs.
 
 `report()` is not called after Ctrl+C, since a report of part of a run would look complete.
 If it raises, the error is logged and the run exits with code 2. Logs and the summary go to
-stderr, so stdout is the script's. `examples/mailbox_audit_gaps.py` writes an Excel workbook
-of each kind.
+stderr, so stdout is the script's.
 
 After the summary line, every warning and error the run logged is printed again, so none is
 lost in a long run's output. That includes the script's own warnings, and each tenant that
@@ -315,6 +314,6 @@ TRUE. A tenant there whose partner sign-in fails still gets a sign-in of its own
 `ctx.auth` is the azure-auth context for the tenant. Hand it to any azure-auth client, or to
 an Azure SDK client as `credential=`, for resources the four properties do not cover.
 
-See `examples/` for four Graph scripts and three Exchange Online scripts. In this repository,
+See `examples/` for four Graph scripts and two Exchange Online scripts. In this repository,
 `uv run python examples/entra_audit_logs.py ...` runs one against the working copy instead of
 the release its header names.
