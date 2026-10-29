@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-29 - Initial release
+
 ### Added
 
 - A library for scripts that run across GDAP tenants. A script calls `main(__name__)` from
@@ -68,9 +70,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `m365_gdap`, `m365_pw_url`, and one TRUE/FALSE column per group; other tools may keep their
   own columns in the same file. A tenant may have more than one row while they agree in every
   `m365_` column; a run that selects one whose rows disagree is refused. Any of the `m365_`
-  columns the file lacks is added, and a blank cloud is filled in by OpenID Connect discovery. A workbook's table grows to the right
-  and down; the rest of the workbook is left as it was, except that charts and images are
-  dropped.
+  columns the file lacks is added, and a blank cloud is filled in by OpenID Connect
+  discovery. A workbook's table grows to the right and down; the rest of the workbook is
+  left as it was, except that charts and images are dropped.
   `--include` runs a tenant (display name or ID), a group (the tenants marked TRUE in that
   column) or `all` (every GDAP tenant); `--exclude` takes tenants and groups back out, and
   always wins. Both are repeatable, and a run that includes nothing is refused. A name that
@@ -99,11 +101,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   run, so a sign-in that a policy has started refusing fails in the check, where a window
   may open, instead of inside `run()`.
 - A customer whose Conditional Access policy finds the partner sign-in, or its multi-factor
-  authentication, too old (AADSTS70043, AADSTS50078) no longer goes to its own sign-in for
-  that. The first one in a run opens a new partner sign-in that asks for the password again,
-  one window per client, and it and every later one refused for that reason are checked
-  through the partner sign-in again. Only a tenant still refused goes to its own sign-in.
-  Ctrl+C during that window, then Enter, skips it.
+  authentication, too old (AADSTS70043, AADSTS50078) gets a fresh partner sign-in before a
+  sign-in of its own. The first one in a run opens a new partner sign-in that asks for the
+  password again, one window per client, and it and every later one refused for that reason
+  are checked through the partner sign-in again. Only a tenant still refused goes to its own
+  sign-in. Ctrl+C during that window, then Enter, skips it.
 - A GDAP tenant refused for missing consent gets its own sign-in with Entra's consent screen,
   whatever the cache holds, so an administrator can consent on behalf of the organization
   there; the log line says to tick the box. Consent given for one user alone never shows the
@@ -114,7 +116,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `pw_browser_args` choose the browser it opens in (default: the system default).
 - Script setting `CONTINUE_ON_ERROR`: an error in `run()` stops the run unless the script sets
   it True, as the example reports and the service principal example do.
-  `--continue-on-error` and the new `--no-continue-on-error` override it.
+  `--continue-on-error` and `--no-continue-on-error` override it.
 - Script setting `GRANT_WHEN_POSSIBLE`: where a tenant's grant lacks some of the script's
   `SCOPES` and the app holds `DelegatedPermissionGrant.ReadWrite.All` there, the check
   before the run adds them to the app's tenant-wide grant, through azure-auth's
@@ -136,15 +138,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   filter given, from the beta endpoint or with `--v1` v1.0, as one JSON file per tenant with
   matches and one Excel workbook counting them per tenant, the filter in its title row),
   and `examples/entra_audit_logs.py` (Graph; the same for the Entra audit logs, which, unlike
-  the sign-in logs, a tenant without Entra ID P1 or P2 can read).
+  the sign-in logs, a tenant without Entra ID P1 or P2 can read). No example replaces a file:
+  where a report's name is taken, it gets the first free `_2`, `_3`, and so on.
+- Authentication, token caching, tenant lookup, and the Graph, Exchange Online, Security &
+  Compliance and Azure Resource Manager clients come from
+  [azure-auth](https://github.com/DrollRobot/azure-auth) v0.9.1.
 - Supports Python 3.11 and newer. CI tests every supported version, 3.11 through 3.14, on
   Ubuntu, macOS and Windows.
 
-### Changed
-
-- Authentication, token caching, tenant lookup, and the Graph, Exchange Online, Security &
-  Compliance and Azure Resource Manager clients come from
-  [azure-auth](https://github.com/DrollRobot/azure-auth), pinned to a commit of its `develop`
-  branch. This package no longer carries an MSAL session or a Graph client of its own.
-
-[Unreleased]: https://github.com/DrollRobot/m365_gdap_runner/commits/HEAD
+[Unreleased]: https://github.com/DrollRobot/m365-gdap-runner/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/DrollRobot/m365-gdap-runner/releases/tag/v0.1.0
