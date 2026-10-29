@@ -4,18 +4,22 @@ from __future__ import annotations
 
 import argparse
 import re
+import runpy
+import sys
 import tomllib
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+import m365_gdap_runner
 from tests._gdap_fakes import load_script
 
 pytestmark = pytest.mark.unit
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = sorted((ROOT / "examples").glob("*.py"))
+SERVICE_PRINCIPAL_ENABLED = ROOT / "examples" / "service_principal_enabled.py"
 
 # The block a script's header lives in, as PEP 723 gives the pattern.
 BLOCK = re.compile(r"(?m)^# /// (?P<type>[a-zA-Z0-9-]+)$\s(?P<content>(^#(| .*)$\s)+)^# ///$")
@@ -56,3 +60,42 @@ def test_service_principal_matches_display_name_or_app_id(monkeypatch: pytest.Mo
     assert module.is_match({"displayName": "Other", "appId": "cw000000-0000"})
     assert not module.is_match({"displayName": "Cloud Backup", "appId": "x"})
     assert not module.is_match({})
+
+
+@pytest.mark.parametrize(
+    ("flags", "expected"),
+    [
+        ([], ([("Application.Read.All", "Application.ReadWrite.All")], False, False)),
+        (["--disable"], (["Application.ReadWrite.All"], True, False)),
+        (["--delete"], (["Application.ReadWrite.All"], False, True)),
+    ],
+    ids=["read", "disable", "delete"],
+)
+def test_service_principal_flags_set_the_scopes_and_the_change(
+    monkeypatch: pytest.MonkeyPatch, flags: list[str], expected: tuple[Any, bool, bool]
+) -> None:
+    seen: list[tuple[Any, bool, bool]] = []
+
+    def fake_main(name: str, args: argparse.Namespace) -> int:
+        script = sys.modules[name]
+        seen.append((script.SCOPES, script.DISABLE, script.DELETE))
+        return 0
+
+    monkeypatch.setattr(m365_gdap_runner, "main", fake_main)
+    monkeypatch.setattr(sys, "argv", ["service_principal_enabled.py", "Backup", *flags])
+    with pytest.raises(SystemExit) as exc:
+        runpy.run_path(str(SERVICE_PRINCIPAL_ENABLED), run_name="__main__")
+    assert exc.value.code == 0
+    assert seen == [expected]
+
+
+def test_service_principal_refuses_disable_with_delete(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(
+        sys, "argv", ["service_principal_enabled.py", "Backup", "--disable", "--delete"]
+    )
+    with pytest.raises(SystemExit) as exc:
+        runpy.run_path(str(SERVICE_PRINCIPAL_ENABLED), run_name="__main__")
+    assert exc.value.code == 2
+    assert "argument --delete: not allowed with argument --disable" in capsys.readouterr().err

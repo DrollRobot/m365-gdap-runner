@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `examples/service_principal_enabled.py`: `--delete` deletes every service principal the
+  patterns match, enabled or not, asking for `Application.ReadWrite.All` as `--disable`
+  does. The workbook shows each as `deleted`, and `--export-json` writes them as they were
+  before. It cannot be combined with `--disable`. A deleted service principal stays in the
+  tenant's deleted items for 30 days, where it can be restored.
+
 ## [0.1.0] - 2026-10-29 - Initial release
 
 ### Added

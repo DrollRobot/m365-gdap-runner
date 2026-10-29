@@ -18,25 +18,34 @@ reads::
 
     uv run service_principal_enabled.py "Contoso Cloud Backup" --include pilot --disable
 
+``--delete`` instead deletes every match, enabled or not::
+
+    uv run service_principal_enabled.py "^Contoso Cloud Backup$" --include pilot --delete
+
+A deleted service principal stays in the tenant's deleted items for 30 days, where it can be
+restored; after that it is gone for good.
+
 A pattern is case-insensitive and matches anywhere in the value, so ``Backup`` matches every
 app with Backup in its name; anchor it (``^Contoso Cloud Backup$``) to match one name
-exactly. Run without ``--disable`` first to see what the patterns match.
+exactly. Run without ``--disable`` or ``--delete`` first to see what the patterns match.
 
 Nothing is written while tenants run. After the last, one workbook goes in the current
 folder, or the one ``--out`` names: a row per tenant, failed ones included, and a column per
 matched app name.
-Each cell is ``enabled`` or ``disabled`` (after the change, with ``--disable``), or blank
-where the tenant has no such app. Apps that share a name in one tenant share a cell, which
-lists each state they are in. ``--export-json`` also writes the matched service principals,
-whole, as Graph returns them, in one JSON object keyed by tenant ID. Neither file
+Each cell is ``enabled`` or ``disabled`` (after the change, with ``--disable``), ``deleted``
+with ``--delete``, or blank where the tenant has no such app. Apps that share a name in one
+tenant share a cell, which lists each state they are in. ``--export-json`` also writes the
+matched service principals, whole, as Graph returns them, in one JSON object keyed by tenant
+ID; with ``--delete``, as they were before it, a record of what was deleted. Neither file
 replaces another: where a name is taken, the file gets the first free ``_2``, ``_3``,
 and so on.
 
-A tenant's error does not stop the others, with or without ``--disable``: a tenant that
+A tenant's error does not stop the others, whether reading or changing apps: a tenant that
 refuses, say for want of a role, is no reason to leave an app enabled in the rest.
 Reading asks each tenant for ``Application.Read.All``, or ``Application.ReadWrite.All``
-where that is the one granted. ``--disable`` asks for ``Application.ReadWrite.All`` alone,
-and changing an app also needs a GDAP role such as Cloud Application Administrator.
+where that is the one granted. ``--disable`` and ``--delete`` ask for
+``Application.ReadWrite.All`` alone, and changing or deleting an app also needs a GDAP role
+such as Cloud Application Administrator.
 """
 
 from __future__ import annotations
@@ -57,7 +66,7 @@ from m365_gdap_runner import TenantContext, TenantResult
 CLIENTS = ["graph"]
 
 # Read access to service principals: either scope will do, the first preferred.
-# ``--disable`` swaps in Application.ReadWrite.All alone.
+# ``--disable`` and ``--delete`` swap in Application.ReadWrite.All alone.
 SCOPES: list[str | tuple[str, ...]] = [("Application.Read.All", "Application.ReadWrite.All")]
 
 # Matched against each service principal's display name and app ID. The command line sets
@@ -67,10 +76,13 @@ PATTERNS: list[re.Pattern[str]] = []
 # Turn sign-in off where it is on. ``--disable`` sets it before the run.
 DISABLE = False
 
+# Delete every match. ``--delete`` sets it before the run.
+DELETE = False
+
 # Also write the matched service principals as JSON. ``--export-json`` sets it.
 EXPORT_JSON = False
 
-# One tenant's error is no reason to skip the others, whether reading or disabling.
+# One tenant's error is no reason to skip the others, whether reading, disabling or deleting.
 CONTINUE_ON_ERROR = True
 
 # Where the workbook and JSON go: the current folder. ``--out`` replaces it before the run.
@@ -91,15 +103,18 @@ FONT_SIZE = 11
 
 
 def run(ctx: TenantContext) -> list[dict[str, Any]]:
-    """Find the service principals that match, and turn sign-in off on them with ``--disable``.
+    """Find the service principals that match, then disable or delete them as the flags say.
+
+    ``--disable`` turns sign-in off on every match where it is on; ``--delete`` deletes every
+    match.
 
     Args:
         ctx: The tenant context supplied by the runner.
 
     Returns:
-        One service principal per match, with ``accountEnabled`` as it is after the run: the
-        properties in :data:`PROPERTIES`, or the whole object with ``--export-json``. Empty
-        when nothing matches.
+        One service principal per match: the properties in :data:`PROPERTIES`, or the whole
+        object with ``--export-json``. With ``--disable``, ``accountEnabled`` is as the run
+        left it; with ``--delete``, each is as it was before. Empty when nothing matches.
     """
     apps = ctx.graph.get_all(
         "/servicePrincipals", params={"$select": PROPERTIES, "$top": PAGE_SIZE}
@@ -113,6 +128,9 @@ def run(ctx: TenantContext) -> list[dict[str, Any]]:
             if _state(app) == "enabled":
                 ctx.graph.patch(f"/servicePrincipals/{app['id']}", json={"accountEnabled": False})
                 app["accountEnabled"] = False
+    if DELETE:
+        for app in found:
+            ctx.graph.delete(f"/servicePrincipals/{app['id']}")
     return found
 
 
@@ -228,14 +246,16 @@ def _cells(result: TenantResult) -> dict[str, str]:
 
     Returns:
         App name to ``enabled``, ``disabled``, or both, comma-separated, when apps sharing
-        the name differ. Empty for a tenant that failed or matched nothing.
+        the name differ; ``deleted`` with ``--delete``. Empty for a tenant that failed or
+        matched nothing.
     """
     apps = result.result if isinstance(result.result, list) else []
     states: dict[str, set[str]] = {}
     for app in apps:
         # An app without a display name is shown by its app ID.
         name = str(app.get("displayName") or app.get("appId"))
-        states.setdefault(name, set()).add(_state(app))
+        # A tenant whose run finished deleted every match it returned.
+        states.setdefault(name, set()).add("deleted" if DELETE else _state(app))
     return {name: ", ".join(sorted(found)) for name, found in states.items()}
 
 
@@ -282,7 +302,8 @@ if __name__ == "__main__":
     from m365_gdap_runner import add_arguments, main
 
     parser = argparse.ArgumentParser(
-        description="Report, and optionally disable, user sign-in on matching enterprise apps."
+        description="Report user sign-in on matching enterprise apps, and optionally turn it "
+        "off or delete the apps."
     )
     parser.add_argument(
         "patterns",
@@ -292,10 +313,16 @@ if __name__ == "__main__":
         help="Regular expression matched, case-insensitive, against each service principal's "
         "display name and app ID.",
     )
-    parser.add_argument(
+    change = parser.add_mutually_exclusive_group()
+    change.add_argument(
         "--disable",
         action="store_true",
         help="Turn user sign-in off on every match where it is on.",
+    )
+    change.add_argument(
+        "--delete",
+        action="store_true",
+        help="Delete every match. Deleted items keep it for 30 days, where it can be restored.",
     )
     parser.add_argument(
         "--export-json",
@@ -313,8 +340,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
     PATTERNS = args.patterns
     DISABLE = args.disable
+    DELETE = args.delete
     EXPORT_JSON = args.export_json
     OUT_DIR = args.out
-    if DISABLE:
+    if DISABLE or DELETE:
         SCOPES = ["Application.ReadWrite.All"]
     raise SystemExit(main(__name__, args))

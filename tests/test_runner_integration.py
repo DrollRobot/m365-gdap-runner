@@ -252,12 +252,13 @@ def _sp(object_id: str, name: str, app_id: str, *, enabled: bool) -> dict[str, A
 
 
 def _sp_services(
-    apps: dict[str, list[dict[str, Any]]], patches: list[httpx.Request]
+    apps: dict[str, list[dict[str, Any]]], changes: list[httpx.Request]
 ) -> httpx.MockTransport:
-    """Fake Graph holding *apps* per tenant, recording every PATCH it is sent.
+    """Fake Graph holding *apps* per tenant, recording every PATCH and DELETE it is sent.
 
     A read of one service principal returns it whole: as listed, plus ``tags``, which the list
-    read leaves out. A PATCH changes nothing, so a later read still shows the old state.
+    read leaves out. A PATCH changes nothing, so a later read still shows the old state. A
+    DELETE removes the app, so a later read of it fails.
     """
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -269,9 +270,13 @@ def _sp_services(
             return httpx.Response(200, json={"value": held})
         if path.startswith("/v1.0/servicePrincipals/"):
             if request.method == "PATCH":
-                patches.append(request)
+                changes.append(request)
                 return httpx.Response(204)
             (app,) = [app for app in held if app["id"] == path.rsplit("/", 1)[1]]
+            if request.method == "DELETE":
+                changes.append(request)
+                held.remove(app)
+                return httpx.Response(204)
             return httpx.Response(200, json={**app, "tags": ["WindowsAzureActiveDirectoryApp"]})
         return fake_services(request)
 
@@ -300,6 +305,12 @@ def _disable(monkeypatch: pytest.MonkeyPatch, module: Any) -> None:
     monkeypatch.setattr(module, "SCOPES", ["Application.ReadWrite.All"])
 
 
+def _delete(monkeypatch: pytest.MonkeyPatch, module: Any) -> None:
+    """Set what ``--delete`` sets."""
+    monkeypatch.setattr(module, "DELETE", True)
+    monkeypatch.setattr(module, "SCOPES", ["Application.ReadWrite.All"])
+
+
 def _run_all(module: Any, transport: httpx.MockTransport) -> int:
     parser = argparse.ArgumentParser()
     cli.add_arguments(parser)
@@ -320,7 +331,7 @@ def test_sp_enabled_reports_every_match_and_changes_nothing(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     caplog.set_level(logging.INFO)
-    patches: list[httpx.Request] = []
+    changes: list[httpx.Request] = []
     apps = {
         TENANT_A: [
             _sp("sp-a1", "Contoso Cloud Backup", BACKUP_APP_ID, enabled=True),
@@ -330,9 +341,9 @@ def test_sp_enabled_reports_every_match_and_changes_nothing(
         TENANT_B: [_sp("sp-b1", "Contoso Cloud Backup", BACKUP_APP_ID, enabled=False)],
     }
 
-    assert _run_all(sp_enabled, _sp_services(apps, patches)) == 0
+    assert _run_all(sp_enabled, _sp_services(apps, changes)) == 0
 
-    assert patches == []
+    assert changes == []
     path = _output(tmp_path)
     assert [p.name for p in path.parent.iterdir()] == [path.name]
     assert capsys.readouterr().out == f"Wrote {path}\n"
@@ -405,6 +416,58 @@ def test_sp_enabled_exports_each_match_whole_keyed_by_tenant_id(
     assert capsys.readouterr().out == f"Wrote {_output(tmp_path)}\nWrote {path}\n"
     backup = _sp("sp-a1", "Contoso Cloud Backup", BACKUP_APP_ID, enabled=False)
     assert json.loads(path.read_text(encoding="utf-8")) == {
+        TENANT_A: [{**backup, "tags": ["WindowsAzureActiveDirectoryApp"]}],
+        TENANT_B: [],
+    }
+
+
+def test_sp_enabled_delete_deletes_every_match(
+    fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, sp_enabled: Any, tmp_path: Path
+) -> None:
+    _delete(monkeypatch, sp_enabled)
+    changes: list[httpx.Request] = []
+    apps = {
+        TENANT_A: [
+            _sp("sp-a1", "Contoso Cloud Backup", BACKUP_APP_ID, enabled=True),
+            _sp("sp-a2", "Reporter", REPORTER_APP_ID, enabled=False),
+            _sp("sp-a3", "Mail", MAIL_APP_ID, enabled=True),
+        ],
+        TENANT_B: [_sp("sp-b1", "Contoso Cloud Backup", BACKUP_APP_ID, enabled=False)],
+    }
+
+    assert _run_all(sp_enabled, _sp_services(apps, changes)) == 0
+
+    # Enabled or not, every match is deleted; the app that does not match is left alone.
+    assert [(bearer_tenant(r), r.method, r.url.path) for r in changes] == [
+        (TENANT_A, "DELETE", "/v1.0/servicePrincipals/sp-a1"),
+        (TENANT_A, "DELETE", "/v1.0/servicePrincipals/sp-a2"),
+        (TENANT_B, "DELETE", "/v1.0/servicePrincipals/sp-b1"),
+    ]
+    assert [app["id"] for app in apps[TENANT_A]] == ["sp-a3"]
+    assert _sheets(_output(tmp_path))["Tenants"][1:] == [
+        ("Alpha", "ok", TENANT_A, "deleted", "deleted"),
+        ("beta corp", "ok", TENANT_B, "deleted", None),
+    ]
+    assert (
+        GRAPH_CLI_CLIENT_ID,
+        ("https://graph.microsoft.com/Application.ReadWrite.All",),
+    ) in fake_msal.silent_calls(TENANT_A)
+
+
+def test_sp_enabled_delete_exports_each_match_as_it_was_before(
+    fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, sp_enabled: Any, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(sp_enabled, "EXPORT_JSON", True)
+    _delete(monkeypatch, sp_enabled)
+    changes: list[httpx.Request] = []
+    apps = {TENANT_A: [_sp("sp-a1", "Contoso Cloud Backup", BACKUP_APP_ID, enabled=True)]}
+
+    # The fake fails a read of a deleted app, so this passes only if each is read first.
+    assert _run_all(sp_enabled, _sp_services(apps, changes)) == 0
+
+    assert [r.url.path for r in changes] == ["/v1.0/servicePrincipals/sp-a1"]
+    backup = _sp("sp-a1", "Contoso Cloud Backup", BACKUP_APP_ID, enabled=True)
+    assert json.loads(_output(tmp_path, "json").read_text(encoding="utf-8")) == {
         TENANT_A: [{**backup, "tags": ["WindowsAzureActiveDirectoryApp"]}],
         TENANT_B: [],
     }
@@ -509,6 +572,39 @@ def test_sp_enabled_disable_goes_on_after_a_tenant_error(
     assert rows[1][3] == "disabled"
     assert [(bearer_tenant(p), p.url.path) for p in patches] == [
         (TENANT_B, "/v1.0/servicePrincipals/sp-b1")
+    ]
+
+
+def test_sp_enabled_delete_goes_on_after_a_tenant_refuses_one(
+    fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, sp_enabled: Any, tmp_path: Path
+) -> None:
+    _delete(monkeypatch, sp_enabled)
+    changes: list[httpx.Request] = []
+    apps = {
+        TENANT_A: [
+            _sp("sp-a1", "Contoso Cloud Backup", BACKUP_APP_ID, enabled=True),
+            _sp("sp-a2", "Reporter", REPORTER_APP_ID, enabled=True),
+        ],
+        TENANT_B: [_sp("sp-b1", "Contoso Cloud Backup", BACKUP_APP_ID, enabled=True)],
+    }
+    transport = _sp_services(apps, changes)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        # Alpha refuses to delete its first match, as Graph does an app it will not let go.
+        if request.method == "DELETE" and request.url.path.endswith("/sp-a1"):
+            error = {"code": "Authorization_RequestDenied", "message": "Insufficient privileges."}
+            return httpx.Response(403, json={"error": error})
+        return transport.handle_request(request)
+
+    assert _run_all(sp_enabled, httpx.MockTransport(handler)) == 1
+
+    # The refusal ends Alpha's run, so its other match stays; beta corp's is still deleted.
+    assert [(bearer_tenant(r), r.url.path) for r in changes] == [
+        (TENANT_B, "/v1.0/servicePrincipals/sp-b1")
+    ]
+    assert _sheets(_output(tmp_path))["Tenants"][1:] == [
+        ("Alpha", "error", TENANT_A, None),
+        ("beta corp", "ok", TENANT_B, "deleted"),
     ]
 
 
