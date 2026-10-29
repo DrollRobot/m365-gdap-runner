@@ -888,7 +888,9 @@ def test_sign_in_logs_workbook_has_the_filter_title_and_a_table_below_it(
     # A theme scheme would make Excel show the theme's font, Calibri, in Consolas's place.
     assert {cell.font.scheme for row in sheet.iter_rows() for cell in row} == {None}
     assert sheet.column_dimensions["B"].width >= len(TENANT_A) + 2
-    assert [str(cells) for cells in sheet.merged_cells.ranges] == ["A1:E1"]
+    # The title is in A1 alone, and runs on across B1:E1, which stay empty.
+    assert not sheet.merged_cells.ranges
+    assert [cell.value for cell in sheet[1][1:]] == [None] * 4
     assert list(sheet.iter_rows(min_row=3, values_only=True)) == [
         ("Alpha", TENANT_A, "ok", 2, None),
         ("beta corp", TENANT_B, "auth_failed", None, "AADSTS65001"),
@@ -1123,7 +1125,9 @@ def test_audit_logs_workbook_has_the_filter_title_and_a_table_below_it(
     assert sheet["A1"].value == AUDIT_FILTER
     assert sheet["A1"].font.b
     assert (sheet["A1"].font.sz, sheet["B3"].font.sz) == (20, 11)
-    assert [str(cells) for cells in sheet.merged_cells.ranges] == ["A1:E1"]
+    # The title is in A1 alone, and runs on across B1:E1, which stay empty.
+    assert not sheet.merged_cells.ranges
+    assert [cell.value for cell in sheet[1][1:]] == [None] * 4
     assert list(sheet.iter_rows(min_row=3, values_only=True)) == [
         ("Alpha", TENANT_A, "ok", 2, None),
         ("beta corp", TENANT_B, "auth_failed", None, "AADSTS65001"),

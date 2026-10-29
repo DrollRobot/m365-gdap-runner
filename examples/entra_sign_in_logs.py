@@ -164,7 +164,7 @@ def report(results: list[TenantResult]) -> None:
     with xlsxwriter.Workbook(data, options) as workbook:
         sheet = workbook.add_worksheet("Tenants")
         title = workbook.add_format({"bold": True, "font_size": TITLE_FONT_SIZE})
-        sheet.merge_range(0, 0, 0, len(COLUMNS) - 1, FILTER, title)
+        sheet.write(0, 0, FILTER, title)
         sheet.add_table(
             1,
             0,
@@ -178,7 +178,7 @@ def report(results: list[TenantResult]) -> None:
             },
         )
         sheet.freeze_panes(2, 0)
-        # The title row spans the table, so it is left out of the widths.
+        # The title runs on across the empty cells to its right, so it is left out of the widths.
         for number, column in enumerate(zip(COLUMNS, *rows, strict=True)):
             longest = max(len(str(value)) for value in column if value is not None)
             sheet.set_column(number, number, min(longest + 2, MAX_COLUMN_WIDTH))
