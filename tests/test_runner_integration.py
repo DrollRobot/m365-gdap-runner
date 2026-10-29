@@ -735,7 +735,7 @@ def _sign_in(number: int) -> dict[str, Any]:
 
 
 def _sign_in_services(
-    sign_ins: dict[str, list[dict[str, Any]]], reads: list[httpx.Request], version: str = "v1.0"
+    sign_ins: dict[str, list[dict[str, Any]]], reads: list[httpx.Request], version: str = "beta"
 ) -> httpx.MockTransport:
     """Fake Graph holding *sign_ins* per tenant under *version*, recording every read of them.
 
@@ -819,23 +819,27 @@ def test_sign_in_logs_writes_json_per_tenant_with_matches_and_a_count_workbook(
         (TENANT_B, SIGN_IN_FILTER),
     ]
     assert len(reads) == 4
+    # Beta unless --v1 says otherwise.
+    assert {(r.url.host, r.url.path) for r in reads} == {
+        ("graph.microsoft.com", "/beta/auditLogs/signIns")
+    }
     assert sorted(
         r.getMessage() for r in caplog.records if r.filename == ENTRA_SIGN_IN_LOGS.name
     ) == [f"3 sign-ins match; wrote {alpha_json}", "No sign-ins match"]
 
 
-def test_sign_in_logs_beta_reads_the_beta_endpoint(
+def test_sign_in_logs_v1_reads_the_v1_endpoint(
     fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, sign_in_logs: Any, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(sign_in_logs, "BETA", True)
+    monkeypatch.setattr(sign_in_logs, "V1", True)
     reads: list[httpx.Request] = []
-    transport = _sign_in_services({TENANT_B: [_sign_in(1)]}, reads, version="beta")
+    transport = _sign_in_services({TENANT_B: [_sign_in(1)]}, reads, version="v1.0")
 
     assert _run_all(sign_in_logs, transport) == 0
 
     assert [(bearer_tenant(r), r.url.host, r.url.path) for r in reads] == [
-        (TENANT_A, "graph.microsoft.com", "/beta/auditLogs/signIns"),
-        (TENANT_B, "graph.microsoft.com", "/beta/auditLogs/signIns"),
+        (TENANT_A, "graph.microsoft.com", "/v1.0/auditLogs/signIns"),
+        (TENANT_B, "graph.microsoft.com", "/v1.0/auditLogs/signIns"),
     ]
     beta_json = _sign_in_output(tmp_path, "beta_corp")
     assert json.loads(beta_json.read_text(encoding="utf-8")) == [_sign_in(1)]
@@ -851,7 +855,7 @@ def test_sign_in_logs_report_goes_on_after_a_tenant_error(
     held = _sign_in_services({TENANT_B: [_sign_in(1)]}, reads)
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/v1.0/auditLogs/signIns" and bearer_tenant(request) == TENANT_A:
+        if request.url.path == "/beta/auditLogs/signIns" and bearer_tenant(request) == TENANT_A:
             error = {
                 "code": "Authentication_RequestFromNonPremiumTenantOrB2CTenant",
                 "message": "Neither tenant is B2C or tenant doesn't have premium license",
@@ -969,7 +973,7 @@ def _directory_audit(number: int) -> dict[str, Any]:
 
 
 def _directory_audit_services(
-    events: dict[str, list[dict[str, Any]]], reads: list[httpx.Request], version: str = "v1.0"
+    events: dict[str, list[dict[str, Any]]], reads: list[httpx.Request], version: str = "beta"
 ) -> httpx.MockTransport:
     """Fake Graph holding *events* per tenant under *version*, recording every read of them.
 
@@ -1053,23 +1057,27 @@ def test_audit_logs_writes_json_per_tenant_with_matches_and_a_count_workbook(
         (TENANT_B, AUDIT_FILTER),
     ]
     assert len(reads) == 4
+    # Beta unless --v1 says otherwise.
+    assert {(r.url.host, r.url.path) for r in reads} == {
+        ("graph.microsoft.com", "/beta/auditLogs/directoryAudits")
+    }
     assert sorted(
         r.getMessage() for r in caplog.records if r.filename == ENTRA_AUDIT_LOGS.name
     ) == [f"3 audit events match; wrote {alpha_json}", "No audit events match"]
 
 
-def test_audit_logs_beta_reads_the_beta_endpoint(
+def test_audit_logs_v1_reads_the_v1_endpoint(
     fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, audit_logs: Any, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(audit_logs, "BETA", True)
+    monkeypatch.setattr(audit_logs, "V1", True)
     reads: list[httpx.Request] = []
-    transport = _directory_audit_services({TENANT_B: [_directory_audit(1)]}, reads, "beta")
+    transport = _directory_audit_services({TENANT_B: [_directory_audit(1)]}, reads, "v1.0")
 
     assert _run_all(audit_logs, transport) == 0
 
     assert [(bearer_tenant(r), r.url.host, r.url.path) for r in reads] == [
-        (TENANT_A, "graph.microsoft.com", "/beta/auditLogs/directoryAudits"),
-        (TENANT_B, "graph.microsoft.com", "/beta/auditLogs/directoryAudits"),
+        (TENANT_A, "graph.microsoft.com", "/v1.0/auditLogs/directoryAudits"),
+        (TENANT_B, "graph.microsoft.com", "/v1.0/auditLogs/directoryAudits"),
     ]
     beta_json = _audit_logs_output(tmp_path, "beta_corp")
     assert json.loads(beta_json.read_text(encoding="utf-8")) == [_directory_audit(1)]
@@ -1085,7 +1093,7 @@ def test_audit_logs_report_goes_on_after_a_tenant_error(
     held = _directory_audit_services({TENANT_B: [_directory_audit(1)]}, reads)
 
     def handler(request: httpx.Request) -> httpx.Response:
-        path = "/v1.0/auditLogs/directoryAudits"
+        path = "/beta/auditLogs/directoryAudits"
         if request.url.path == path and bearer_tenant(request) == TENANT_A:
             error = {
                 "code": "Authentication_RequestFromUnsupportedUserRole",

@@ -7,11 +7,12 @@
 # ///
 """Example script: the Entra sign-in logs that match a filter, in each tenant.
 
-Reads ``/auditLogs/signIns`` with the OData ``$filter`` given. ``--beta`` reads the beta
-endpoint::
+Reads ``/auditLogs/signIns`` from Graph's beta endpoint with the OData ``$filter`` given.
+``--v1`` reads v1.0 instead::
 
     uv run entra_sign_in_logs.py "userPrincipalName eq 'admin@contoso.com'" --include pilot
-    uv run entra_sign_in_logs.py "signInEventTypes/any(t: t eq 'nonInteractiveUser')" --beta
+    uv run entra_sign_in_logs.py "signInEventTypes/any(t: t eq 'nonInteractiveUser')"
+    uv run entra_sign_in_logs.py "userPrincipalName eq 'admin@contoso.com'" --v1
 
 Writes one JSON file per tenant with matches, and one workbook of match counts per tenant
 with the filter in its title row, in the current folder or ``--out``. A file never replaces
@@ -21,7 +22,7 @@ Needs ``AuditLog.Read.All``, a GDAP role such as Reports Reader, and Entra ID P1
 
 Common filters. Text in single quotes, dates and numbers bare, joined with ``and``/``or``::
 
-    # Sign-in type (beta). Without one, only interactive user sign-ins return.
+    # Sign-in type (not with --v1). Without one, only interactive user sign-ins return.
     signInEventTypes/any(t: t eq 'interactiveUser')
     signInEventTypes/any(t: t eq 'nonInteractiveUser')
     signInEventTypes/any(t: t eq 'servicePrincipal')
@@ -41,10 +42,10 @@ Common filters. Text in single quotes, dates and numbers bare, joined with ``and
     ipAddress eq '203.0.113.10'
     startsWith(ipAddress, '203.0.113.')
 
-    # Autonomous system number (beta; not in Microsoft's docs as filterable).
+    # Autonomous system number (not with --v1; not in Microsoft's docs as filterable).
     autonomousSystemNumber eq 64500
 
-    # User agent (beta): eq or startsWith.
+    # User agent (not with --v1): eq or startsWith.
     startsWith(userAgent, 'python-requests')
 
 Microsoft's docs: listing sign-ins, sign-in properties and their operators (beta, v1.0),
@@ -86,8 +87,8 @@ CONTINUE_ON_ERROR = True
 # The OData filter sent as ``$filter``. The command line sets it before the run.
 FILTER = ""
 
-# Read Graph's beta endpoint instead of v1.0. ``--beta`` sets it before the run.
-BETA = False
+# Read Graph's v1.0 endpoint instead of beta. ``--v1`` sets it before the run.
+V1 = False
 
 # Where the JSON files and the workbook go: the current folder. ``--out`` replaces it.
 OUT_DIR = Path()
@@ -189,7 +190,7 @@ def report(results: list[TenantResult]) -> None:
 
 
 def _collection(ctx: TenantContext) -> str:
-    """Return the sign-ins collection to read: v1.0 by its path, beta by its whole URL.
+    """Return the sign-ins collection to read: beta by its whole URL, v1.0 by its path.
 
     ``ctx.graph`` sends a path to v1.0, and an absolute URL on its own host as it is.
 
@@ -197,11 +198,11 @@ def _collection(ctx: TenantContext) -> str:
         ctx: The tenant context, for the Graph address of the tenant's cloud.
 
     Returns:
-        ``/auditLogs/signIns``, or with ``--beta`` the beta collection's URL.
+        The beta collection's URL, or with ``--v1`` ``/auditLogs/signIns``.
     """
-    if BETA:
-        return f"{ctx.auth.tenant.cloud.graph}/beta/auditLogs/signIns"
-    return "/auditLogs/signIns"
+    if V1:
+        return "/auditLogs/signIns"
+    return f"{ctx.auth.tenant.cloud.graph}/beta/auditLogs/signIns"
 
 
 def _create(stem: str, suffix: str) -> tuple[Path, BinaryIO]:
@@ -266,9 +267,9 @@ if __name__ == "__main__":
         "\"userPrincipalName eq 'admin@contoso.com'\".",
     )
     parser.add_argument(
-        "--beta",
+        "--v1",
         action="store_true",
-        help="Read Graph's beta endpoint instead of v1.0.",
+        help="Read Graph's v1.0 endpoint instead of beta.",
     )
     parser.add_argument(
         "--out",
@@ -280,6 +281,6 @@ if __name__ == "__main__":
     add_arguments(parser)
     args = parser.parse_args()
     FILTER = args.filter
-    BETA = args.beta
+    V1 = args.v1
     OUT_DIR = args.out
     raise SystemExit(main(__name__, args))

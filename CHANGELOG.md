@@ -135,8 +135,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   them at sign-in, adding them to the app's grant where it can and asking the tenant's own
   account to consent elsewhere; `--export-json` and `--import-json` save and reload a run),
   `examples/entra_sign_in_logs.py` (Graph; the Entra sign-in logs that match the OData
-  filter given, from v1.0 or with `--beta` the beta endpoint, as one JSON file per tenant
-  with matches and one Excel workbook counting them per tenant, the filter in its title row),
+  filter given, from the beta endpoint or with `--v1` v1.0, as one JSON file per tenant with
+  matches and one Excel workbook counting them per tenant, the filter in its title row),
   and `examples/entra_audit_logs.py` (Graph; the same for the Entra audit logs, which, unlike
   the sign-in logs, a tenant without Entra ID P1 or P2 can read).
 - Supports Python 3.11 and newer. CI tests every supported version, 3.11 through 3.14, on

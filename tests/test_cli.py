@@ -512,7 +512,7 @@ def test_runs_the_graph_example_and_its_report(
     monkeypatch.setattr(ENTRA_AUDIT_LOGS, "FILTER", "result eq 'success'")
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/v1.0/auditLogs/directoryAudits":
+        if request.url.path == "/beta/auditLogs/directoryAudits":
             event = {"id": f"da-{bearer_tenant(request)}", "result": "success"}
             return httpx.Response(200, json={"value": [event]})
         return fake_services(request)

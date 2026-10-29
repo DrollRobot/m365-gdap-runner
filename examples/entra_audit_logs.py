@@ -7,16 +7,15 @@
 # ///
 """Example script: the Entra audit logs that match a filter, in each tenant.
 
-Reads ``/auditLogs/directoryAudits`` with the OData ``$filter`` given on the command line, so
-one script answers any question the audit log can::
+Reads ``/auditLogs/directoryAudits`` from Graph's beta endpoint with the OData ``$filter``
+given on the command line, so one script answers any question the audit log can::
 
     uv run entra_audit_logs.py "activityDisplayName eq 'Add member to role'" --include pilot
 
-``--beta`` reads Graph's beta endpoint instead of v1.0. Its audit events have one property
-v1.0 leaves out, ``userAgent``, which Microsoft's reference doesn't list as one to filter
-on::
+``--v1`` reads v1.0 instead. Its audit events leave out one property beta has, ``userAgent``,
+which Microsoft's reference doesn't list as one to filter on::
 
-    uv run entra_audit_logs.py "activityDateTime ge 2026-10-01T00:00:00Z" --beta
+    uv run entra_audit_logs.py "activityDateTime ge 2026-10-01T00:00:00Z" --v1
 
 Each tenant with matches gets one JSON file of its audit events, whole, as Graph returns
 them. After the last tenant, one workbook counts the matches in every tenant, failed ones
@@ -147,8 +146,8 @@ CONTINUE_ON_ERROR = True
 # The OData filter sent as ``$filter``. The command line sets it before the run.
 FILTER = ""
 
-# Read Graph's beta endpoint instead of v1.0. ``--beta`` sets it before the run.
-BETA = False
+# Read Graph's v1.0 endpoint instead of beta. ``--v1`` sets it before the run.
+V1 = False
 
 # Where the JSON files and the workbook go: the current folder. ``--out`` replaces it.
 OUT_DIR = Path()
@@ -250,7 +249,7 @@ def report(results: list[TenantResult]) -> None:
 
 
 def _collection(ctx: TenantContext) -> str:
-    """Return the audit events collection to read: v1.0 by its path, beta by its whole URL.
+    """Return the audit events collection to read: beta by its whole URL, v1.0 by its path.
 
     ``ctx.graph`` sends a path to v1.0, and an absolute URL on its own host as it is.
 
@@ -258,11 +257,11 @@ def _collection(ctx: TenantContext) -> str:
         ctx: The tenant context, for the Graph address of the tenant's cloud.
 
     Returns:
-        ``/auditLogs/directoryAudits``, or with ``--beta`` the beta collection's URL.
+        The beta collection's URL, or with ``--v1`` ``/auditLogs/directoryAudits``.
     """
-    if BETA:
-        return f"{ctx.auth.tenant.cloud.graph}/beta/auditLogs/directoryAudits"
-    return "/auditLogs/directoryAudits"
+    if V1:
+        return "/auditLogs/directoryAudits"
+    return f"{ctx.auth.tenant.cloud.graph}/beta/auditLogs/directoryAudits"
 
 
 def _create(stem: str, suffix: str) -> tuple[Path, BinaryIO]:
@@ -327,9 +326,9 @@ if __name__ == "__main__":
         "\"activityDisplayName eq 'Add member to role'\".",
     )
     parser.add_argument(
-        "--beta",
+        "--v1",
         action="store_true",
-        help="Read Graph's beta endpoint instead of v1.0.",
+        help="Read Graph's v1.0 endpoint instead of beta.",
     )
     parser.add_argument(
         "--out",
@@ -341,6 +340,6 @@ if __name__ == "__main__":
     add_arguments(parser)
     args = parser.parse_args()
     FILTER = args.filter
-    BETA = args.beta
+    V1 = args.v1
     OUT_DIR = args.out
     raise SystemExit(main(__name__, args))
