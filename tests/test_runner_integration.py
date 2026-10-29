@@ -45,6 +45,7 @@ UNIFIED_AUDIT_LOG = EXAMPLES / "unified_audit_log.py"
 SERVICE_PRINCIPAL_ENABLED = EXAMPLES / "service_principal_enabled.py"
 ENTRA_SIGN_IN_LOGS = EXAMPLES / "entra_sign_in_logs.py"
 ENTRA_AUDIT_LOGS = EXAMPLES / "entra_audit_logs.py"
+APP_SCOPES = EXAMPLES / "app_scopes.py"
 
 
 def _example(path: Path) -> Payload:
@@ -302,6 +303,39 @@ def test_mailbox_audit_summary_lists_the_tenants_that_failed(
     assert table.tableStyleInfo.name == "TableStyleMedium8"
 
 
+def test_mailbox_audit_keeps_an_earlier_runs_workbooks(
+    fake_msal: FakeMsal,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    mailbox_audit_gaps: Any,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv(ENV_PREFIX + "PARTNER_TENANT_ID", PARTNER_TENANT)
+    monkeypatch.setenv(ENV_PREFIX + "USERNAME", USER)
+    monkeypatch.setattr(cli, "configure_logging", lambda verbosity: None)
+    today = datetime.date.today().isoformat()
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    earlier = [
+        reports / f"MailboxAuditGaps_{TENANT_A}_{today}.xlsx",
+        reports / f"MailboxAuditGaps_summary_{today}.xlsx",
+    ]
+    for path in earlier:
+        path.write_bytes(path.name.encode())
+
+    parser = argparse.ArgumentParser()
+    cli.add_arguments(parser)
+    args = parser.parse_args(["--include", "all"])
+    assert cli.main(mailbox_audit_gaps, args, transport=httpx.MockTransport(_audit_services)) == 0
+
+    for path in earlier:
+        assert path.read_bytes() == path.name.encode()
+    alpha, summary = (path.with_name(f"{path.stem}_2.xlsx") for path in earlier)
+    assert capsys.readouterr().out == f"Wrote {summary}\n"
+    # The summary names the workbook the tenant got.
+    assert _sheets(summary)["Tenants"][1][8] == alpha.name
+
+
 # --- unified_audit_log.py --------------------------------------------------------------
 
 
@@ -390,6 +424,22 @@ def test_unified_audit_log_writes_no_workbook_when_no_tenant_ran(
     unified_audit_log.report([])
     assert not (tmp_path / "reports").exists()
     assert capsys.readouterr().out == "No tenants ran; no workbook written.\n"
+
+
+def test_unified_audit_log_keeps_an_earlier_workbook(
+    tmp_path: Path, unified_audit_log: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    results = [TenantResult(Tenant(TENANT_A, "Alpha"), "ok", True)]
+    unified_audit_log.report(results)
+    (first,) = (tmp_path / "reports").iterdir()
+    earlier = first.read_bytes()
+
+    unified_audit_log.report(results)
+
+    second = first.with_name(f"{first.stem}_2.xlsx")
+    assert sorted(p.name for p in (tmp_path / "reports").iterdir()) == [first.name, second.name]
+    assert first.read_bytes() == earlier
+    assert capsys.readouterr().out == f"Wrote {first}\nWrote {second}\n"
 
 
 # --- service_principal_enabled.py --------------------------------------------------------
@@ -598,6 +648,29 @@ def test_sp_enabled_writes_nothing_when_no_tenant_ran(
     sp_enabled.report([])
     assert not (tmp_path / "reports").exists()
     assert capsys.readouterr().out == "No tenants ran; nothing written.\n"
+
+
+def test_sp_enabled_keeps_an_earlier_runs_files(
+    monkeypatch: pytest.MonkeyPatch,
+    sp_enabled: Any,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(sp_enabled, "EXPORT_JSON", True)
+    earlier = [_output(tmp_path), _output(tmp_path, "json")]
+    earlier[0].parent.mkdir(parents=True)
+    for path in earlier:
+        path.write_bytes(path.name.encode())
+    app = _sp("sp-1", "Backup", BACKUP_APP_ID, enabled=True)
+
+    sp_enabled.report([TenantResult(Tenant(TENANT_A, "Alpha"), "ok", [app])])
+
+    for path in earlier:
+        assert path.read_bytes() == path.name.encode()
+    workbook, exported = (path.with_name(f"{path.stem}_2{path.suffix}") for path in earlier)
+    assert capsys.readouterr().out == f"Wrote {workbook}\nWrote {exported}\n"
+    assert json.loads(exported.read_text(encoding="utf-8")) == {TENANT_A: [app]}
+    assert _sheets(workbook)["Tenants"][1] == ("Alpha", "ok", TENANT_A, "enabled")
 
 
 def _refused_in_alpha(transport: httpx.MockTransport) -> httpx.MockTransport:
@@ -828,6 +901,53 @@ def test_sign_in_logs_writes_nothing_when_no_tenant_ran(
     assert capsys.readouterr().out == "No tenants ran; no workbook written.\n"
 
 
+def test_sign_in_logs_keeps_an_earlier_runs_files(
+    fake_msal: FakeMsal,
+    sign_in_logs: Any,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO)
+    earlier_json = _sign_in_output(tmp_path, "Alpha")
+    earlier_workbook = _sign_in_output(tmp_path)
+    earlier_json.parent.mkdir(parents=True)
+    earlier_json.write_bytes(b"earlier sign-ins")
+    earlier_workbook.write_bytes(b"earlier workbook")
+
+    transport = _sign_in_services({TENANT_A: [_sign_in(1)]}, [])
+    assert _run_all(sign_in_logs, transport) == 0
+
+    assert earlier_json.read_bytes() == b"earlier sign-ins"
+    assert earlier_workbook.read_bytes() == b"earlier workbook"
+    new_json = earlier_json.with_name(f"{earlier_json.stem}_2.json")
+    new_workbook = earlier_workbook.with_name(f"{earlier_workbook.stem}_2.xlsx")
+    assert json.loads(new_json.read_text(encoding="utf-8")) == [_sign_in(1)]
+    assert _sheets(new_workbook)["Tenants"][0][0] == SIGN_IN_FILTER
+    assert capsys.readouterr().out == f"Wrote {new_workbook}\n"
+    assert f"1 sign-ins match; wrote {new_json}" in caplog.messages
+
+
+def test_sign_in_logs_numbers_a_file_past_every_name_taken(
+    sign_in_logs: Any, tmp_path: Path
+) -> None:
+    out = tmp_path / "reports"
+    out.mkdir()
+    for name in ("Alpha.json", "Alpha_2.json", "Alpha_4.json"):
+        (out / name).write_bytes(name.encode())
+
+    paths = []
+    for _ in range(3):
+        path, file = sign_in_logs._create("Alpha", ".json")
+        with file:
+            file.write(b"new")
+        paths.append(path.name)
+
+    assert paths == ["Alpha_3.json", "Alpha_5.json", "Alpha_6.json"]
+    for name in ("Alpha.json", "Alpha_2.json", "Alpha_4.json"):
+        assert (out / name).read_bytes() == name.encode()
+
+
 # --- entra_audit_logs.py -----------------------------------------------------------------
 
 AUDIT_FILTER = "activityDisplayName eq 'Add member to role'"
@@ -1008,48 +1128,64 @@ def test_audit_logs_writes_nothing_when_no_tenant_ran(
     assert capsys.readouterr().out == "No tenants ran; no workbook written.\n"
 
 
-def test_sign_in_logs_keeps_an_earlier_runs_files(
-    fake_msal: FakeMsal,
-    sign_in_logs: Any,
+# --- app_scopes.py -----------------------------------------------------------------------
+
+
+@pytest.fixture
+def app_scopes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
+    """The example, checking for two scopes and writing to a temp dir."""
+    module = load_script(APP_SCOPES)
+    monkeypatch.setattr(module, "OUT_DIR", tmp_path / "reports")
+    monkeypatch.setattr(module, "REQUESTED_SCOPES", ["User.Read.All", "Mail.Read"])
+    return module
+
+
+def _app_scopes_results() -> list[TenantResult]:
+    """Return one tenant whose app lacks Mail.Read, and one that failed."""
+    held = {"appId": "app-1", "scopes": ["Policy.Read.All", "User.Read.All"]}
+    return [
+        TenantResult(Tenant(TENANT_A, "Alpha"), "ok", held),
+        TenantResult(Tenant(TENANT_B, "beta corp"), "auth_failed", error="AADSTS65001"),
+    ]
+
+
+def test_app_scopes_workbook_lists_every_tenant(
+    app_scopes: Any, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    app_scopes.report(_app_scopes_results())
+
+    (path,) = (tmp_path / "reports").iterdir()
+    assert path.name == f"AppScopes_{datetime.date.today().isoformat()}.xlsx"
+    assert capsys.readouterr().out == f"Wrote {path}\n"
+    sheet = load_workbook(path)["Tenants"]
+    assert list(sheet.iter_rows(values_only=True)) == [
+        ("Tenant", "Status", "TenantId", "HasScopes", "Missing", "Scopes", "Error"),
+        ("Alpha", "ok", TENANT_A, False, "Mail.Read", "Policy.Read.All User.Read.All", None),
+        ("beta corp", "auth_failed", TENANT_B, None, None, None, "AADSTS65001"),
+    ]
+    assert sheet.freeze_panes == "A2"
+    (table,) = sheet.tables.values()
+    assert table.ref == "A1:G3"
+
+
+def test_app_scopes_keeps_an_earlier_runs_files(
+    app_scopes: Any,
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    caplog.set_level(logging.INFO)
-    earlier_json = _sign_in_output(tmp_path, "Alpha")
-    earlier_workbook = _sign_in_output(tmp_path)
-    earlier_json.parent.mkdir(parents=True)
-    earlier_json.write_bytes(b"earlier sign-ins")
-    earlier_workbook.write_bytes(b"earlier workbook")
+    monkeypatch.setattr(app_scopes, "EXPORT_JSON", True)
+    today = datetime.date.today().isoformat()
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    earlier = [reports / f"AppScopes_{today}.xlsx", reports / f"AppScopes_{today}.json"]
+    for path in earlier:
+        path.write_bytes(path.name.encode())
 
-    transport = _sign_in_services({TENANT_A: [_sign_in(1)]}, [])
-    assert _run_all(sign_in_logs, transport) == 0
+    app_scopes.report(_app_scopes_results())
 
-    assert earlier_json.read_bytes() == b"earlier sign-ins"
-    assert earlier_workbook.read_bytes() == b"earlier workbook"
-    new_json = earlier_json.with_name(f"{earlier_json.stem}_2.json")
-    new_workbook = earlier_workbook.with_name(f"{earlier_workbook.stem}_2.xlsx")
-    assert json.loads(new_json.read_text(encoding="utf-8")) == [_sign_in(1)]
-    assert _sheets(new_workbook)["Tenants"][0][0] == SIGN_IN_FILTER
-    assert capsys.readouterr().out == f"Wrote {new_workbook}\n"
-    assert f"1 sign-ins match; wrote {new_json}" in caplog.messages
-
-
-def test_sign_in_logs_numbers_a_file_past_every_name_taken(
-    sign_in_logs: Any, tmp_path: Path
-) -> None:
-    out = tmp_path / "reports"
-    out.mkdir()
-    for name in ("Alpha.json", "Alpha_2.json", "Alpha_4.json"):
-        (out / name).write_bytes(name.encode())
-
-    paths = []
-    for _ in range(3):
-        path, file = sign_in_logs._create("Alpha", ".json")
-        with file:
-            file.write(b"new")
-        paths.append(path.name)
-
-    assert paths == ["Alpha_3.json", "Alpha_5.json", "Alpha_6.json"]
-    for name in ("Alpha.json", "Alpha_2.json", "Alpha_4.json"):
-        assert (out / name).read_bytes() == name.encode()
+    for path in earlier:
+        assert path.read_bytes() == path.name.encode()
+    workbook, exported = (path.with_name(f"{path.stem}_2{path.suffix}") for path in earlier)
+    assert capsys.readouterr().out == f"Wrote {workbook}\nWrote {exported}\n"
+    assert app_scopes.load_results(exported) == _app_scopes_results()

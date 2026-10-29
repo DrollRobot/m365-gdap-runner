@@ -28,7 +28,9 @@ matched app name.
 Each cell is ``enabled`` or ``disabled`` (after the change, with ``--disable``), or blank
 where the tenant has no such app. Apps that share a name in one tenant share a cell, which
 lists each state they are in. ``--export-json`` also writes the matched service principals,
-whole, as Graph returns them, in one JSON object keyed by tenant ID.
+whole, as Graph returns them, in one JSON object keyed by tenant ID. Neither file
+replaces another: where a name is taken, the file gets the first free ``_2``, ``_3``,
+and so on.
 
 A tenant's error does not stop the others, with or without ``--disable``: a tenant that
 refuses, say for want of a role, is no reason to leave an app enabled in the rest.
@@ -45,7 +47,7 @@ import json
 import re
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
@@ -145,10 +147,10 @@ def report(results: list[TenantResult]) -> None:
         longest = max(len(str(value)) for value in column if value is not None)
         sheet.column_dimensions[get_column_letter(number)].width = min(longest + 2, 80)
 
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
     today = datetime.date.today().isoformat()
-    path = OUT_DIR / f"{FILE_STEM}_{today}.xlsx"
-    workbook.save(path)
+    path, file = _create(f"{FILE_STEM}_{today}", ".xlsx")
+    with file:
+        workbook.save(file)
     print(f"Wrote {path}")
     if EXPORT_JSON:
         exported = {
@@ -156,8 +158,9 @@ def report(results: list[TenantResult]) -> None:
             for result in results
             if isinstance(result.result, list)
         }
-        path = OUT_DIR / f"{FILE_STEM}_{today}.json"
-        path.write_text(json.dumps(exported, indent=2), encoding="utf-8")
+        path, file = _create(f"{FILE_STEM}_{today}", ".json")
+        with file:
+            file.write(json.dumps(exported, indent=2).encode("utf-8"))
         print(f"Wrote {path}")
 
 
@@ -224,6 +227,32 @@ def _state(app: Mapping[str, Any]) -> str:
         treated as enabled, which is the default.
     """
     return "disabled" if app.get("accountEnabled") is False else "enabled"
+
+
+def _create(stem: str, suffix: str) -> tuple[Path, BinaryIO]:
+    """Create a new file in :data:`OUT_DIR`, never one that is already there.
+
+    Each name is created only if it does not exist, so an earlier run's file is never
+    replaced.
+
+    Args:
+        stem: The file name before its suffix, such as ``ServicePrincipalEnabled_2026-10-29``.
+        suffix: The file name's suffix, such as ``.xlsx``.
+
+    Returns:
+        Where the file is, and the file, open for writing bytes. The name is *stem* and
+        *suffix*, or where that is taken, the first free one with ``_2``, ``_3``, and so on
+        between them.
+    """
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    path = OUT_DIR / f"{stem}{suffix}"
+    number = 1
+    while True:
+        try:
+            return path, path.open("xb")
+        except FileExistsError:
+            number += 1
+            path = OUT_DIR / f"{stem}_{number}{suffix}"
 
 
 if __name__ == "__main__":

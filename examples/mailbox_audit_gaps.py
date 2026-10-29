@@ -15,6 +15,9 @@ sheet. ``--out`` is the script's own flag, beside the library's::
 
     uv run mailbox_audit_gaps.py --include pilot --out reports
 
+A workbook never replaces another: where its name is taken, it gets the first free
+``_2``, ``_3``, and so on.
+
 The reference action set per logon type (Admin, Delegate, Owner) is derived from the
 mailboxes still enrolled in Microsoft's managed defaults, then every mailbox that left a
 default set is compared with it. The tenant-wide audit switches and audit bypass associations
@@ -43,7 +46,7 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
@@ -355,7 +358,7 @@ def _text(value: object) -> str:
 
 
 def _save(workbook: Workbook, stem: str) -> Path:
-    """Save a workbook in :data:`OUT_DIR`, named with today's date.
+    """Save a workbook in :data:`OUT_DIR`, named with today's date, never over another file.
 
     Args:
         workbook: The workbook.
@@ -364,10 +367,36 @@ def _save(workbook: Workbook, stem: str) -> Path:
     Returns:
         Where it was saved.
     """
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    path = OUT_DIR / f"{stem}_{datetime.date.today().isoformat()}.xlsx"
-    workbook.save(path)
+    path, file = _create(f"{stem}_{datetime.date.today().isoformat()}", ".xlsx")
+    with file:
+        workbook.save(file)
     return path
+
+
+def _create(stem: str, suffix: str) -> tuple[Path, BinaryIO]:
+    """Create a new file in :data:`OUT_DIR`, never one that is already there.
+
+    Each name is created only if it does not exist, so an earlier run's file is never
+    replaced.
+
+    Args:
+        stem: The file name before its suffix, such as ``MailboxAuditGaps_summary_2026-10-29``.
+        suffix: The file name's suffix, such as ``.xlsx``.
+
+    Returns:
+        Where the file is, and the file, open for writing bytes. The name is *stem* and
+        *suffix*, or where that is taken, the first free one with ``_2``, ``_3``, and so on
+        between them.
+    """
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    path = OUT_DIR / f"{stem}{suffix}"
+    number = 1
+    while True:
+        try:
+            return path, path.open("xb")
+        except FileExistsError:
+            number += 1
+            path = OUT_DIR / f"{stem}_{number}{suffix}"
 
 
 if __name__ == "__main__":
