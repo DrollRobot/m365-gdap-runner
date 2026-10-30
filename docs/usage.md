@@ -57,7 +57,8 @@ The script is checked before any sign-in, so a mistake in it never costs a brows
 
 `run(ctx)` gets a `TenantContext` for the tenant:
 
-- `ctx.tenant`: the tenant, with its `tenant_id`, `display_name` and `cloud`.
+- `ctx.tenant`: the tenant, with its `tenant_id`, `display_name`, `cloud` and `domain`, its
+  `m365_domain` cell in the tenants file.
 - `ctx.graph`: Microsoft Graph.
 - `ctx.exchange`: Exchange Online.
 - `ctx.ipps`: Security & Compliance PowerShell.

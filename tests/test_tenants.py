@@ -369,11 +369,12 @@ def test_load_reports_an_xlsx_that_is_not_a_workbook(tmp_path: Path) -> None:
 
 def test_members_returns_marked_rows_in_file_order(csv_path: Path) -> None:
     tenant_file = TenantFile.load(csv_path)
+    beta = TenantRow(TENANT_B, "beta corp", "", domain="beta.example")
     assert tenant_file.members("patching") == [
-        TenantRow(TENANT_A, "Alpha", "Commercial"),
-        TenantRow(TENANT_B, "beta corp", ""),
+        TenantRow(TENANT_A, "Alpha", "Commercial", domain="alpha.example"),
+        beta,
     ]
-    assert tenant_file.members("pilot") == [TenantRow(TENANT_B, "beta corp", "")]
+    assert tenant_file.members("pilot") == [beta]
 
 
 def test_members_reads_the_optional_username_column(tmp_path: Path) -> None:
@@ -591,6 +592,17 @@ def test_sync_fills_the_blank_cloud_of_every_row_of_a_tenant_looking_it_up_once(
     assert [row["m365_cloud"] for row in tenant_file.rows] == ["USGov", "Commercial", "USGov"]
     # Gamma's rows still agree.
     assert tenant_file.details(GAMMA, default_cloud="Commercial").cloud == "USGov"
+
+
+def test_details_gives_the_domain_its_row_holds(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "t.csv", M365, f"{TENANT_A},Alpha, alpha.example ,", f"{TENANT_C},Gamma,,"
+    )
+    tenant_file = TenantFile.load(path)
+    assert tenant_file.details(ALPHA, default_cloud="Commercial").domain == "alpha.example"
+    assert tenant_file.details(GAMMA, default_cloud="Commercial").domain == ""
+    # A tenant with no row has none either.
+    assert tenant_file.details(BETA, default_cloud="Commercial").domain == ""
 
 
 def test_save_round_trips_other_tools_data_and_appended_rows(csv_path: Path) -> None:
@@ -842,7 +854,7 @@ def test_details_accept_a_tenant_whose_rows_agree(tmp_path: Path) -> None:
         f"{TENANT_C.upper()}, GAMMA ,Gamma.Example,usgov,Admin@gamma.example,true,FALSE",
     )
     assert TenantFile.load(path).details(GAMMA, default_cloud="Commercial") == Tenant(
-        TENANT_C, "Gamma", "USGov", "admin@gamma.example"
+        TENANT_C, "Gamma", "USGov", "admin@gamma.example", domain="gamma.example"
     )
 
 

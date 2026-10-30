@@ -116,6 +116,8 @@ class Tenant:
             sign-in is never tried.
         pw_url: The web page holding *username*'s password, opened with the direct sign-in's
             window; empty for none.
+        domain: The ``m365_domain`` cell of the tenants file. Filled in for a tenant a run
+            selects, where the cell is; empty otherwise.
     """
 
     tenant_id: str
@@ -124,6 +126,7 @@ class Tenant:
     username: str = ""
     gdap: bool = True
     pw_url: str = ""
+    domain: str = ""
 
 
 @dataclass(frozen=True)
@@ -138,6 +141,7 @@ class TenantRow:
         gdap: True when the ``m365_gdap`` cell is TRUE; False when it is FALSE, blank, or the
             column is absent.
         pw_url: The ``m365_pw_url`` cell, or empty when blank or the column is absent.
+        domain: The ``m365_domain`` cell, or empty when blank or the column is absent.
     """
 
     tenant_id: str
@@ -146,6 +150,7 @@ class TenantRow:
     username: str = ""
     gdap: bool = False
     pw_url: str = ""
+    domain: str = ""
 
 
 @dataclass(frozen=True)
@@ -495,8 +500,8 @@ class TenantFile:
             number: The row's number in the spreadsheet, for error messages.
 
         Returns:
-            The row's tenant ID, display name, cloud, username, ``m365_gdap`` and
-            ``m365_pw_url``, stripped; the cloud spelled as azure-auth names it.
+            The row's tenant ID, display name, cloud, username, ``m365_gdap``, ``m365_pw_url``
+            and domain, stripped; the cloud spelled as azure-auth names it.
 
         Raises:
             TenantFileError: If ``m365_cloud`` is filled but names no known cloud,
@@ -534,6 +539,7 @@ class TenantFile:
             row.get(USERNAME_COLUMN, "").strip(),
             gdap=gdap.strip().casefold() in TRUE_VALUES,
             pw_url=pw_url,
+            domain=row.get(DOMAIN_COLUMN, "").strip(),
         )
 
     def extra_tenants(self, gdap: Sequence[Tenant]) -> list[Tenant]:
@@ -555,7 +561,7 @@ class TenantFile:
         return extra
 
     def details(self, tenant: Tenant, *, default_cloud: str) -> Tenant:
-        """Return *tenant* with the cloud, sign-in details and ``m365_gdap`` its row gives.
+        """Return *tenant* with the cloud, domain, sign-in details and ``m365_gdap`` its row gives.
 
         A tenant with more than one row is fine while those rows agree in every column of
         :data:`OWN_COLUMNS`, ignoring case and surrounding spaces. Other columns, groups
@@ -598,6 +604,7 @@ class TenantFile:
             username=found.username,
             gdap=found.gdap,
             pw_url=found.pw_url,
+            domain=found.domain,
         )
 
     def _add_missing_columns(self) -> list[str]:
