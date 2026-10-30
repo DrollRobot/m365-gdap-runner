@@ -15,7 +15,7 @@ Reads ``/auditLogs/signIns`` from Graph's beta endpoint with the OData ``$filter
     uv run entra_sign_in_logs.py "userPrincipalName eq 'admin@contoso.com'" --v1
 
 Writes one JSON file per tenant with matches, and one workbook of match counts per tenant
-with the filter in its title row, in the current folder or ``--out``. A file never replaces
+with the filter in its title row, in the current folder or ``--output``. A file never replaces
 another: where its name is taken, it gets the first free ``_2``, ``_3``, and so on.
 
 Needs ``AuditLog.Read.All``, a GDAP role such as Reports Reader, and Entra ID P1 or P2.
@@ -90,7 +90,7 @@ FILTER = ""
 # Read Graph's v1.0 endpoint instead of beta. ``--v1`` sets it before the run.
 V1 = False
 
-# Where the JSON files and the workbook go: the current folder. ``--out`` replaces it.
+# Where the JSON files and the workbook go: the current folder. ``--output`` replaces it.
 OUT_DIR = Path()
 
 # Output files are named this, then the tenant for a JSON file, then today's date.
@@ -272,7 +272,8 @@ if __name__ == "__main__":
         help="Read Graph's v1.0 endpoint instead of beta.",
     )
     parser.add_argument(
-        "--out",
+        "-o",
+        "--output",
         type=Path,
         default=OUT_DIR,
         metavar="DIR",
@@ -282,5 +283,5 @@ if __name__ == "__main__":
     args = parser.parse_args()
     FILTER = args.filter
     V1 = args.v1
-    OUT_DIR = args.out
+    OUT_DIR = args.output
     raise SystemExit(main(__name__, args))

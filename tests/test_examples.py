@@ -47,6 +47,30 @@ def test_example_header_installs_the_runner_from_a_release(path: Path) -> None:
     assert RUNNER.fullmatch(runner[0]), runner[0]
 
 
+@pytest.mark.parametrize(
+    "path",
+    [path for path in EXAMPLES if "OUT_DIR" in path.read_text(encoding="utf-8")],
+    ids=lambda path: path.name,
+)
+def test_example_that_writes_files_takes_its_folder_as_o_or_output(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], path: Path
+) -> None:
+    monkeypatch.setattr(sys, "argv", [path.name, "--help"])
+    with pytest.raises(SystemExit) as exc:
+        runpy.run_path(str(path), run_name="__main__")
+    assert exc.value.code == 0
+    assert "-o DIR, --output DIR" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "path",
+    [path for path in EXAMPLES if "OUT_DIR" in path.read_text(encoding="utf-8")],
+    ids=lambda path: path.name,
+)
+def test_example_that_writes_files_defaults_to_the_current_folder(path: Path) -> None:
+    assert Path() == load_script(path).OUT_DIR
+
+
 def test_service_principal_pattern_is_case_insensitive_and_rejects_a_bad_regex() -> None:
     module = load_script(ROOT / "examples" / "service_principal_enabled.py")
     assert module.pattern("BACKUP$").search("Contoso Cloud Backup")
@@ -104,8 +128,8 @@ def test_service_principal_refuses_disable_with_delete(
 
 @pytest.mark.parametrize(
     ("flags", "size"),
-    [([], 5000), (["--size", "100"], 100)],
-    ids=["default size", "--size"],
+    [(["--output", "x"], 5000), (["-o", "x", "--size", "100"], 100)],
+    ids=["--output, default size", "-o, --size"],
 )
 def test_message_trace_command_line_takes_the_filter_as_given(
     monkeypatch: pytest.MonkeyPatch, flags: list[str], size: int
@@ -119,7 +143,7 @@ def test_message_trace_command_line_takes_the_filter_as_given(
         return 0
 
     monkeypatch.setattr(m365_gdap_runner, "main", fake_main)
-    monkeypatch.setattr(sys, "argv", ["exchange_message_trace.py", given, "--out", "x", *flags])
+    monkeypatch.setattr(sys, "argv", ["exchange_message_trace.py", given, *flags])
     with pytest.raises(SystemExit) as exc:
         runpy.run_path(str(MESSAGE_TRACE), run_name="__main__")
     assert exc.value.code == 0

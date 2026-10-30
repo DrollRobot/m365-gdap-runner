@@ -9,9 +9,10 @@
 
 ``run()`` reads one tenant's ``UnifiedAuditLogIngestionEnabled`` and warns when it is off.
 After the last tenant, ``report()`` writes one workbook with a row per tenant, failed ones
-included, in the folder ``--out`` names::
+included, in the current folder or ``--output``::
 
-    uv run unified_audit_log.py --include all --out reports
+    uv run unified_audit_log.py --include all
+    uv run unified_audit_log.py --include all --output reports
 
 A workbook never replaces another: where its name is taken, it gets the first free
 ``_2``, ``_3``, and so on.
@@ -41,8 +42,8 @@ CLIENTS = ["exchange"]
 # A report only reads, so one tenant's error is no reason to stop the others.
 CONTINUE_ON_ERROR = True
 
-# Where the workbook goes. ``--out`` replaces it before the run starts.
-OUT_DIR = Path("reports")
+# Where the workbook goes: the current folder. ``--output`` replaces it.
+OUT_DIR = Path()
 
 # The workbook's columns, in order.
 COLUMNS = ["Tenant", "TenantId", "Status", "UnifiedAuditLogIngestionEnabled", "Error"]
@@ -161,13 +162,14 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Is the unified audit log on in each tenant?")
     parser.add_argument(
-        "--out",
+        "-o",
+        "--output",
         type=Path,
         default=OUT_DIR,
         metavar="DIR",
-        help=f"Folder for the workbook (default: {OUT_DIR}).",
+        help="Folder for the workbook (default: the current folder).",
     )
     add_arguments(parser)
     args = parser.parse_args()
-    OUT_DIR = args.out
+    OUT_DIR = args.output
     raise SystemExit(main(__name__, args))

@@ -23,7 +23,7 @@ not take, and the workbook says so: only ``Get-MessageTraceV2`` takes ``Subject`
 ``SubjectFilterType``, and only ``Get-MessageTrace`` takes ``Page``.
 
 Writes one JSON file per tenant with matches, one workbook of match counts per tenant, and one
-workbook of every record from every tenant, in the current folder or ``--out``. Both workbooks
+workbook of every record from every tenant, in the current folder or ``--output``. Both workbooks
 have the filter in their title row. A file never replaces another: where its name is taken, it
 gets the first free ``_2``, ``_3``, and so on.
 
@@ -109,7 +109,7 @@ FILTER = "{}"
 # The most records to ask each tenant for: the most a query returns. ``--size`` replaces it.
 SIZE = 5000
 
-# Where the JSON files and the workbooks go: the current folder. ``--out`` replaces it.
+# Where the JSON files and the workbooks go: the current folder. ``--output`` replaces it.
 OUT_DIR = Path()
 
 # Output files are named this, then the tenant for a JSON file, then today's date.
@@ -354,7 +354,8 @@ if __name__ == "__main__":
         help=f"The most records to read from each tenant, up to 5000 (default: {SIZE}).",
     )
     parser.add_argument(
-        "--out",
+        "-o",
+        "--output",
         type=Path,
         default=OUT_DIR,
         metavar="DIR",
@@ -364,5 +365,5 @@ if __name__ == "__main__":
     args = parser.parse_args()
     FILTER = args.filter
     SIZE = args.size
-    OUT_DIR = args.out
+    OUT_DIR = args.output
     raise SystemExit(main(__name__, args))

@@ -149,7 +149,7 @@ def _ual_services(request: httpx2.Request) -> httpx2.Response:
 
 @pytest.fixture
 def unified_audit_log(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
-    """The example, writing its workbook to a temp dir, as ``--out`` makes it."""
+    """The example, writing its workbook to a temp dir, as ``--output`` makes it."""
     module = load_script(UNIFIED_AUDIT_LOG)
     monkeypatch.setattr(module, "OUT_DIR", tmp_path / "reports")
     return module

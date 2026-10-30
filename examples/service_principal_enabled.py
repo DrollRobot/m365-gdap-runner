@@ -30,7 +30,7 @@ app with Backup in its name; anchor it (``^Contoso Cloud Backup$``) to match one
 exactly. Run without ``--disable`` or ``--delete`` first to see what the patterns match.
 
 Nothing is written while tenants run. After the last, one workbook goes in the current
-folder, or the one ``--out`` names: a row per tenant, failed ones included, and a column per
+folder, or the one ``--output`` names: a row per tenant, failed ones included, and a column per
 matched app name.
 Each cell is ``enabled`` or ``disabled`` (after the change, with ``--disable``), ``deleted``
 with ``--delete``, or blank where the tenant has no such app. Apps that share a name in one
@@ -85,7 +85,7 @@ EXPORT_JSON = False
 # One tenant's error is no reason to skip the others, whether reading, disabling or deleting.
 CONTINUE_ON_ERROR = True
 
-# Where the workbook and JSON go: the current folder. ``--out`` replaces it before the run.
+# Where the workbook and JSON go: the current folder. ``--output`` replaces it before the run.
 OUT_DIR = Path()
 
 # What a match needs from each service principal; ``--export-json`` reads matches whole.
@@ -330,7 +330,8 @@ if __name__ == "__main__":
         help="Also write the matched service principals, whole, keyed by tenant ID.",
     )
     parser.add_argument(
-        "--out",
+        "-o",
+        "--output",
         type=Path,
         default=OUT_DIR,
         metavar="DIR",
@@ -342,7 +343,7 @@ if __name__ == "__main__":
     DISABLE = args.disable
     DELETE = args.delete
     EXPORT_JSON = args.export_json
-    OUT_DIR = args.out
+    OUT_DIR = args.output
     if DISABLE or DELETE:
         SCOPES = ["Application.ReadWrite.All"]
     raise SystemExit(main(__name__, args))

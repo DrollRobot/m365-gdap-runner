@@ -30,7 +30,7 @@ Entra can take about a minute to put newly granted scopes in tokens, so a tenant
 during the run may still show them missing; run the report again to check.
 
 Nothing is written while tenants run. After the last, one workbook goes in the current
-folder, or the one ``--out`` names: a row per tenant, failed ones included, with whether the
+folder, or the one ``--output`` names: a row per tenant, failed ones included, with whether the
 app holds every requested scope, the ones it lacks, every scope it holds, and why a tenant
 failed. ``--export-json`` also writes each tenant's scopes as JSON. ``--import-json`` builds
 the workbook from such a file instead, with no sign-in, and checks it against the scopes
@@ -100,7 +100,7 @@ EXPORT_JSON = False
 # One tenant's error is no reason to skip the others, whether reading or consenting.
 CONTINUE_ON_ERROR = True
 
-# Where the workbook and JSON go: the current folder. ``--out`` replaces it before the run.
+# Where the workbook and JSON go: the current folder. ``--output`` replaces it before the run.
 OUT_DIR = Path()
 
 # Output files are named this, then today's date.
@@ -316,7 +316,8 @@ if __name__ == "__main__":
         help="Build the workbook from a file --export-json wrote, without signing in.",
     )
     parser.add_argument(
-        "--out",
+        "-o",
+        "--output",
         type=Path,
         default=OUT_DIR,
         metavar="DIR",
@@ -327,7 +328,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     REQUESTED_SCOPES = args.scopes
     EXPORT_JSON = args.export_json
-    OUT_DIR = args.out
+    OUT_DIR = args.output
     if args.import_json:
         clashes = ("--write", "--export-json", "--include", "--exclude")
         given = [flag for flag in clashes if getattr(args, flag[2:].replace("-", "_"))]

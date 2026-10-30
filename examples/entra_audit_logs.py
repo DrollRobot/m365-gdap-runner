@@ -20,7 +20,7 @@ which Microsoft's reference doesn't list as one to filter on::
 Each tenant with matches gets one JSON file of its audit events, whole, as Graph returns
 them. After the last tenant, one workbook counts the matches in every tenant, failed ones
 included, under a title row that holds the filter. Both go in the current folder, or the one
-``--out`` names. A file never replaces another: where its name is taken, it gets the first
+``--output`` names. A file never replaces another: where its name is taken, it gets the first
 free ``_2``, ``_3``, and so on.
 
 Reading the audit log asks each tenant for ``AuditLog.Read.All``, and needs a GDAP role
@@ -149,7 +149,7 @@ FILTER = ""
 # Read Graph's v1.0 endpoint instead of beta. ``--v1`` sets it before the run.
 V1 = False
 
-# Where the JSON files and the workbook go: the current folder. ``--out`` replaces it.
+# Where the JSON files and the workbook go: the current folder. ``--output`` replaces it.
 OUT_DIR = Path()
 
 # Output files are named this, then the tenant for a JSON file, then today's date.
@@ -331,7 +331,8 @@ if __name__ == "__main__":
         help="Read Graph's v1.0 endpoint instead of beta.",
     )
     parser.add_argument(
-        "--out",
+        "-o",
+        "--output",
         type=Path,
         default=OUT_DIR,
         metavar="DIR",
@@ -341,5 +342,5 @@ if __name__ == "__main__":
     args = parser.parse_args()
     FILTER = args.filter
     V1 = args.v1
-    OUT_DIR = args.out
+    OUT_DIR = args.output
     raise SystemExit(main(__name__, args))
