@@ -10,9 +10,10 @@ from itertools import count
 from pathlib import Path
 from typing import Any
 
-import httpx
+import azure_auth
+import httpx2
 import pytest
-from azure_auth import AuthContext, AuthError, ConsentRequired, TenantNotFound
+from azure_auth import AuthContext, AuthError, ConsentRequired, NetworkError, TenantNotFound
 from azure_auth.auth import cache as azure_auth_cache
 from azure_auth.constants import (
     AZURE_POWERSHELL_CLIENT_ID,
@@ -49,7 +50,7 @@ pytestmark = pytest.mark.integration
 PARTNER_SCOPE = "https://graph.microsoft.com/DelegatedAdminRelationship.Read.All"
 # What the log line adds for a direct sign-in that shows the consent screen.
 TICK = '; tick "Consent on behalf of your organization" in the consent screen'
-TRANSPORT = httpx.MockTransport(fake_services)
+TRANSPORT = httpx2.MockTransport(fake_services)
 
 
 def test_login_signs_in_once_per_client_id(fake_msal: FakeMsal) -> None:
@@ -104,17 +105,17 @@ def test_login_rejects_unknown_client(fake_msal: FakeMsal) -> None:
 
 
 def test_list_tenants_dedupes_sorts_and_names_nameless_by_id(fake_msal: FakeMsal) -> None:
-    seen: list[httpx.Request] = []
+    seen: list[httpx2.Request] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         seen.append(request)
         body = customers_body(
             (TENANT_B, "beta corp"), (TENANT_A, "Alpha"), (TENANT_B.upper(), "beta corp")
         )
         body["value"].append({"tenantId": TENANT_C})
-        return httpx.Response(200, json=body)
+        return httpx2.Response(200, json=body)
 
-    session = PartnerSession(make_settings(), transport=httpx.MockTransport(handler))
+    session = PartnerSession(make_settings(), transport=httpx2.MockTransport(handler))
     session.login()
     tenants = session.list_tenants()
 
@@ -206,7 +207,7 @@ def test_cloud_of_finds_a_tenant_by_discovery(fake_msal: FakeMsal) -> None:
     "error",
     [
         TenantNotFound("No tenant", name=TENANT_A),
-        httpx.ConnectError("no route to login.microsoftonline.com"),
+        NetworkError("GET https://login.microsoftonline.com failed: ConnectError: no route"),
     ],
 )
 def test_cloud_of_is_blank_when_discovery_fails(
@@ -217,6 +218,23 @@ def test_cloud_of_is_blank_when_discovery_fails(
 
     session = PartnerSession(make_settings())
     monkeypatch.setattr("azure_auth.Tenant.lookup", failing)
+    assert session.cloud_of(TENANT_A) == ""
+
+
+# azure-auth's own lookup, before fake_msal replaces it.
+REAL_LOOKUP = azure_auth.Tenant.lookup
+
+
+@pytest.mark.regression
+def test_cloud_of_is_blank_when_no_sign_in_host_answers(
+    fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # azure-auth 0.10.0 raises NetworkError here, where 0.9.1 raised AuthError.
+    def unreachable(request: httpx2.Request) -> httpx2.Response:
+        raise httpx2.ConnectError("no route", request=request)
+
+    session = PartnerSession(make_settings(), transport=httpx2.MockTransport(unreachable))
+    monkeypatch.setattr("azure_auth.Tenant.lookup", REAL_LOOKUP)
     assert session.cloud_of(TENANT_A) == ""
 
 

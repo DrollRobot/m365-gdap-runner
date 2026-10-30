@@ -24,7 +24,7 @@ from types import ModuleType
 from typing import Any
 
 import azure_auth
-import httpx
+import httpx2
 from azure_auth.clouds import COMMERCIAL, Cloud
 
 from m365_gdap_runner.config import Settings
@@ -130,7 +130,7 @@ def fake_access(tenant_id: str, scp: str | None = None) -> str:
     return f"{_b64({'alg': 'none'})}.{_b64(claims)}.signature"
 
 
-def bearer_tenant(request: httpx.Request) -> str:
+def bearer_tenant(request: httpx2.Request) -> str:
     """Return the tenant a request's fake bearer token was issued for."""
     token = request.headers["Authorization"].removeprefix("Bearer ")
     payload = token.split(".")[1]
@@ -376,26 +376,26 @@ def customers_body(*customers: tuple[str, str]) -> dict[str, Any]:
     }
 
 
-def fake_services(request: httpx.Request) -> httpx.Response:
+def fake_services(request: httpx2.Request) -> httpx2.Response:
     """Fake Graph and Exchange: GDAP customers, one licensed user, and the org config."""
     path = request.url.path
     tenant = bearer_tenant(request)
     if path == "/v1.0/tenantRelationships/delegatedAdminCustomers":
-        return httpx.Response(200, json=customers_body(*CUSTOMERS))
+        return httpx2.Response(200, json=customers_body(*CUSTOMERS))
     if path == "/v1.0/users":
         user = {
             "userPrincipalName": f"admin@{tenant}.example",
             "displayName": "Admin",
             "assignedLicenses": [{"skuId": "sku-2"}, {"skuId": "sku-1"}],
         }
-        return httpx.Response(200, json={"value": [user]})
+        return httpx2.Response(200, json={"value": [user]})
     if path == f"/adminapi/beta/{tenant}/InvokeCommand":
         cmdlet = json.loads(request.content)["CmdletInput"]["CmdletName"]
         if cmdlet == "Get-OrganizationConfig":
             config = {"Name": f"{tenant}.onmicrosoft.com", "AuditDisabled": tenant == TENANT_B}
-            return httpx.Response(200, json={"value": [config]})
-        return httpx.Response(403, json={"error": {"code": "Forbidden", "message": cmdlet}})
-    return httpx.Response(404, json={"error": {"code": "NotFound", "message": path}})
+            return httpx2.Response(200, json={"value": [config]})
+        return httpx2.Response(403, json={"error": {"code": "Forbidden", "message": cmdlet}})
+    return httpx2.Response(404, json={"error": {"code": "NotFound", "message": path}})
 
 
 # --- runner fakes ------------------------------------------------------------------------

@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-import httpx
+import httpx2
 import pytest
 from azure_auth.constants import EXCHANGE_POWERSHELL_CLIENT_ID, GRAPH_CLI_CLIENT_ID
 from openpyxl import load_workbook
@@ -63,7 +63,7 @@ def test_graph_example_runs_through_session_and_azure_auth(
     fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     fake_msal.tenant_errors[TENANT_B] = CONSENT_REQUIRED
-    reads: list[httpx.Request] = []
+    reads: list[httpx2.Request] = []
     transport = _directory_audit_services({TENANT_A: [_directory_audit(1)]}, reads)
 
     module = load_script(ENTRA_AUDIT_LOGS)
@@ -92,7 +92,7 @@ def test_exchange_example_signs_in_to_exchange_and_runs_the_cmdlet(
     payload = _example(AUDIT_DISABLED)
     assert (payload.clients, payload.scopes, payload.report) == (("exchange",), (), None)
 
-    session = PartnerSession(make_settings(), transport=httpx.MockTransport(fake_services))
+    session = PartnerSession(make_settings(), transport=httpx2.MockTransport(fake_services))
     session.login(payload.clients)
     tenants = session.list_tenants()
     ready = session.check_access(tenants, clients=payload.clients)
@@ -135,7 +135,7 @@ def _assert_consolas(path: Path) -> None:
 # --- unified_audit_log.py --------------------------------------------------------------
 
 
-def _ual_services(request: httpx.Request) -> httpx.Response:
+def _ual_services(request: httpx2.Request) -> httpx2.Response:
     """Fake Exchange for the unified audit log example: on in tenant A, off in tenant B."""
     tenant = bearer_tenant(request)
     if request.url.path != f"/adminapi/beta/{tenant}/InvokeCommand":
@@ -143,7 +143,7 @@ def _ual_services(request: httpx.Request) -> httpx.Response:
     cmdlet = json.loads(request.content)["CmdletInput"]["CmdletName"]
     assert cmdlet == "Get-AdminAuditLogConfig"
     config = {"UnifiedAuditLogIngestionEnabled": tenant == TENANT_A}
-    return httpx.Response(200, json={"value": [config]})
+    return httpx2.Response(200, json={"value": [config]})
 
 
 @pytest.fixture
@@ -170,7 +170,7 @@ def test_unified_audit_log_example_writes_one_workbook_for_every_tenant(
     parser = argparse.ArgumentParser()
     cli.add_arguments(parser)
     args = parser.parse_args(["--include", "all"])
-    assert cli.main(unified_audit_log, args, transport=httpx.MockTransport(_ual_services)) == 0
+    assert cli.main(unified_audit_log, args, transport=httpx2.MockTransport(_ual_services)) == 0
 
     (path,) = (tmp_path / "reports").iterdir()
     assert path.name == f"UnifiedAuditLog_{datetime.date.today().isoformat()}.xlsx"
@@ -252,8 +252,8 @@ def _sp(object_id: str, name: str, app_id: str, *, enabled: bool) -> dict[str, A
 
 
 def _sp_services(
-    apps: dict[str, list[dict[str, Any]]], changes: list[httpx.Request]
-) -> httpx.MockTransport:
+    apps: dict[str, list[dict[str, Any]]], changes: list[httpx2.Request]
+) -> httpx2.MockTransport:
     """Fake Graph holding *apps* per tenant, recording every PATCH and DELETE it is sent.
 
     A read of one service principal returns it whole: as listed, plus ``tags``, which the list
@@ -261,26 +261,26 @@ def _sp_services(
     DELETE removes the app, so a later read of it fails.
     """
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         held = apps.get(bearer_tenant(request), [])
         path = request.url.path
         if path == "/v1.0/servicePrincipals":
             assert request.url.params["$select"] == "id,appId,displayName,accountEnabled"
             assert request.url.params["$top"] == "999"
-            return httpx.Response(200, json={"value": held})
+            return httpx2.Response(200, json={"value": held})
         if path.startswith("/v1.0/servicePrincipals/"):
             if request.method == "PATCH":
                 changes.append(request)
-                return httpx.Response(204)
+                return httpx2.Response(204)
             (app,) = [app for app in held if app["id"] == path.rsplit("/", 1)[1]]
             if request.method == "DELETE":
                 changes.append(request)
                 held.remove(app)
-                return httpx.Response(204)
-            return httpx.Response(200, json={**app, "tags": ["WindowsAzureActiveDirectoryApp"]})
+                return httpx2.Response(204)
+            return httpx2.Response(200, json={**app, "tags": ["WindowsAzureActiveDirectoryApp"]})
         return fake_services(request)
 
-    return httpx.MockTransport(handler)
+    return httpx2.MockTransport(handler)
 
 
 @pytest.fixture
@@ -311,7 +311,7 @@ def _delete(monkeypatch: pytest.MonkeyPatch, module: Any) -> None:
     monkeypatch.setattr(module, "SCOPES", ["Application.ReadWrite.All"])
 
 
-def _run_all(module: Any, transport: httpx.MockTransport) -> int:
+def _run_all(module: Any, transport: httpx2.MockTransport) -> int:
     parser = argparse.ArgumentParser()
     cli.add_arguments(parser)
     return cli.main(module, parser.parse_args(["--include", "all"]), transport=transport)
@@ -331,7 +331,7 @@ def test_sp_enabled_reports_every_match_and_changes_nothing(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     caplog.set_level(logging.INFO)
-    changes: list[httpx.Request] = []
+    changes: list[httpx2.Request] = []
     apps = {
         TENANT_A: [
             _sp("sp-a1", "Contoso Cloud Backup", BACKUP_APP_ID, enabled=True),
@@ -367,7 +367,7 @@ def test_sp_enabled_disable_turns_sign_in_off_where_it_is_on(
     fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, sp_enabled: Any, tmp_path: Path
 ) -> None:
     _disable(monkeypatch, sp_enabled)
-    patches: list[httpx.Request] = []
+    patches: list[httpx2.Request] = []
     apps = {
         TENANT_A: [
             _sp("sp-a1", "Contoso Cloud Backup", BACKUP_APP_ID, enabled=True),
@@ -425,7 +425,7 @@ def test_sp_enabled_delete_deletes_every_match(
     fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, sp_enabled: Any, tmp_path: Path
 ) -> None:
     _delete(monkeypatch, sp_enabled)
-    changes: list[httpx.Request] = []
+    changes: list[httpx2.Request] = []
     apps = {
         TENANT_A: [
             _sp("sp-a1", "Contoso Cloud Backup", BACKUP_APP_ID, enabled=True),
@@ -459,7 +459,7 @@ def test_sp_enabled_delete_exports_each_match_as_it_was_before(
 ) -> None:
     monkeypatch.setattr(sp_enabled, "EXPORT_JSON", True)
     _delete(monkeypatch, sp_enabled)
-    changes: list[httpx.Request] = []
+    changes: list[httpx2.Request] = []
     apps = {TENANT_A: [_sp("sp-a1", "Contoso Cloud Backup", BACKUP_APP_ID, enabled=True)]}
 
     # The fake fails a read of a deleted app, so this passes only if each is read first.
@@ -534,16 +534,16 @@ def test_sp_enabled_keeps_an_earlier_runs_files(
     _assert_consolas(workbook)
 
 
-def _refused_in_alpha(transport: httpx.MockTransport) -> httpx.MockTransport:
+def _refused_in_alpha(transport: httpx2.MockTransport) -> httpx2.MockTransport:
     """Wrap a fake Graph so Alpha refuses the app read, as without a role that may read it."""
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         if request.url.path == "/v1.0/servicePrincipals" and bearer_tenant(request) == TENANT_A:
             error = {"code": "Authorization_RequestDenied", "message": "Insufficient privileges."}
-            return httpx.Response(403, json={"error": error})
+            return httpx2.Response(403, json={"error": error})
         return transport.handle_request(request)
 
-    return httpx.MockTransport(handler)
+    return httpx2.MockTransport(handler)
 
 
 def test_sp_enabled_report_goes_on_after_a_tenant_error(
@@ -562,7 +562,7 @@ def test_sp_enabled_disable_goes_on_after_a_tenant_error(
     fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, sp_enabled: Any, tmp_path: Path
 ) -> None:
     _disable(monkeypatch, sp_enabled)
-    patches: list[httpx.Request] = []
+    patches: list[httpx2.Request] = []
     apps = {TENANT_B: [_sp("sp-b1", "Contoso Cloud Backup", BACKUP_APP_ID, enabled=True)]}
 
     assert _run_all(sp_enabled, _refused_in_alpha(_sp_services(apps, patches))) == 1
@@ -579,7 +579,7 @@ def test_sp_enabled_delete_goes_on_after_a_tenant_refuses_one(
     fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, sp_enabled: Any, tmp_path: Path
 ) -> None:
     _delete(monkeypatch, sp_enabled)
-    changes: list[httpx.Request] = []
+    changes: list[httpx2.Request] = []
     apps = {
         TENANT_A: [
             _sp("sp-a1", "Contoso Cloud Backup", BACKUP_APP_ID, enabled=True),
@@ -589,14 +589,14 @@ def test_sp_enabled_delete_goes_on_after_a_tenant_refuses_one(
     }
     transport = _sp_services(apps, changes)
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         # Alpha refuses to delete its first match, as Graph does an app it will not let go.
         if request.method == "DELETE" and request.url.path.endswith("/sp-a1"):
             error = {"code": "Authorization_RequestDenied", "message": "Insufficient privileges."}
-            return httpx.Response(403, json={"error": error})
+            return httpx2.Response(403, json={"error": error})
         return transport.handle_request(request)
 
-    assert _run_all(sp_enabled, httpx.MockTransport(handler)) == 1
+    assert _run_all(sp_enabled, httpx2.MockTransport(handler)) == 1
 
     # The refusal ends Alpha's run, so its other match stays; beta corp's is still deleted.
     assert [(bearer_tenant(r), r.url.path) for r in changes] == [
@@ -623,15 +623,15 @@ def _sign_in(number: int) -> dict[str, Any]:
 
 
 def _sign_in_services(
-    sign_ins: dict[str, list[dict[str, Any]]], reads: list[httpx.Request], version: str = "beta"
-) -> httpx.MockTransport:
+    sign_ins: dict[str, list[dict[str, Any]]], reads: list[httpx2.Request], version: str = "beta"
+) -> httpx2.MockTransport:
     """Fake Graph holding *sign_ins* per tenant under *version*, recording every read of them.
 
     A tenant's sign-ins come one per page, each page but the last with a next link, so a read
     of more than one follows the links.
     """
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         held = sign_ins.get(bearer_tenant(request), [])
         if request.url.path == f"/{version}/auditLogs/signIns":
             reads.append(request)
@@ -642,10 +642,10 @@ def _sign_in_services(
                     f"https://graph.microsoft.com/{version}/auditLogs/signIns"
                     f"?$skiptoken={index + 1}"
                 )
-            return httpx.Response(200, json=page)
+            return httpx2.Response(200, json=page)
         return fake_services(request)
 
-    return httpx.MockTransport(handler)
+    return httpx2.MockTransport(handler)
 
 
 @pytest.fixture
@@ -679,7 +679,7 @@ def test_sign_in_logs_writes_json_per_tenant_with_matches_and_a_count_workbook(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     caplog.set_level(logging.INFO)
-    reads: list[httpx.Request] = []
+    reads: list[httpx2.Request] = []
     held = [_sign_in(1), _sign_in(2), _sign_in(3)]
 
     assert _run_all(sign_in_logs, _sign_in_services({TENANT_A: held}, reads)) == 0
@@ -720,7 +720,7 @@ def test_sign_in_logs_v1_reads_the_v1_endpoint(
     fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, sign_in_logs: Any, tmp_path: Path
 ) -> None:
     monkeypatch.setattr(sign_in_logs, "V1", True)
-    reads: list[httpx.Request] = []
+    reads: list[httpx2.Request] = []
     transport = _sign_in_services({TENANT_B: [_sign_in(1)]}, reads, version="v1.0")
 
     assert _run_all(sign_in_logs, transport) == 0
@@ -739,19 +739,19 @@ def test_sign_in_logs_v1_reads_the_v1_endpoint(
 def test_sign_in_logs_report_goes_on_after_a_tenant_error(
     fake_msal: FakeMsal, sign_in_logs: Any, tmp_path: Path
 ) -> None:
-    reads: list[httpx.Request] = []
+    reads: list[httpx2.Request] = []
     held = _sign_in_services({TENANT_B: [_sign_in(1)]}, reads)
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         if request.url.path == "/beta/auditLogs/signIns" and bearer_tenant(request) == TENANT_A:
             error = {
                 "code": "Authentication_RequestFromNonPremiumTenantOrB2CTenant",
                 "message": "Neither tenant is B2C or tenant doesn't have premium license",
             }
-            return httpx.Response(403, json={"error": error})
+            return httpx2.Response(403, json={"error": error})
         return held.handle_request(request)
 
-    assert _run_all(sign_in_logs, httpx.MockTransport(handler)) == 1
+    assert _run_all(sign_in_logs, httpx2.MockTransport(handler)) == 1
 
     alpha, beta = _sheets(_sign_in_output(tmp_path))["Tenants"][2:]
     assert alpha[:4] == ("Alpha", TENANT_A, "error", None)
@@ -863,15 +863,15 @@ def _directory_audit(number: int) -> dict[str, Any]:
 
 
 def _directory_audit_services(
-    events: dict[str, list[dict[str, Any]]], reads: list[httpx.Request], version: str = "beta"
-) -> httpx.MockTransport:
+    events: dict[str, list[dict[str, Any]]], reads: list[httpx2.Request], version: str = "beta"
+) -> httpx2.MockTransport:
     """Fake Graph holding *events* per tenant under *version*, recording every read of them.
 
     A tenant's audit events come one per page, each page but the last with a next link, so a
     read of more than one follows the links.
     """
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         held = events.get(bearer_tenant(request), [])
         if request.url.path == f"/{version}/auditLogs/directoryAudits":
             reads.append(request)
@@ -882,10 +882,10 @@ def _directory_audit_services(
                     f"https://graph.microsoft.com/{version}/auditLogs/directoryAudits"
                     f"?$skiptoken={index + 1}"
                 )
-            return httpx.Response(200, json=page)
+            return httpx2.Response(200, json=page)
         return fake_services(request)
 
-    return httpx.MockTransport(handler)
+    return httpx2.MockTransport(handler)
 
 
 @pytest.fixture
@@ -919,7 +919,7 @@ def test_audit_logs_writes_json_per_tenant_with_matches_and_a_count_workbook(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     caplog.set_level(logging.INFO)
-    reads: list[httpx.Request] = []
+    reads: list[httpx2.Request] = []
     held = [_directory_audit(1), _directory_audit(2), _directory_audit(3)]
 
     assert _run_all(audit_logs, _directory_audit_services({TENANT_A: held}, reads)) == 0
@@ -960,7 +960,7 @@ def test_audit_logs_v1_reads_the_v1_endpoint(
     fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, audit_logs: Any, tmp_path: Path
 ) -> None:
     monkeypatch.setattr(audit_logs, "V1", True)
-    reads: list[httpx.Request] = []
+    reads: list[httpx2.Request] = []
     transport = _directory_audit_services({TENANT_B: [_directory_audit(1)]}, reads, "v1.0")
 
     assert _run_all(audit_logs, transport) == 0
@@ -979,20 +979,20 @@ def test_audit_logs_v1_reads_the_v1_endpoint(
 def test_audit_logs_report_goes_on_after_a_tenant_error(
     fake_msal: FakeMsal, audit_logs: Any, tmp_path: Path
 ) -> None:
-    reads: list[httpx.Request] = []
+    reads: list[httpx2.Request] = []
     held = _directory_audit_services({TENANT_B: [_directory_audit(1)]}, reads)
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         path = "/beta/auditLogs/directoryAudits"
         if request.url.path == path and bearer_tenant(request) == TENANT_A:
             error = {
                 "code": "Authentication_RequestFromUnsupportedUserRole",
                 "message": "User is not in the allowed roles",
             }
-            return httpx.Response(403, json={"error": error})
+            return httpx2.Response(403, json={"error": error})
         return held.handle_request(request)
 
-    assert _run_all(audit_logs, httpx.MockTransport(handler)) == 1
+    assert _run_all(audit_logs, httpx2.MockTransport(handler)) == 1
 
     alpha, beta = _sheets(_audit_logs_output(tmp_path))["Tenants"][2:]
     assert alpha[:4] == ("Alpha", TENANT_A, "error", None)

@@ -15,7 +15,7 @@ from collections.abc import Sequence
 from types import TracebackType
 from typing import Literal, Self
 
-import httpx
+import httpx2
 from azure_auth import AuthContext
 from azure_auth.sync import ArmClient, ExchangeClient, GraphClient, IppsClient, ResourceClient
 
@@ -49,7 +49,7 @@ def build_client(
     *,
     scopes: Sequence[str] = (),
     grant_when_possible: bool = False,
-    transport: httpx.BaseTransport | None = None,
+    transport: httpx2.BaseTransport | None = None,
 ) -> ResourceClient:
     """Create the azure-auth client for one kind.
 
@@ -59,7 +59,7 @@ def build_client(
         scopes: Delegated Graph scopes; used by ``graph`` only.
         grant_when_possible: azure-auth's ``GraphClient`` option of that name: add *scopes*
             the tenant lacks to the app's grant where it can. Used by ``graph`` only.
-        transport: Optional httpx transport (tests).
+        transport: Optional httpx2 transport (tests).
 
     Returns:
         The client. No network call is made.
@@ -100,7 +100,7 @@ class TenantContext:
         scopes: Sequence[str] = (),
         clients: Sequence[str] = ("graph",),
         grant_when_possible: bool = False,
-        transport: httpx.BaseTransport | None = None,
+        transport: httpx2.BaseTransport | None = None,
     ) -> None:
         """Build one client per declared kind. No network call is made.
 
@@ -111,7 +111,7 @@ class TenantContext:
             clients: The payload's ``CLIENTS``.
             grant_when_possible: Whether the Graph client adds missing scopes to the app's
                 grant where it can.
-            transport: Optional httpx transport for every client (tests).
+            transport: Optional httpx2 transport for every client (tests).
         """
         self.tenant = tenant
         self.auth = auth
@@ -191,6 +191,7 @@ class TenantContext:
             azure_auth.ConsentRequired: If consent is missing in this tenant.
             azure_auth.InteractionRequired: If the tenant wants a sign-in.
             azure_auth.AuthError: For any other token failure.
+            azure_auth.NetworkError: If Entra ID cannot be reached.
         """
         for client in self._clients.values():
             client.login(fresh=True)

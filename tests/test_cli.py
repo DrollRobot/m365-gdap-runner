@@ -19,7 +19,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-import httpx
+import httpx2
 import pytest
 from openpyxl import Workbook, load_workbook
 from openpyxl.worksheet.table import Table
@@ -68,7 +68,7 @@ RECORDER = """
         REPORTED.append(results)
 """
 
-Handler = Callable[[httpx.Request], httpx.Response]
+Handler = Callable[[httpx2.Request], httpx2.Response]
 
 
 @pytest.fixture(autouse=True)
@@ -95,11 +95,11 @@ def _args(*argv: str) -> argparse.Namespace:
 
 
 def _main(script: ModuleType, *argv: str, handler: Handler = fake_services) -> int:
-    return cli.main(script, _args(*argv), transport=httpx.MockTransport(handler))
+    return cli.main(script, _args(*argv), transport=httpx2.MockTransport(handler))
 
 
 def _list_tenants(*argv: str) -> int:
-    return cli.list_tenants(list(argv), transport=httpx.MockTransport(fake_services))
+    return cli.list_tenants(list(argv), transport=httpx2.MockTransport(fake_services))
 
 
 def _script(tmp_path: Path, body: str, name: str = "script") -> ModuleType:
@@ -206,10 +206,10 @@ def test_configure_logging_quiets_libraries_unless_very_verbose() -> None:
 @pytest.mark.parametrize(
     ("name", "level", "kept"),
     [
-        ("httpx", logging.DEBUG, False),
+        ("httpx2", logging.DEBUG, False),
         ("azure.identity", logging.INFO, False),
-        ("httpx", logging.WARNING, True),
-        ("httpx_extras", logging.INFO, True),
+        ("httpx2", logging.WARNING, True),
+        ("httpx2_extras", logging.INFO, True),
         ("m365_gdap_runner.session", logging.DEBUG, True),
     ],
 )
@@ -269,7 +269,7 @@ def test_main_reads_the_command_line_when_the_script_brings_no_parser(
     fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, recorder: ModuleType
 ) -> None:
     monkeypatch.setattr(sys, "argv", ["script.py", "--include", "Alpha"])
-    assert cli.main(recorder, transport=httpx.MockTransport(fake_services)) == 0
+    assert cli.main(recorder, transport=httpx2.MockTransport(fake_services)) == 0
     assert _tenant_ids(recorder) == [TENANT_A]
 
 
@@ -280,7 +280,7 @@ def test_main_finds_the_script_by_module_name(
     monkeypatch.setitem(sys.modules, "__main__", recorder)
     assert (
         cli.main(
-            "__main__", _args("--include", "all"), transport=httpx.MockTransport(fake_services)
+            "__main__", _args("--include", "all"), transport=httpx2.MockTransport(fake_services)
         )
         == 0
     )
@@ -312,7 +312,7 @@ def test_a_script_adds_flags_of_its_own(fake_msal: FakeMsal, tmp_path: Path) -> 
 
     args = parser.parse_args(["--label", "weekly", "--include", "Alpha"])
     script.__dict__["LABEL"] = args.label  # what the script's __main__ block does with it
-    assert cli.main(script, args, transport=httpx.MockTransport(fake_services)) == 0
+    assert cli.main(script, args, transport=httpx2.MockTransport(fake_services)) == 0
     assert [result.result for result in _reported(script)] == [{"label": "weekly"}]
 
 
@@ -511,10 +511,10 @@ def test_runs_the_graph_example_and_its_report(
     monkeypatch.setattr(ENTRA_AUDIT_LOGS, "OUT_DIR", tmp_path)
     monkeypatch.setattr(ENTRA_AUDIT_LOGS, "FILTER", "result eq 'success'")
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         if request.url.path == "/beta/auditLogs/directoryAudits":
             event = {"id": f"da-{bearer_tenant(request)}", "result": "success"}
-            return httpx.Response(200, json={"value": [event]})
+            return httpx2.Response(200, json={"value": [event]})
         return fake_services(request)
 
     argv = ("--include", "all", "--jobs", "2")
@@ -557,7 +557,7 @@ def test_exit_2_on_unknown_tenant_before_running_the_script(
 ) -> None:
     seen: list[str] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         seen.append(request.url.path)
         return fake_services(request)
 
@@ -597,12 +597,12 @@ def _grant_service(fake_msal: FakeMsal, patches: list[dict[str, str]]) -> Handle
     what the tenant has granted, as Entra then puts it in the tokens it issues.
     """
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         path = request.url.path
         tenant = bearer_tenant(request).lower()
         if path == "/v1.0/servicePrincipals":
             graph = GRAPH_APP_ID in request.url.params["$filter"]
-            return httpx.Response(200, json={"value": [{"id": "graph" if graph else "app"}]})
+            return httpx2.Response(200, json={"value": [{"id": "graph" if graph else "app"}]})
         if path == "/v1.0/oauth2PermissionGrants":
             grant = {
                 "id": "grant",
@@ -611,12 +611,12 @@ def _grant_service(fake_msal: FakeMsal, patches: list[dict[str, str]]) -> Handle
                 "resourceId": "graph",
                 "scope": fake_msal.granted[tenant],
             }
-            return httpx.Response(200, json={"value": [grant]})
+            return httpx2.Response(200, json={"value": [grant]})
         if path == "/v1.0/oauth2PermissionGrants/grant" and request.method == "PATCH":
             body = json.loads(request.content)
             patches.append(body)
             fake_msal.granted[tenant] = body["scope"]
-            return httpx.Response(204)
+            return httpx2.Response(204)
         return fake_services(request)
 
     return handler
@@ -662,11 +662,11 @@ def test_a_grant_graph_refuses_says_the_self_grant_failed(
     fake_msal.granted[TENANT_A] = "DelegatedPermissionGrant.ReadWrite.All"
     grants = _grant_service(fake_msal, [])
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         # The GDAP roles in this tenant may read the app's grant, not change it.
         if request.method == "PATCH":
             denied = {"code": "Authorization_RequestDenied", "message": "Insufficient privileges"}
-            return httpx.Response(403, json={"error": denied})
+            return httpx2.Response(403, json={"error": denied})
         return grants(request)
 
     assert _main(script, "--include", "Alpha", handler=handler) == 1
@@ -692,6 +692,17 @@ def test_exit_2_on_missing_config(
 def test_exit_2_on_failed_sign_in(fake_msal: FakeMsal, recorder: ModuleType) -> None:
     fake_msal.interactive_result = {"error": "access_denied", "error_description": "cancelled"}
     assert _main(recorder, "--include", "all") == 2
+
+
+@pytest.mark.integration
+def test_exit_2_when_graph_cannot_be_reached(
+    fake_msal: FakeMsal, recorder: ModuleType, caplog: pytest.LogCaptureFixture
+) -> None:
+    def unreachable(request: httpx2.Request) -> httpx2.Response:
+        raise httpx2.ConnectError("no route", request=request)
+
+    assert _main(recorder, "--include", "all", handler=unreachable) == 2
+    assert "failed: ConnectError: no route" in caplog.text
 
 
 # A script whose run() fails in Alpha, the first tenant, and works in beta corp.
@@ -860,7 +871,7 @@ def test_debug_log_gets_every_record_and_the_terminal_info_and_up(
     terminal = capsys.readouterr().err
     # This package's debug records, and a library's below WARNING, reach the file only.
     assert "DEBUG [-] m365_gdap_runner.session: Signing in to the partner tenant" in log
-    assert "INFO [-] httpx: HTTP Request" in log
+    assert "INFO [-] httpx2: HTTP Request" in log
     assert "Signing in to the partner tenant" not in terminal
     assert "HTTP Request" not in terminal
     assert "Created tenants file" in terminal
@@ -1216,9 +1227,9 @@ def test_a_group_member_without_gdap_gets_a_sign_in_of_its_own(
     fake_msal: FakeMsal, tmp_path: Path, recorder: ModuleType, caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.INFO, logger="m365_gdap_runner.session")
-    seen: list[httpx.Request] = []
+    seen: list[httpx2.Request] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         seen.append(request)
         return fake_services(request)
 
@@ -1242,9 +1253,9 @@ def test_a_group_member_without_gdap_gets_a_sign_in_of_its_own(
 def test_a_tenant_in_another_cloud_is_signed_in_to_there(
     fake_msal: FakeMsal, tmp_path: Path, recorder: ModuleType
 ) -> None:
-    seen: list[httpx.Request] = []
+    seen: list[httpx2.Request] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         seen.append(request)
         return fake_services(request)
 

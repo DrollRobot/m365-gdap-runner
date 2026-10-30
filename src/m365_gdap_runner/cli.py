@@ -52,8 +52,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from types import ModuleType
 
-import httpx
-from azure_auth import AuthError, ResourceError
+import httpx2
+from azure_auth import AuthError, NetworkError, ResourceError
 
 from m365_gdap_runner.config import ConfigError, Settings, load_settings
 from m365_gdap_runner.loader import Payload, PayloadInvalid, payload_from_module
@@ -90,13 +90,13 @@ SETUP_ERRORS = (
     TenantFileError,
     TenantSelectionError,
     ResourceError,
-    httpx.HTTPError,
+    NetworkError,
 )
 
 # Library loggers kept at WARNING on the terminal unless -vv is given.
 _LIBRARY_LOGGERS = (
-    "httpx",
-    "httpcore",
+    "httpx2",
+    "httpcore2",
     "msal",
     "msal_extensions",
     "urllib3",
@@ -718,7 +718,7 @@ def _run(
     module: ModuleType,
     args: argparse.Namespace,
     *,
-    transport: httpx.BaseTransport | None,
+    transport: httpx2.BaseTransport | None,
     warning_log: _WarningLog,
 ) -> int:
     """Validate the script, sign in, pick tenants, run them, and call ``report()``.
@@ -729,7 +729,7 @@ def _run(
     Args:
         module: The script's module.
         args: Parsed arguments.
-        transport: Optional httpx transport for every client (tests).
+        transport: Optional httpx2 transport for every client (tests).
         warning_log: Keeps the run's warnings and errors, to print after the summary.
 
     Returns:
@@ -802,7 +802,7 @@ def main(
     module: str | ModuleType,
     args: argparse.Namespace | None = None,
     *,
-    transport: httpx.BaseTransport | None = None,
+    transport: httpx2.BaseTransport | None = None,
 ) -> int:
     """Run a script's ``run(ctx)`` against the tenants its command line selects.
 
@@ -813,7 +813,7 @@ def main(
         args: What the script's own parser returned, when it has flags of its own and added
             the library's with :func:`add_arguments`. None parses ``sys.argv`` with the
             library's flags only.
-        transport: Optional httpx transport for every client (tests).
+        transport: Optional httpx2 transport for every client (tests).
 
     Returns:
         The process exit code.
@@ -836,7 +836,7 @@ def main(
 
 
 def list_tenants(
-    argv: Sequence[str] | None = None, *, transport: httpx.BaseTransport | None = None
+    argv: Sequence[str] | None = None, *, transport: httpx2.BaseTransport | None = None
 ) -> int:
     """The ``m365-gdap-runner-customer-export`` command: update the tenants file, list tenants.
 
@@ -846,7 +846,7 @@ def list_tenants(
 
     Args:
         argv: Arguments without the program name; None reads ``sys.argv``.
-        transport: Optional httpx transport for every client (tests).
+        transport: Optional httpx2 transport for every client (tests).
 
     Returns:
         The process exit code.

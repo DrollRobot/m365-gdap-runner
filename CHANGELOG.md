@@ -15,6 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before. It cannot be combined with `--disable`. A deleted service principal stays in the
   tenant's deleted items for 30 days, where it can be restored.
 
+### Changed
+
+- **Breaking:** azure-auth v0.10.0. `ctx.graph`, `ctx.exchange`, `ctx.ipps`, `ctx.arm` and
+  `ctx.auth` raise `azure_auth.NetworkError` when a host cannot be reached, in place of
+  `httpx` and `requests` exceptions, and check TLS against the OS trust store. `main()`'s
+  `transport=` takes an `httpx2` transport.
+
 ## [0.1.0] - 2026-10-29 - Initial release
 
 ### Added

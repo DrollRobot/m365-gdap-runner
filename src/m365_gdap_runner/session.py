@@ -51,8 +51,8 @@ from time import monotonic
 from typing import Literal, cast
 
 import azure_auth
-import httpx
-from azure_auth import AuthContext, AuthError, ConsentRequired
+import httpx2
+from azure_auth import AuthContext, AuthError, ConsentRequired, NetworkError
 from azure_auth.auth.cache import default_cache_path
 from azure_auth.clouds import Cloud, get_cloud
 from azure_auth.sync import GraphClient
@@ -196,6 +196,7 @@ def _partner_tenant(name: str, cloud: Cloud) -> azure_auth.Tenant:
 
     Raises:
         azure_auth.AuthError: If a domain name cannot be looked up in that cloud.
+        azure_auth.NetworkError: If that cloud's sign-in host cannot be reached.
     """
     try:
         return azure_auth.Tenant(name, cloud)
@@ -210,12 +211,14 @@ class PartnerSession:
         auth: The home azure-auth context, for the partner tenant.
     """
 
-    def __init__(self, settings: Settings, *, transport: httpx.BaseTransport | None = None) -> None:
+    def __init__(
+        self, settings: Settings, *, transport: httpx2.BaseTransport | None = None
+    ) -> None:
         """Build the home context from settings. No sign-in happens yet.
 
         Args:
             settings: Resolved settings.
-            transport: Optional httpx transport for every client this session builds (tests).
+            transport: Optional httpx2 transport for every client this session builds (tests).
 
         Raises:
             ConfigError: If ``cache`` or ``cloud`` holds a value azure-auth does not know,
@@ -223,6 +226,7 @@ class PartnerSession:
                 ``pw_browser_path``, or ``browser_timeout`` is not more than 0.
             azure_auth.AuthError: If the partner tenant cannot be looked up, or the disk
                 cache cannot be encrypted on this platform.
+            azure_auth.NetworkError: If the partner tenant's sign-in host cannot be reached.
         """
         if settings.cache not in CACHE_KINDS:
             raise ConfigError(
@@ -298,7 +302,7 @@ class PartnerSession:
         """
         try:
             return azure_auth.Tenant.lookup(tenant_id, transport=self._transport).cloud.name
-        except (AuthError, httpx.HTTPError, ValueError) as exc:
+        except (AuthError, NetworkError, ValueError) as exc:
             logger.debug("Could not look up the cloud of %s: %s", tenant_id, exc)
             return ""
 
@@ -319,6 +323,7 @@ class PartnerSession:
 
         Raises:
             azure_auth.AuthError: If a sign-in fails or is cancelled.
+            azure_auth.NetworkError: If Entra ID cannot be reached.
         """
         kinds = ["graph", *(kind for kind in clients if kind != "graph")]
         for kind in kinds:
@@ -341,6 +346,7 @@ class PartnerSession:
         Raises:
             azure_auth.AuthError: If no partner token can be obtained.
             azure_auth.GraphError: If Graph rejects the request.
+            azure_auth.NetworkError: If Entra ID or Graph cannot be reached.
         """
         with GraphClient(
             self.auth, scopes=list(PARTNER_SCOPES), transport=self._transport
