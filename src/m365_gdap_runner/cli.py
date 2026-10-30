@@ -29,7 +29,7 @@ clouds the file lacks. The ``m365-gdap-runner-customer-export`` command
 
 Configuration comes from the config system (see ``src/m365_gdap_runner/config/``);
 ``--partner-tenant-id``, ``--username``, ``--client-id``, ``--cache``, ``--cloud``,
-``--tenants-file`` and ``--jobs`` override it. Progress and the summary go to stderr; stdout
+``--tenants-file`` and ``--threads`` override it. Progress and the summary go to stderr; stdout
 is the script's. After the summary, every warning and error the run logged, the script's
 included, is printed again, so none is lost in a long run's output. The ``debug_log_path``
 setting also appends every log record to a file; past ``debug_log_max_mb``, it is compressed
@@ -140,7 +140,7 @@ _SETTING_FLAGS = (
 
 
 def _positive_int(value: str) -> int:
-    """Parse a whole number of at least 1, for ``--jobs``.
+    """Parse a whole number of at least 1, for ``--threads``.
 
     Args:
         value: The flag's text.
@@ -203,6 +203,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     """
     tenants = parser.add_argument_group("m365-gdap-runner tenants")
     tenants.add_argument(
+        "-i",
         "--include",
         action="append",
         default=None,
@@ -213,6 +214,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         ),
     )
     tenants.add_argument(
+        "-e",
         "--exclude",
         action="append",
         default=None,
@@ -240,12 +242,13 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         ),
     )
     run.add_argument(
-        "--jobs",
+        "-t",
+        "--threads",
         type=_positive_int,
         default=None,
         metavar="N",
         help=(
-            "Tenants to work on at once (default: the jobs setting, else 1). 5-8 suits "
+            "Tenants to work on at once (default: the threads setting, else 1). 5-8 suits "
             "read-only reports; keep 1 for scripts that write unless they are idempotent."
         ),
     )
@@ -271,10 +274,10 @@ def settings_from_args(args: argparse.Namespace) -> Settings:
             overrides[name] = value
     if args.cache is not None:
         overrides["cache"] = args.cache
-    # add_arguments() adds --jobs; the m365-gdap-runner-customer-export command, which runs
+    # add_arguments() adds --threads; the m365-gdap-runner-customer-export command, which runs
     # nothing, does not.
-    if getattr(args, "jobs", None) is not None:
-        overrides["jobs"] = args.jobs
+    if getattr(args, "threads", None) is not None:
+        overrides["threads"] = args.threads
     return load_settings(profile=args.profile, overrides=overrides)
 
 
@@ -743,8 +746,8 @@ def _run(
         payload = payload_from_module(module, _script_name(module))
         settings = settings_from_args(args)
         _start_debug_log(settings)
-        if settings.jobs < 1:
-            raise ConfigError(f"jobs must be at least 1, not {settings.jobs!r}.")
+        if settings.threads < 1:
+            raise ConfigError(f"threads must be at least 1, not {settings.threads!r}.")
         session = PartnerSession(settings, transport=transport)
         session.login(payload.clients)
         tenants = session.list_tenants()
@@ -761,7 +764,7 @@ def _run(
         selected,
         scopes=payload.scopes,
         clients=payload.clients,
-        jobs=settings.jobs,
+        threads=settings.threads,
         grant_when_possible=(
             payload.grant_when_possible
             if args.grant_when_possible is None
@@ -781,7 +784,7 @@ def _run(
                 if args.continue_on_error is None
                 else args.continue_on_error
             ),
-            jobs=settings.jobs,
+            threads=settings.threads,
         )
     except RunInterrupted as exc:
         results = exc.results

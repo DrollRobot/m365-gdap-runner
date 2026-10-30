@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `ctx.tenant.domain`: the tenant's `m365_domain` cell in the tenants file.
+- Short flags: `-i` for `--include`, `-e` for `--exclude` and `-t` for `--threads`.
+
+### Changed
+
+- **Breaking:** `--jobs` is now `--threads`, and the `jobs` setting is now `threads`, along with
+  its environment variable and the `jobs=` argument of `run_payload()` and `check_access()`.
 
 ## [0.2.0] - 2026-10-29 - azure-auth 0.10.0 network errors
 

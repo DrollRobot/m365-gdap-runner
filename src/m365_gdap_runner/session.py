@@ -367,7 +367,7 @@ class PartnerSession:
         *,
         scopes: Sequence[Scope] = (),
         clients: Sequence[str] = ("graph",),
-        jobs: int = 1,
+        threads: int = 1,
         grant_when_possible: bool = False,
     ) -> Generator[Tenant, None, None]:
         """Find a way into each tenant, and hand it out as soon as one is found.
@@ -390,7 +390,7 @@ class PartnerSession:
         missing consent: its Graph sign-in opens Entra's consent screen whatever the cache
         holds, for the tenant-wide grant (:meth:`_sign_in_directly`).
 
-        The silent checks run in the background, *jobs* at a time. Direct sign-ins run on the
+        The silent checks run in the background, *threads* at a time. Direct sign-ins run on the
         thread that iterates, one at a time, as soon as a tenant needs one: the tenants never
         checked first, then each one whose check fails. Before each one, every tenant whose
         check has passed is handed out, so a sign-in window holds up no tenant that is ready.
@@ -407,7 +407,7 @@ class PartnerSession:
             tenants: The selected tenants, with their cloud filled in.
             scopes: The script's Graph scopes.
             clients: The script's ``CLIENTS``.
-            jobs: How many silent checks run at once.
+            threads: How many silent checks run at once.
             grant_when_possible: Add the scopes a tenant lacks to the app's grant where the
                 app can, through the partner sign-in only (azure-auth's ``GraphClient`` option
                 of that name). Each grant waits for a token that carries the new scopes,
@@ -431,7 +431,7 @@ class PartnerSession:
         done = 0
         started = last = monotonic()
         with ThreadPoolExecutor(
-            max_workers=max(1, min(jobs, len(nearby))), thread_name_prefix="check"
+            max_workers=max(1, min(threads, len(nearby))), thread_name_prefix="check"
         ) as pool:
             checks = {
                 pool.submit(self._through_partner, t, scopes, clients, grant_when_possible): t

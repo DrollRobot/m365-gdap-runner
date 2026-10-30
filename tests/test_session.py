@@ -268,7 +268,7 @@ def test_check_access_reaches_gdap_tenants_through_the_partner_sign_in(
     fake_msal: FakeMsal,
 ) -> None:
     session = _signed_in(["graph"])
-    list(session.check_access([ALPHA, BETA], scopes=["User.Read.All"], jobs=2))
+    list(session.check_access([ALPHA, BETA], scopes=["User.Read.All"], threads=2))
     with session.context_for(ALPHA, scopes=["User.Read.All"]) as alpha:
         assert alpha.auth.home is session.auth
     assert fake_msal.interactive_tenants() == [PARTNER_TENANT]
@@ -683,7 +683,7 @@ def test_check_access_hands_out_every_tenant_once(fake_msal: FakeMsal) -> None:
     fake_msal.tenant_errors[TENANT_B] = CONSENT_REQUIRED
     blank_gamma = Tenant(TENANT_C, "Gamma", "USGov")
     session = _signed_in(["graph"])
-    handed_out = list(session.check_access([ALPHA, BETA, blank_gamma], jobs=2))
+    handed_out = list(session.check_access([ALPHA, BETA, blank_gamma], threads=2))
     # Reached or not: context_for() then has a context or the reason for each.
     assert sorted(t.tenant_id for t in handed_out) == [TENANT_A, TENANT_B, TENANT_C]
 
@@ -723,7 +723,7 @@ def test_a_direct_sign_in_does_not_wait_for_the_other_checks(
     monkeypatch.setattr(PartnerSession, "_through_partner", alpha_waits_for_beta)
     monkeypatch.setattr(PartnerSession, "_sign_in_directly", sign_in)
     session = _signed_in(["graph"])
-    handed_out = list(session.check_access([ALPHA, beta], scopes=["User.Read.All"], jobs=2))
+    handed_out = list(session.check_access([ALPHA, beta], scopes=["User.Read.All"], threads=2))
     assert handed_out == [beta, ALPHA]
     assert fake_msal.interactive_tenants() == [PARTNER_TENANT, TENANT_B]
 
@@ -744,7 +744,7 @@ def test_direct_sign_ins_open_one_at_a_time_on_the_thread_that_iterates(
     alpha = Tenant(TENANT_A, "Alpha", "Commercial", "admin@alpha.example")
     beta = Tenant(TENANT_B, "beta corp", "Commercial", BETA_ADMIN)
     session = _signed_in(["graph"])
-    list(session.check_access([alpha, beta], scopes=["User.Read.All"], jobs=2))
+    list(session.check_access([alpha, beta], scopes=["User.Read.All"], threads=2))
     # The partner sign-in, then each tenant's own, in the order their checks failed.
     assert sorted(fake_msal.interactive_tenants()[1:]) == [TENANT_A, TENANT_B]
     assert threads == [threading.current_thread()] * 3

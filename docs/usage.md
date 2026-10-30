@@ -116,7 +116,8 @@ not clash with the library's.
 ## Choosing tenants
 
 A run has to say which tenants it is for; one that includes none is refused. Pick them with
-`--include`, and take some back out with `--exclude`. Both are repeatable, and each takes:
+`--include` (`-i`), and take some back out with `--exclude` (`-e`). Both are repeatable, and
+each takes:
 
 - a tenant, by display name or ID: a GDAP customer or a row of the tenants file.
 - a group: the tenants marked TRUE in that column of the tenants file.
@@ -193,7 +194,7 @@ each client uses a different Microsoft app; `client_id` names one app for all of
 instead.
 
 Every selected tenant in the partner's cloud is then checked silently through that sign-in,
-`jobs` at a time; every 30 seconds, a log line says how many are done and about how long the
+`threads` at a time; every 30 seconds, a log line says how many are done and about how long the
 rest will take. Each tenant's `run()` starts as soon as its access is settled.
 
 Every sign-in, the partner's and each tenant's own, asks Microsoft for a new token for each
@@ -307,8 +308,8 @@ track of it:
 
 ### Tenants at once
 
-A run works on one tenant at a time. The `jobs` setting changes that, and `--jobs` changes
-it for one run; the silent checks before each `run()` use the same number. 5-8 suits
+A run works on one tenant at a time. The `threads` setting changes that, and `--threads` (`-t`)
+changes it for one run; the silent checks before each `run()` use the same number. 5-8 suits
 read-only reports; keep 1 for scripts that write unless they are idempotent.
 
 ### Errors in run()
@@ -323,7 +324,7 @@ A tenant that could not be reached is `auth_failed` and never stops the run.
 
 ### Stopping a run
 
-Ctrl+C stops the run. A tenant it interrupts is `error`; with `jobs` above 1, the tenants
+Ctrl+C stops the run. A tenant it interrupts is `error`; with `threads` above 1, the tenants
 already running finish first. The tenants not yet started are `skipped`, and the summary is
 printed. During a tenant's own sign-in window, Ctrl+C asks first: Enter skips that tenant,
 and a second Ctrl+C stops the run.
@@ -409,7 +410,7 @@ The tenants file lives in the same directory unless `tenants_file` says otherwis
 | `client_id` | empty | One app to sign in with for every client; empty uses Microsoft's first-party apps. |
 | `cloud` | empty | The partner tenant's cloud: `Commercial`, `USGov`, `USGovDoD` or `China`; empty looks it up. |
 | `tenants_file` | empty | The [tenants file](#the-tenants-file); empty uses `tenants.csv` in the config directory. |
-| `jobs` | `1` | [Tenants at once](#tenants-at-once). |
+| `threads` | `1` | [Tenants at once](#tenants-at-once). |
 | `cache` | `memory` | `memory`, or `disk` to [keep sign-ins between runs](#keeping-sign-ins-between-runs). |
 | `cache_path` | empty | The disk cache's file; empty uses azure-auth's. |
 | `cache_reminder_path` | empty | A folder for the cache's DELETEME link; empty puts none. |
@@ -426,9 +427,9 @@ The tenants file lives in the same directory unless `tenants_file` says otherwis
 
 A flag beats an environment variable, which beats `config.toml`, which beats the default.
 Every setting has an environment variable, its name upper-cased after
-`M365_GDAP_RUNNER_`: `M365_GDAP_RUNNER_JOBS=5`. A list takes commas there too. These
+`M365_GDAP_RUNNER_`: `M365_GDAP_RUNNER_THREADS=5`. A list takes commas there too. These
 settings also have a flag: `--partner-tenant-id`, `--username`, `--client-id`, `--cloud`,
-`--tenants-file`, `--cache` and `--jobs`.
+`--tenants-file`, `--cache` and `--threads`.
 
 ### Profiles
 

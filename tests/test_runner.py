@@ -211,7 +211,7 @@ def test_parallel_runs_tenants_concurrently_in_input_order() -> None:
         return ctx.tenant.display_name
 
     tenants = [ALPHA, BETA, GAMMA, DELTA]
-    results = run_payload(FakeSession(), _payload(run), tenants, jobs=4)
+    results = run_payload(FakeSession(), _payload(run), tenants, threads=4)
     assert _statuses(results) == ["ok"] * 4
     assert [r.result for r in results] == ["Alpha", "Beta", "Gamma", "Delta"]
 
@@ -241,7 +241,7 @@ def test_parallel_stop_on_error_lets_running_tenants_finish_and_starts_no_more(
             release.wait(5)
         return None
 
-    results = run_payload(FakeSession(), _payload(run), [ALPHA, BETA, GAMMA, DELTA], jobs=2)
+    results = run_payload(FakeSession(), _payload(run), [ALPHA, BETA, GAMMA, DELTA], threads=2)
     assert _statuses(results) == ["error", "ok", "skipped", "skipped"]
 
 
@@ -313,7 +313,7 @@ def test_an_interrupt_while_ready_finds_the_next_waits_for_running_tenants(
         return None
 
     with pytest.raises(RunInterrupted) as info:
-        run_payload(FakeSession(), _payload(run), TENANTS, ready=ready(), jobs=2)
+        run_payload(FakeSession(), _payload(run), TENANTS, ready=ready(), threads=2)
     assert _statuses(info.value.results) == ["ok", "skipped", "skipped"]
     assert closed.is_set()
 
@@ -335,7 +335,7 @@ def test_parallel_interrupt_waits_for_running_tenants(release: threading.Event) 
         return None
 
     with pytest.raises(RunInterrupted) as info:
-        run_payload(FakeSession(), _payload(run), [ALPHA, BETA, GAMMA, DELTA], jobs=2)
+        run_payload(FakeSession(), _payload(run), [ALPHA, BETA, GAMMA, DELTA], threads=2)
     results = info.value.results
     assert results[0].status == "error"
     assert results[0].error == "interrupted"
@@ -343,9 +343,9 @@ def test_parallel_interrupt_waits_for_running_tenants(release: threading.Event) 
     assert results[3].status == "skipped"
 
 
-def test_jobs_must_be_positive() -> None:
+def test_threads_must_be_positive() -> None:
     with pytest.raises(ValueError, match="at least 1"):
-        run_payload(FakeSession(), _payload(Recorder()), TENANTS, jobs=0)
+        run_payload(FakeSession(), _payload(Recorder()), TENANTS, threads=0)
 
 
 def test_summarize_counts_every_status() -> None:

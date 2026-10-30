@@ -124,7 +124,7 @@ def _tenant_ids(script: ModuleType) -> list[str]:
 @pytest.mark.unit
 def test_add_arguments_defaults() -> None:
     args = _args("--include", "all")
-    assert (args.jobs, args.continue_on_error, args.grant_when_possible) == (None, None, None)
+    assert (args.threads, args.continue_on_error, args.grant_when_possible) == (None, None, None)
     assert (args.include, args.exclude) == (["all"], None)
     assert (args.partner_tenant_id, args.username, args.client_id, args.cache, args.cloud) == (
         None,
@@ -137,11 +137,17 @@ def test_add_arguments_defaults() -> None:
 
 
 @pytest.mark.unit
+def test_add_arguments_short_flags() -> None:
+    args = _args("-i", "pilot", "-i", "Alpha", "-e", "Beta", "-t", "3")
+    assert (args.include, args.exclude, args.threads) == (["pilot", "Alpha"], ["Beta"], 3)
+
+
+@pytest.mark.unit
 @pytest.mark.parametrize(
     "argv",
     [
-        ["--jobs", "0"],
-        ["--jobs", "two"],
+        ["--threads", "0"],
+        ["--threads", "two"],
         ["--cache", "plaintext"],
         # The Windows broker is gone, and the flag that chose it with it.
         ["--sign-in", "broker"],
@@ -235,7 +241,7 @@ def test_settings_flags_override_config() -> None:
         "USGov",
         "--tenants-file",
         "C:/msp/tenants.csv",
-        "--jobs",
+        "--threads",
         "3",
         "--include",
         "all",
@@ -248,7 +254,7 @@ def test_settings_flags_override_config() -> None:
         settings.cache,
         settings.cloud,
         settings.tenants_file,
-        settings.jobs,
+        settings.threads,
     ) == (
         "other.example",
         "someone@other.example",
@@ -517,7 +523,7 @@ def test_runs_the_graph_example_and_its_report(
             return httpx2.Response(200, json={"value": [event]})
         return fake_services(request)
 
-    argv = ("--include", "all", "--jobs", "2")
+    argv = ("--include", "all", "--threads", "2")
     assert _main(ENTRA_AUDIT_LOGS, *argv, handler=handler) == 0
     (workbook,) = tmp_path.glob("*.xlsx")
     assert capsys.readouterr().out == f"Wrote {workbook}\n"
@@ -744,48 +750,48 @@ def test_an_error_in_run_stops_the_run_unless_the_script_or_a_flag_says_go_on(
 @pytest.mark.integration
 @pytest.mark.acceptance
 @pytest.mark.parametrize(
-    ("env", "flags", "jobs"),
-    [("", [], 1), ("3", [], 3), ("3", ["--jobs", "2"], 2)],
+    ("env", "flags", "threads"),
+    [("", [], 1), ("3", [], 3), ("3", ["--threads", "2"], 2)],
     ids=["default", "setting", "flag-over-setting"],
 )
-def test_jobs_come_from_the_setting_or_the_flag(
+def test_threads_come_from_the_setting_or_the_flag(
     fake_msal: FakeMsal,
     monkeypatch: pytest.MonkeyPatch,
     recorder: ModuleType,
     env: str,
     flags: list[str],
-    jobs: int,
+    threads: int,
 ) -> None:
     if env:
-        monkeypatch.setenv(ENV_PREFIX + "JOBS", env)
+        monkeypatch.setenv(ENV_PREFIX + "THREADS", env)
     asked: dict[str, int] = {}
     check_access = PartnerSession.check_access
 
     def checking(self: PartnerSession, *args: Any, **kwargs: Any) -> Any:
-        asked["checks"] = kwargs["jobs"]
+        asked["checks"] = kwargs["threads"]
         return check_access(self, *args, **kwargs)
 
     def running(*args: Any, **kwargs: Any) -> Any:
-        asked["runs"] = kwargs["jobs"]
+        asked["runs"] = kwargs["threads"]
         return run_payload(*args, **kwargs)
 
     monkeypatch.setattr(PartnerSession, "check_access", checking)
     monkeypatch.setattr("m365_gdap_runner.cli.run_payload", running)
     assert _main(recorder, "--include", "all", *flags) == 0
     # The silent checks and the tenants' run() both work on that many at once.
-    assert asked == {"checks": jobs, "runs": jobs}
+    assert asked == {"checks": threads, "runs": threads}
 
 
 @pytest.mark.integration
-def test_exit_2_when_the_jobs_setting_is_below_1(
+def test_exit_2_when_the_threads_setting_is_below_1(
     fake_msal: FakeMsal,
     monkeypatch: pytest.MonkeyPatch,
     recorder: ModuleType,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    monkeypatch.setenv(ENV_PREFIX + "JOBS", "0")
+    monkeypatch.setenv(ENV_PREFIX + "THREADS", "0")
     assert _main(recorder, "--include", "all") == 2
-    assert "jobs must be at least 1, not 0." in caplog.text
+    assert "threads must be at least 1, not 0." in caplog.text
     assert fake_msal.interactive_calls == 0
 
 

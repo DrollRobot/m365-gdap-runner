@@ -12,7 +12,7 @@ Consent is not authorization: a consented scope can still get 403 if the GDAP
 relationship lacks the needed role. That surfaces inside ``run()`` as a resource
 error and becomes an ``error`` result.
 
-Tenants run serially or on a thread pool (``jobs``); with ``ready``, always on the pool, so
+Tenants run serially or on a thread pool (``threads``); with ``ready``, always on the pool, so
 nothing ``ready`` does to find the next tenant, such as a sign-in, waits for a ``run()``.
 Every input tenant gets exactly one :class:`TenantResult`, in input order. After an error
 stops the run, no tenant starts, but tenants already running finish and are recorded.
@@ -155,7 +155,7 @@ def run_payload(
     *,
     ready: Iterable[Tenant] | None = None,
     continue_on_error: bool = False,
-    jobs: int = 1,
+    threads: int = 1,
 ) -> list[TenantResult]:
     """Run *payload* against every tenant.
 
@@ -168,25 +168,25 @@ def run_payload(
             them in input order. A generator is closed when the run stops early.
         continue_on_error: Keep going after a payload error. Auth failures
             never stop the run.
-        jobs: Maximum tenants processed concurrently.
+        threads: Maximum tenants processed concurrently.
 
     Returns:
         One result per tenant, in input order.
 
     Raises:
-        ValueError: If *jobs* is less than 1.
+        ValueError: If *threads* is less than 1.
         RunInterrupted: On Ctrl+C, carrying the partial results.
     """
-    if jobs < 1:
-        raise ValueError("jobs must be at least 1.")
-    if ready is None and (jobs == 1 or len(tenants) <= 1):
+    if threads < 1:
+        raise ValueError("threads must be at least 1.")
+    if ready is None and (threads == 1 or len(tenants) <= 1):
         return _run_serial(session, payload, tenants, continue_on_error=continue_on_error)
     return _run_parallel(
         session,
         payload,
         tenants,
         ready=tenants if ready is None else ready,
-        jobs=max(1, min(jobs, len(tenants))),
+        threads=max(1, min(threads, len(tenants))),
         continue_on_error=continue_on_error,
     )
 
@@ -232,7 +232,7 @@ def _run_parallel(
     tenants: Sequence[Tenant],
     *,
     ready: Iterable[Tenant],
-    jobs: int,
+    threads: int,
     continue_on_error: bool,
 ) -> list[TenantResult]:
     """Run tenants on a thread pool, each as soon as *ready* hands it over.
@@ -244,7 +244,7 @@ def _run_parallel(
         payload: The validated payload.
         tenants: Tenants in output order.
         ready: The same tenants, in the order they may start.
-        jobs: Worker threads.
+        threads: Worker threads.
         continue_on_error: Keep going after a payload error.
 
     Returns:
@@ -257,7 +257,7 @@ def _run_parallel(
     done: dict[int, TenantResult] = {}
     # Set by the worker whose tenant's error stops the run, before it takes another tenant.
     stopped = threading.Event()
-    executor = ThreadPoolExecutor(max_workers=jobs, thread_name_prefix="tenant")
+    executor = ThreadPoolExecutor(max_workers=threads, thread_name_prefix="tenant")
     futures: dict[Future[TenantResult], int] = {}
     handing_over = iter(ready)
     interrupted = False
