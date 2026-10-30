@@ -1067,11 +1067,9 @@ def test_audit_logs_keeps_an_earlier_runs_files(
 
 # --- exchange_message_trace.py -----------------------------------------------------------
 
-TRACE_PARAMETERS = {
-    "SenderAddress": "admin@contoso.com",
-    "Status": ["Failed", "Quarantined"],
-    "ResultSize": 100,
-}
+TRACE_V2 = "Get-MessageTraceV2"
+TRACE_V1 = "Get-MessageTrace"
+TRACE_PARAMETERS = {"SenderAddress": "admin@contoso.com", "Status": ["Failed", "Quarantined"]}
 TRACE_FILTER = json.dumps(TRACE_PARAMETERS)
 
 
@@ -1086,20 +1084,46 @@ def _trace_record(number: int) -> dict[str, Any]:
 
 
 def _trace_services(
-    records: dict[str, list[dict[str, Any]]], queries: list[tuple[str, dict[str, Any]]]
+    records: dict[str, list[dict[str, Any]]],
+    queries: list[tuple[str, str, dict[str, Any]]],
+    *,
+    refusals: dict[tuple[str, str], httpx2.Response] | None = None,
 ) -> httpx2.MockTransport:
-    """Fake Exchange holding *records* per tenant, recording the parameters of each query."""
+    """Fake Exchange holding *records* per tenant, recording each query's cmdlet and parameters.
+
+    *refusals* holds the answer a tenant gives a cmdlet in place of its records, by the tenant and
+    the cmdlet. :func:`_unknown_cmdlet` is how it answers one it does not know.
+    """
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         tenant = bearer_tenant(request)
         if request.url.path == f"/adminapi/beta/{tenant}/InvokeCommand":
             cmdlet = json.loads(request.content)["CmdletInput"]
-            if cmdlet["CmdletName"] == "Get-MessageTraceV2":
-                queries.append((tenant, cmdlet["Parameters"]))
+            name = cmdlet["CmdletName"]
+            if name in (TRACE_V2, TRACE_V1):
+                queries.append((tenant, name, cmdlet["Parameters"]))
+                refusal = (refusals or {}).get((tenant, name))
+                if refusal is not None:
+                    return refusal
                 return httpx2.Response(200, json={"value": records.get(tenant, [])})
         return fake_services(request)
 
     return httpx2.MockTransport(handler)
+
+
+def _unknown_cmdlet() -> httpx2.Response:
+    """Answer as Exchange does a cmdlet it does not know: a 403 with no body."""
+    return httpx2.Response(403)
+
+
+def _cmdlet_error(reason: str) -> httpx2.Response:
+    """Answer as Exchange does a cmdlet that failed, with *reason* in its details."""
+    error = {
+        "code": "BadRequest",
+        "message": "Error executing cmdlet",
+        "details": [{"message": f"Ex1|Exception|{reason}"}],
+    }
+    return httpx2.Response(400, json={"error": error})
 
 
 @pytest.fixture
@@ -1125,7 +1149,7 @@ def _trace_output(tmp_path: Path, tenant: str | None = None) -> Path:
     return tmp_path / "reports" / f"ExchangeMessageTrace_{tenant}_{today}.json"
 
 
-def test_message_trace_sends_the_filter_as_given_and_writes_json_and_a_count_workbook(
+def test_message_trace_sends_the_filter_and_the_size_and_writes_json_and_a_count_workbook(
     fake_msal: FakeMsal,
     message_trace: Any,
     tmp_path: Path,
@@ -1133,13 +1157,14 @@ def test_message_trace_sends_the_filter_as_given_and_writes_json_and_a_count_wor
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     caplog.set_level(logging.INFO)
-    queries: list[tuple[str, dict[str, Any]]] = []
+    queries: list[tuple[str, str, dict[str, Any]]] = []
     held = [_trace_record(1), _trace_record(2), _trace_record(3)]
 
     assert _run_all(message_trace, _trace_services({TENANT_A: held}, queries)) == 0
 
-    # One query per tenant, with exactly the parameters given and nothing else.
-    assert queries == [(TENANT_A, TRACE_PARAMETERS), (TENANT_B, TRACE_PARAMETERS)]
+    # One query per tenant: the parameters given, and the size.
+    sent = {**TRACE_PARAMETERS, "ResultSize": 5000}
+    assert queries == [(TENANT_A, TRACE_V2, sent), (TENANT_B, TRACE_V2, sent)]
     alpha_json = _trace_output(tmp_path, "Alpha")
     workbook = _trace_output(tmp_path)
     assert sorted(p.name for p in (tmp_path / "reports").iterdir()) == sorted(
@@ -1162,22 +1187,113 @@ def test_message_trace_sends_the_filter_as_given_and_writes_json_and_a_count_wor
     ]
 
 
-def test_message_trace_empty_filter_sends_no_parameters(
+def test_message_trace_empty_filter_sends_only_the_size(
     fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, message_trace: Any
 ) -> None:
     monkeypatch.setattr(message_trace, "FILTER", "{}")
-    queries: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.setattr(message_trace, "SIZE", 100)
+    queries: list[tuple[str, str, dict[str, Any]]] = []
 
     assert _run_all(message_trace, _trace_services({}, queries)) == 0
 
-    assert queries == [(TENANT_A, {}), (TENANT_B, {})]
+    sent = {"ResultSize": 100}
+    assert queries == [(TENANT_A, TRACE_V2, sent), (TENANT_B, TRACE_V2, sent)]
+
+
+def test_message_trace_filters_own_size_wins(
+    fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, message_trace: Any
+) -> None:
+    monkeypatch.setattr(message_trace, "FILTER", '{"ResultSize": 7}')
+    queries: list[tuple[str, str, dict[str, Any]]] = []
+
+    assert _run_all(message_trace, _trace_services({}, queries)) == 0
+
+    assert {tuple(parameters.items()) for _, _, parameters in queries} == {(("ResultSize", 7),)}
+
+
+def test_message_trace_falls_back_to_the_older_cmdlet_on_a_403(
+    fake_msal: FakeMsal,
+    monkeypatch: pytest.MonkeyPatch,
+    message_trace: Any,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO)
+    monkeypatch.setattr(message_trace, "SIZE", 100)
+    queries: list[tuple[str, str, dict[str, Any]]] = []
+    held = [_trace_record(1), _trace_record(2)]
+    refusals = {(TENANT_A, TRACE_V2): _unknown_cmdlet()}
+
+    transport = _trace_services({TENANT_A: held}, queries, refusals=refusals)
+    assert _run_all(message_trace, transport) == 0
+
+    # The same filter, with the size in the older cmdlet's spelling; the other tenant is untouched.
+    assert queries == [
+        (TENANT_A, TRACE_V2, {**TRACE_PARAMETERS, "ResultSize": 100}),
+        (TENANT_A, TRACE_V1, {**TRACE_PARAMETERS, "PageSize": 100}),
+        (TENANT_B, TRACE_V2, {**TRACE_PARAMETERS, "ResultSize": 100}),
+    ]
+    assert json.loads(_trace_output(tmp_path, "Alpha").read_text(encoding="utf-8")) == held
+    assert _sheets(_trace_output(tmp_path))["Tenants"][2:] == [
+        ("Alpha", TENANT_A, "ok", 2, None),
+        ("beta corp", TENANT_B, "ok", 0, None),
+    ]
+    assert "Exchange refused Get-MessageTraceV2; trying Get-MessageTrace" in caplog.messages
+
+
+@pytest.mark.parametrize(
+    ("older", "reason"),
+    [
+        (
+            _cmdlet_error("Get-MessageTrace will start deprecating on September 1st, 2025."),
+            "Get-MessageTrace failed: Get-MessageTrace will start deprecating",
+        ),
+        (_unknown_cmdlet(), "Get-MessageTrace failed: Exchange sent no error body"),
+    ],
+    ids=["reason given", "no reason given"],
+)
+def test_message_trace_error_names_both_cmdlets_when_both_are_refused(
+    fake_msal: FakeMsal,
+    message_trace: Any,
+    tmp_path: Path,
+    older: httpx2.Response,
+    reason: str,
+) -> None:
+    refusals = {(TENANT_A, TRACE_V2): _unknown_cmdlet(), (TENANT_A, TRACE_V1): older}
+
+    assert _run_all(message_trace, _trace_services({}, [], refusals=refusals)) == 1
+
+    alpha, beta = _sheets(_trace_output(tmp_path))["Tenants"][2:]
+    assert alpha[:4] == ("Alpha", TENANT_A, "error", None)
+    assert "Exchange refused Get-MessageTraceV2 with a 403" in alpha[4]
+    assert reason in alpha[4]
+    assert beta == ("beta corp", TENANT_B, "ok", 0, None)
+
+
+@pytest.mark.parametrize(
+    "refusal",
+    [httpx2.Response(401), _cmdlet_error("The interval is too long.")],
+    ids=["401", "400"],
+)
+def test_message_trace_does_not_fall_back_on_any_other_error(
+    fake_msal: FakeMsal, message_trace: Any, tmp_path: Path, refusal: httpx2.Response
+) -> None:
+    queries: list[tuple[str, str, dict[str, Any]]] = []
+    refusals = {(TENANT_A, TRACE_V2): refusal}
+
+    assert _run_all(message_trace, _trace_services({}, queries, refusals=refusals)) == 1
+
+    assert TRACE_V1 not in {cmdlet for _, cmdlet, _ in queries}
+    alpha, _ = _sheets(_trace_output(tmp_path))["Tenants"][2:]
+    assert alpha[:3] == ("Alpha", TENANT_A, "error")
+    assert "Exchange refused" not in alpha[4]
 
 
 def test_message_trace_reports_a_filter_that_is_not_json(
     fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, message_trace: Any, tmp_path: Path
 ) -> None:
     monkeypatch.setattr(message_trace, "FILTER", "not json")
-    queries: list[tuple[str, dict[str, Any]]] = []
+    queries: list[tuple[str, str, dict[str, Any]]] = []
 
     assert _run_all(message_trace, _trace_services({}, queries)) == 1
 
@@ -1191,20 +1307,11 @@ def test_message_trace_reports_a_filter_that_is_not_json(
 def test_message_trace_report_goes_on_after_a_tenant_error(
     fake_msal: FakeMsal, message_trace: Any, tmp_path: Path
 ) -> None:
-    held = _trace_services({TENANT_B: [_trace_record(1)]}, [])
+    reason = "The interval between StartDate and EndDate is too long."
+    refusals = {(TENANT_A, TRACE_V2): _cmdlet_error(reason)}
+    transport = _trace_services({TENANT_B: [_trace_record(1)]}, [], refusals=refusals)
 
-    def handler(request: httpx2.Request) -> httpx2.Response:
-        if bearer_tenant(request) == TENANT_A and request.url.path.endswith("/InvokeCommand"):
-            reason = "Ex1|Exception|The interval between StartDate and EndDate is too long."
-            error = {
-                "code": "BadRequest",
-                "message": "Error executing cmdlet",
-                "details": [{"message": reason}],
-            }
-            return httpx2.Response(400, json={"error": error})
-        return held.handle_request(request)
-
-    assert _run_all(message_trace, httpx2.MockTransport(handler)) == 1
+    assert _run_all(message_trace, transport) == 1
 
     alpha, beta = _sheets(_trace_output(tmp_path))["Tenants"][2:]
     assert alpha[:4] == ("Alpha", TENANT_A, "error", None)

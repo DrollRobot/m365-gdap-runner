@@ -102,20 +102,25 @@ def test_service_principal_refuses_disable_with_delete(
     assert "argument --delete: not allowed with argument --disable" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize(
+    ("flags", "size"),
+    [([], 5000), (["--size", "100"], 100)],
+    ids=["default size", "--size"],
+)
 def test_message_trace_command_line_takes_the_filter_as_given(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, flags: list[str], size: int
 ) -> None:
     given = '{"SenderAddress": "admin@contoso.com"}'
-    seen: list[tuple[str, Path]] = []
+    seen: list[tuple[str, int, Path]] = []
 
     def fake_main(name: str, args: argparse.Namespace) -> int:
         script = sys.modules[name]
-        seen.append((script.FILTER, script.OUT_DIR))
+        seen.append((script.FILTER, script.SIZE, script.OUT_DIR))
         return 0
 
     monkeypatch.setattr(m365_gdap_runner, "main", fake_main)
-    monkeypatch.setattr(sys, "argv", ["exchange_message_trace.py", given, "--out", "x"])
+    monkeypatch.setattr(sys, "argv", ["exchange_message_trace.py", given, "--out", "x", *flags])
     with pytest.raises(SystemExit) as exc:
         runpy.run_path(str(MESSAGE_TRACE), run_name="__main__")
     assert exc.value.code == 0
-    assert seen == [(given, Path("x"))]
+    assert seen == [(given, size, Path("x"))]

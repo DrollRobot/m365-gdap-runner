@@ -34,7 +34,10 @@ def _window(days: int = 9) -> dict[str, str]:
 
 
 def _run_trace(
-    monkeypatch: pytest.MonkeyPatch, out: Path, parameters: dict[str, Any]
+    monkeypatch: pytest.MonkeyPatch,
+    out: Path,
+    parameters: dict[str, Any],
+    size: int | None = None,
 ) -> tuple[int, list[tuple[Any, ...]], list[dict[str, Any]]]:
     """Run the example on the pilot group.
 
@@ -42,6 +45,7 @@ def _run_trace(
         monkeypatch: Keeps the run from stacking log handlers on the root logger.
         out: The folder to write to.
         parameters: The filter, before it is written as JSON.
+        size: What ``--size`` would set, instead of the script's default.
 
     Returns:
         The exit code, the workbook's tenant rows, and every tenant's records together.
@@ -50,6 +54,8 @@ def _run_trace(
     module: Any = load_script(MESSAGE_TRACE)
     module.FILTER = json.dumps(parameters)
     module.OUT_DIR = out
+    if size is not None:
+        module.SIZE = size
     parser = argparse.ArgumentParser()
     cli.add_arguments(parser)
     code = cli.main(module, parser.parse_args(["--include", "pilot"]))
@@ -83,7 +89,16 @@ def test_message_trace_empty_filter_runs(monkeypatch: pytest.MonkeyPatch, tmp_pa
     assert {row[2] for row in rows} == {"ok"}
 
 
-def test_message_trace_result_size_reaches_the_cmdlet(
+def test_message_trace_size_reaches_the_cmdlet(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    code, rows, _ = _run_trace(monkeypatch, tmp_path, _window(), size=1)
+    assert code == 0
+    assert {row[2] for row in rows} == {"ok"}
+    assert max(row[3] for row in rows) <= 1
+
+
+def test_message_trace_result_size_in_the_filter_reaches_the_cmdlet(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     code, rows, _ = _run_trace(monkeypatch, tmp_path, {"ResultSize": 1, **_window()})
@@ -98,7 +113,7 @@ def test_message_trace_result_size_reaches_the_cmdlet(
         {"Status": ["Delivered", "Failed"]},
         {"SenderAddress": ["nobody@contoso.com", "nothing@contoso.com"]},
         {"Subject": "a b", "SubjectFilterType": "Contains"},
-        {"resultsize": 1},
+        {"status": "Delivered"},
     ],
     ids=["several statuses", "several senders", "subject", "lowercase name"],
 )

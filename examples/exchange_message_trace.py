@@ -13,9 +13,14 @@ object, and the filter is that object, sent as given::
 
     uv run exchange_message_trace.py '{"SenderAddress": "admin@contoso.com"}' --include pilot
     uv run exchange_message_trace.py '{"Status": ["Failed", "Quarantined"]}'
-    uv run exchange_message_trace.py '{}' --include pilot
+    uv run exchange_message_trace.py '{}' --include pilot --size 100
 
 PowerShell before 7.3 strips the inner double quotes: put a backslash before each one there.
+
+Where Exchange refuses ``Get-MessageTraceV2`` with a 403, as it does in GCC High, the script runs
+``Get-MessageTrace`` instead, with the same filter. Exchange refuses a parameter the cmdlet does
+not take, and the workbook says so: only ``Get-MessageTraceV2`` takes ``Subject`` and
+``SubjectFilterType``, and only ``Get-MessageTrace`` takes ``Page``.
 
 Writes one JSON file per tenant with matches, and one workbook of match counts per tenant
 with the filter in its title row, in the current folder or ``--out``. A file never replaces
@@ -23,8 +28,10 @@ another: where its name is taken, it gets the first free ``_2``, ``_3``, and so 
 
 Needs a GDAP role such as Exchange Administrator. A record is one message to one recipient.
 
-The cmdlet returns 1000 records unless ``ResultSize`` says otherwise, and this script makes one
-query per tenant. A count of exactly that many in the workbook means there may be more.
+Each tenant gets one query, for up to ``--size`` records: 5000 by default, the most a query
+returns. It goes as ``ResultSize`` to ``Get-MessageTraceV2`` and as ``PageSize`` to
+``Get-MessageTrace``, unless the filter sets its own. A count of exactly that many in the
+workbook means there may be more.
 
 Common filters. Several values for one parameter go in a list, and one value goes as text::
 
@@ -33,8 +40,9 @@ Common filters. Several values for one parameter go in a list, and one value goe
     {"RecipientAddress": ["user@contoso.com", "other@contoso.com"]}
 
     # Date range: both dates or neither. One alone is refused, with no reason given. Neither is
-    # the last 48 hours. At most 10 days at once, from the last 90 days. A date with no time is
-    # the start of that day, so give the end a time to include its day.
+    # the last 48 hours. At most 10 days at once, from the last 90 days, or the last 10 with
+    # Get-MessageTrace. A date with no time is the start of that day, so give the end a time to
+    # include its day.
     {"StartDate": "2026-10-20T00:00:00Z", "EndDate": "2026-10-29T23:59:59Z"}
 
     # Delivery status: Delivered, Expanded, Failed, FilteredAsSpam, GettingStatus, Pending
@@ -52,19 +60,17 @@ Common filters. Several values for one parameter go in a list, and one value goe
     {"FromIP": "203.0.113.10"}
     {"ToIP": "203.0.113.20"}
 
-    # The most records to return: 5000 at most.
-    {"ResultSize": 5000}
-
     # All messages from a specific domain over the past 2 days:
     {"SenderAddress": "*@gmx.de", "StartDate": "2026-10-28T18:00:00Z",
-     "EndDate": "2026-10-30T23:59:59Z", "ResultSize": 5000}
+     "EndDate": "2026-10-30T23:59:59Z"}
 
 Microsoft allows each tenant 100 queries in 5 minutes. A tenant refused for that, or for
 anything else, has the reason in the workbook and no JSON file; run it again.
 
-Microsoft's docs: the cmdlet, and the message trace feature::
+Microsoft's docs: the two cmdlets, and the message trace feature::
 
     https://learn.microsoft.com/en-us/powershell/module/exchangepowershell/get-messagetracev2
+    https://learn.microsoft.com/en-us/powershell/module/exchangepowershell/get-messagetrace
     https://learn.microsoft.com/en-us/exchange/monitoring/trace-an-email-message/message-trace-modern-eac
 """
 
@@ -75,10 +81,12 @@ import io
 import json
 import logging
 import re
+from http import HTTPStatus
 from pathlib import Path
-from typing import BinaryIO
+from typing import Any, BinaryIO
 
 import xlsxwriter
+from azure_auth import InvokeCommandError
 
 from m365_gdap_runner import TenantContext, TenantResult
 
@@ -92,6 +100,9 @@ CONTINUE_ON_ERROR = True
 
 # The cmdlet's parameters, as a JSON object. The command line sets it before the run.
 FILTER = "{}"
+
+# The most records to ask each tenant for: the most a query returns. ``--size`` replaces it.
+SIZE = 5000
 
 # Where the JSON files and the workbook go: the current folder. ``--out`` replaces it.
 OUT_DIR = Path()
@@ -120,7 +131,7 @@ def run(ctx: TenantContext) -> int:
     Returns:
         How many records match.
     """
-    records = ctx.exchange.run("Get-MessageTraceV2", **json.loads(FILTER))
+    records = _read_records(ctx)
     if not records:
         logger.info("No records match")
         return 0
@@ -192,6 +203,36 @@ def report(results: list[TenantResult]) -> None:
     print(f"Wrote {path}")
 
 
+def _read_records(ctx: TenantContext) -> list[dict[str, Any]]:
+    """Run ``Get-MessageTraceV2``, or ``Get-MessageTrace`` where Exchange refuses it with a 403.
+
+    A 403 with no error body is how Exchange answers a cmdlet it does not know.
+
+    Args:
+        ctx: The tenant context supplied by the runner.
+
+    Returns:
+        The records, whole, as the cmdlet returns them.
+
+    Raises:
+        InvokeCommandError: If Exchange refuses ``Get-MessageTraceV2`` for any other reason, or
+            refuses both cmdlets. The error for both opens with the first cmdlet's refusal,
+            because the runner cuts a long message to its first sentence.
+    """
+    parameters = json.loads(FILTER)
+    try:
+        return ctx.exchange.run("Get-MessageTraceV2", **{"ResultSize": SIZE, **parameters})
+    except InvokeCommandError as refused:
+        if refused.status != HTTPStatus.FORBIDDEN:
+            raise
+    logger.info("Exchange refused Get-MessageTraceV2; trying Get-MessageTrace")
+    try:
+        return ctx.exchange.run("Get-MessageTrace", **{"PageSize": SIZE, **parameters})
+    except InvokeCommandError as error:
+        message = f"Exchange refused Get-MessageTraceV2 with a 403, then {error}"
+        raise InvokeCommandError(message, status=error.status) from error
+
+
 def _create(stem: str, suffix: str) -> tuple[Path, BinaryIO]:
     """Create a new file in :data:`OUT_DIR`, never one that is already there.
 
@@ -254,6 +295,13 @@ if __name__ == "__main__":
         '\'{"SenderAddress": "admin@contoso.com"}\'.',
     )
     parser.add_argument(
+        "--size",
+        type=int,
+        default=SIZE,
+        metavar="N",
+        help=f"The most records to read from each tenant, up to 5000 (default: {SIZE}).",
+    )
+    parser.add_argument(
         "--out",
         type=Path,
         default=OUT_DIR,
@@ -263,5 +311,6 @@ if __name__ == "__main__":
     add_arguments(parser)
     args = parser.parse_args()
     FILTER = args.filter
+    SIZE = args.size
     OUT_DIR = args.out
     raise SystemExit(main(__name__, args))
