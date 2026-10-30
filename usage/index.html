@@ -1,0 +1,1655 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Run Python scripts across GDAP customer tenants from a single partner sign-in.">
+      
+      
+      
+      
+        <link rel="prev" href="../getting-started/">
+      
+      
+        <link rel="next" href="../development/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+    
+    
+      
+        <title>Usage - m365-gdap-runner</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.57a0d79d.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#usage" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="m365-gdap-runner" class="md-header__button md-logo" aria-label="m365-gdap-runner" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            m365-gdap-runner
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Usage
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/DrollRobot/m365-gdap-runner" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="m365-gdap-runner" class="md-nav__button md-logo" aria-label="m365-gdap-runner" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    m365-gdap-runner
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/DrollRobot/m365-gdap-runner" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Usage
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Usage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#scripts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scripts
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Scripts">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-a-script-declares" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What a script declares
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-tenant-context" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The tenant context
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#scopes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scopes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#flags-of-your-own" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Flags of your own
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#choosing-tenants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Choosing tenants
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-tenants-file" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The tenants file
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The tenants file">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#excel-workbooks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Excel workbooks
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#keeping-it-up-to-date" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Keeping it up to date
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sign-ins" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sign-ins
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Sign-ins">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-partner-sign-in" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The partner sign-in
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sign-in-windows" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sign-in windows
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tenants-outside-gdap" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tenants outside GDAP
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#consent" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Consent
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#granting-missing-scopes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Granting missing scopes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#keeping-sign-ins-between-runs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Keeping sign-ins between runs
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#running" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Running
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Running">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#tenants-at-once" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tenants at once
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#errors-in-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Errors in run()
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#stopping-a-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stopping a run
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reports" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reports
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Reports">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#logs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Logs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#exit-codes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Exit codes
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Settings
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Settings">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-config-command" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The config command
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#every-setting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Every setting
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#overrides" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overrides
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#profiles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Profiles
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../development/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reference/m365_gdap_runner/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#scripts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scripts
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Scripts">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-a-script-declares" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What a script declares
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-tenant-context" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The tenant context
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#scopes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scopes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#flags-of-your-own" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Flags of your own
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#choosing-tenants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Choosing tenants
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-tenants-file" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The tenants file
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The tenants file">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#excel-workbooks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Excel workbooks
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#keeping-it-up-to-date" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Keeping it up to date
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sign-ins" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sign-ins
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Sign-ins">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-partner-sign-in" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The partner sign-in
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sign-in-windows" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sign-in windows
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tenants-outside-gdap" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tenants outside GDAP
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#consent" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Consent
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#granting-missing-scopes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Granting missing scopes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#keeping-sign-ins-between-runs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Keeping sign-ins between runs
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#running" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Running
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Running">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#tenants-at-once" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tenants at once
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#errors-in-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Errors in run()
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#stopping-a-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stopping a run
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reports" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reports
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Reports">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#logs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Logs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#exit-codes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Exit codes
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Settings
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Settings">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-config-command" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The config command
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#every-setting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Every setting
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#overrides" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overrides
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#profiles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Profiles
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">&para;</a></h1>
+<h2 id="scripts">Scripts<a class="headerlink" href="#scripts" title="Permanent link">&para;</a></h2>
+<p>A script is a <code>.py</code> file that does the work for one tenant; the runner calls it once per
+selected tenant. It defines <code>run(ctx)</code>, declares what it uses, and hands itself to the
+library from its <code>__main__</code> block:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># /// script</span>
+<span class="c1"># requires-python = "&gt;=3.11"</span>
+<span class="c1"># dependencies = [</span>
+<span class="c1">#   "m365-gdap-runner @ git+https://github.com/DrollRobot/m365-gdap-runner.git@v0.2.0",</span>
+<span class="c1"># ]</span>
+<span class="c1"># ///</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">m365_gdap_runner</span><span class="w"> </span><span class="kn">import</span> <span class="n">TenantContext</span>
+
+<span class="n">CLIENTS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"graph"</span><span class="p">,</span> <span class="s2">"exchange"</span><span class="p">]</span>
+<span class="n">SCOPES</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"User.Read.All"</span><span class="p">]</span>
+<span class="n">CONTINUE_ON_ERROR</span> <span class="o">=</span> <span class="kc">True</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span><span class="n">ctx</span><span class="p">:</span> <span class="n">TenantContext</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">object</span><span class="p">]:</span>
+    <span class="n">users</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">get_all</span><span class="p">(</span><span class="s2">"/users"</span><span class="p">,</span> <span class="n">params</span><span class="o">=</span><span class="p">{</span><span class="s2">"$select"</span><span class="p">:</span> <span class="s2">"userPrincipalName"</span><span class="p">})</span>
+    <span class="p">(</span><span class="n">config</span><span class="p">,)</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">exchange</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="s2">"Get-OrganizationConfig"</span><span class="p">)</span>
+    <span class="k">return</span> <span class="p">{</span><span class="s2">"users"</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="n">users</span><span class="p">),</span> <span class="s2">"audit_disabled"</span><span class="p">:</span> <span class="n">config</span><span class="p">[</span><span class="s2">"AuditDisabled"</span><span class="p">]}</span>
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">"__main__"</span><span class="p">:</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">m365_gdap_runner</span><span class="w"> </span><span class="kn">import</span> <span class="n">main</span>
+
+    <span class="k">raise</span> <span class="ne">SystemExit</span><span class="p">(</span><span class="n">main</span><span class="p">(</span><span class="vm">__name__</span><span class="p">))</span>
+</code></pre></div>
+<p>The header at the top tells uv what the script needs: the runner, at a release, and anything
+else the script imports, such as a library for its reports. <code>uv run script.py</code> builds the
+script's own environment from it.</p>
+<h3 id="what-a-script-declares">What a script declares<a class="headerlink" href="#what-a-script-declares" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>run(ctx)</code>: the work for one tenant. <code>ctx</code> is the tenant's
+  <a href="#the-tenant-context">context</a>; what <code>run()</code> returns is kept, as it is, in the tenant's
+  <a href="#reports">result</a>.</li>
+<li><code>CLIENTS</code>: which of <code>ctx.graph</code>, <code>ctx.exchange</code>, <code>ctx.ipps</code> and <code>ctx.arm</code> the script uses.
+  Default <code>["graph"]</code>.</li>
+<li><code>SCOPES</code>: the delegated Graph scopes the script needs in each tenant. Required when
+  <code>graph</code> is in <code>CLIENTS</code>, not allowed otherwise. See <a href="#scopes">Scopes</a>.</li>
+<li><code>report(results)</code>, optional: called once after the last tenant. See <a href="#reports">Reports</a>.</li>
+<li><code>CONTINUE_ON_ERROR</code>, optional: keep going after an error in <code>run()</code>. See
+  <a href="#errors-in-run">Errors in run()</a>.</li>
+<li><code>GRANT_WHEN_POSSIBLE</code>, optional: add missing scopes to the app's grant where it can. See
+  <a href="#granting-missing-scopes">Granting missing scopes</a>.</li>
+</ul>
+<p>The script is checked before any sign-in, so a mistake in it never costs a browser prompt.</p>
+<h3 id="the-tenant-context">The tenant context<a class="headerlink" href="#the-tenant-context" title="Permanent link">&para;</a></h3>
+<p><code>run(ctx)</code> gets a <code>TenantContext</code> for the tenant:</p>
+<ul>
+<li><code>ctx.tenant</code>: the tenant, with its <code>tenant_id</code>, <code>display_name</code> and <code>cloud</code>.</li>
+<li><code>ctx.graph</code>: Microsoft Graph.</li>
+<li><code>ctx.exchange</code>: Exchange Online.</li>
+<li><code>ctx.ipps</code>: Security &amp; Compliance PowerShell.</li>
+<li><code>ctx.arm</code>: Azure Resource Manager.</li>
+<li><code>ctx.auth</code>: the azure-auth context for the tenant. Hand it to any azure-auth client, or to
+  an Azure SDK client as <code>credential=</code>, for resources the four clients do not cover.</li>
+</ul>
+<p>The clients come from <a href="https://github.com/DrollRobot/azure-auth">azure-auth</a>, which
+documents what each one offers. Each client in <code>CLIENTS</code> is checked in the tenant before
+<code>run()</code> starts, so <code>run()</code> never opens a sign-in window. Asking for a client the script did
+not declare raises <code>ClientNotDeclared</code>.</p>
+<h3 id="scopes">Scopes<a class="headerlink" href="#scopes" title="Permanent link">&para;</a></h3>
+<p>The check before <code>run()</code> asks for exactly the scopes in <code>SCOPES</code>, so a tenant that has not
+granted one of them fails before <code>run()</code>. <code>SCOPES = []</code> asks for none in particular: Graph
+gets whatever the app holds in the tenant, and only a tenant where it holds nothing fails.
+That suits a script that reads what the app holds, with <code>ctx.graph.granted_scopes()</code>.
+<code>.default</code> is refused, since it would skip the check.</p>
+<p>An entry may be a tuple of scopes, any one of which will do:</p>
+<div class="highlight"><pre><span></span><code><span class="n">SCOPES</span> <span class="o">=</span> <span class="p">[(</span><span class="s2">"Application.Read.All"</span><span class="p">,</span> <span class="s2">"Application.ReadWrite.All"</span><span class="p">)]</span>
+</code></pre></div>
+<p>The check reads what each tenant has granted and asks for the first scope in the tuple
+the tenant holds. A tenant that holds none is asked for the first scope in the tuple, so
+the consent screen, the consent error and a self-grant name that one. Put the
+least-privileged scope first. A tenant that signs in on its own is asked for the first
+scope in each tuple, since what it has granted cannot be read before the sign-in.</p>
+<h3 id="flags-of-your-own">Flags of your own<a class="headerlink" href="#flags-of-your-own" title="Permanent link">&para;</a></h3>
+<p><code>main(__name__)</code> reads the library's flags only. A script with flags of its own builds the
+parser, adds the library's with <code>add_arguments()</code>, and passes what it parsed to <code>main()</code>;
+<code>-h</code> then lists both:</p>
+<div class="highlight"><pre><span></span><code><span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">"__main__"</span><span class="p">:</span>
+    <span class="kn">import</span><span class="w"> </span><span class="nn">argparse</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">m365_gdap_runner</span><span class="w"> </span><span class="kn">import</span> <span class="n">add_arguments</span><span class="p">,</span> <span class="n">main</span>
+
+    <span class="n">parser</span> <span class="o">=</span> <span class="n">argparse</span><span class="o">.</span><span class="n">ArgumentParser</span><span class="p">(</span><span class="n">description</span><span class="o">=</span><span class="s2">"Users in each tenant."</span><span class="p">)</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">"--domain"</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">"Only users in this domain."</span><span class="p">)</span>
+    <span class="n">add_arguments</span><span class="p">(</span><span class="n">parser</span><span class="p">)</span>
+    <span class="n">args</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">parse_args</span><span class="p">()</span>
+    <span class="n">DOMAIN</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">domain</span>
+    <span class="k">raise</span> <span class="ne">SystemExit</span><span class="p">(</span><span class="n">main</span><span class="p">(</span><span class="vm">__name__</span><span class="p">,</span> <span class="n">args</span><span class="p">))</span>
+</code></pre></div>
+<p><code>run()</code> reads <code>DOMAIN</code> like any other module-level value. The script's own flag names must
+not clash with the library's.</p>
+<h2 id="choosing-tenants">Choosing tenants<a class="headerlink" href="#choosing-tenants" title="Permanent link">&para;</a></h2>
+<p>A run has to say which tenants it is for; one that includes none is refused. Pick them with
+<code>--include</code>, and take some back out with <code>--exclude</code>. Both are repeatable, and each takes:</p>
+<ul>
+<li>a tenant, by display name or ID: a GDAP customer or a row of the tenants file.</li>
+<li>a group: the tenants marked TRUE in that column of the tenants file.</li>
+<li><code>all</code>, for <code>--include</code> only: every tenant with a GDAP relationship.</li>
+</ul>
+<p>Everything included adds up, and an exclusion always wins: <code>--include all --exclude pilot</code>
+runs every GDAP tenant outside the pilot group. Case does not matter. A name that matches
+nothing is an error, and so is one that could mean two things: a tenant and a group column
+with the same name, or a tenant or column named <code>all</code>. Name the tenant by its ID, or rename
+the column. <code>--include m365_gdap</code> runs the tenants the partner sign-in reaches (see
+<a href="#tenants-outside-gdap">Tenants outside GDAP</a>).</p>
+<h2 id="the-tenants-file">The tenants file<a class="headerlink" href="#the-tenants-file" title="Permanent link">&para;</a></h2>
+<p>The tenants file is a CSV you edit in a spreadsheet, one row per customer. This package owns
+seven columns, <code>m365_tenant_id</code>, <code>m365_tenant_name</code>, <code>m365_domain</code>, <code>m365_cloud</code>,
+<code>m365_username</code>, <code>m365_gdap</code> and <code>m365_pw_url</code>, and reads one more per group a run names:
+a column holding TRUE or FALSE, where a blank cell counts as FALSE and anything else is an
+error. Every other column is left alone, so the same file can carry what other tools know
+about the same customers on other platforms.</p>
+<div class="highlight"><pre><span></span><code>m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,m365_gdap,m365_pw_url,pilot,patching,crm_id
+aaaaaaaa-0000-0000-0000-00000000000a,Alpha,alpha.example,Commercial,,TRUE,,TRUE,FALSE,1001
+bbbbbbbb-0000-0000-0000-00000000000b,beta corp,beta.example,USGov,admin@beta.us,,https://passwords.example/beta,TRUE,TRUE,1002
+cccccccc-0000-0000-0000-00000000000c,Gamma,gamma.example,Commercial,admin@gamma.example,FALSE,,FALSE,TRUE,1003
+</code></pre></div>
+<p>Tenants are matched by ID; the name and domain columns are there for you. A row with no
+<code>m365_tenant_id</code> is a customer without an M365 tenant and is skipped. A tenant may have more
+than one row, as long as they agree in every <code>m365_</code> column; case and surrounding spaces do
+not count, and other columns may differ. A run that selects a tenant whose rows disagree is
+refused, naming the rows.</p>
+<p><code>m365_cloud</code> is <code>Commercial</code>, <code>USGov</code>, <code>USGovDoD</code> or <code>China</code>. <code>m365_username</code>, <code>m365_gdap</code>
+and <code>m365_pw_url</code> are covered in <a href="#tenants-outside-gdap">Tenants outside GDAP</a>.</p>
+<p>The file is <code>tenants.csv</code> in the config directory (<code>m365-gdap-runner-config path</code> shows
+where), unless the <code>tenants_file</code> setting or <code>--tenants-file</code> points elsewhere.</p>
+<h3 id="excel-workbooks">Excel workbooks<a class="headerlink" href="#excel-workbooks" title="Permanent link">&para;</a></h3>
+<p>The file can also be an Excel workbook, named <code>.xlsx</code>, with the same columns in one table
+(Insert &gt; Table). The table may sit on any sheet, at any spot; a workbook with no table, or
+more than one, is an error. TRUE and FALSE may be Excel's own or typed as text, a totals row
+is ignored, and a formula counts as the value Excel last calculated.</p>
+<p>When <code>m365-gdap-runner-customer-export</code> adds to the table, new columns go to its right and
+new rows below it, and the table grows to hold them; every other cell is left as it was.
+Those cells must be empty, and the table must have no totals row. Saving the workbook drops
+any charts and images in it. A missing <code>.xlsx</code> file is created as a workbook with one table.</p>
+<h3 id="keeping-it-up-to-date">Keeping it up to date<a class="headerlink" href="#keeping-it-up-to-date" title="Permanent link">&para;</a></h3>
+<p>Only the <code>m365-gdap-runner-customer-export</code> command writes the file. It creates the file
+when there is none. Any of the seven <code>m365_</code> columns the file lacks is added after the
+<code>m365_</code> columns it has (or at the end when it has none), blank, except that <code>m365_gdap</code> is
+TRUE for every tenant GDAP lists. A GDAP tenant with no row is appended with its name, its
+cloud, TRUE in <code>m365_gdap</code> and every other column blank, and a warning names it. A blank
+<code>m365_cloud</code> cell is filled in by OpenID Connect discovery. The command lists the tenants and
+runs nothing, so run it once to create the file, then add group columns. Rows for tenants
+without a GDAP relationship are yours to add and keep.</p>
+<p>A script run never writes the file. Where the file falls behind, the run warns, names
+<code>m365-gdap-runner-customer-export</code> as the fix, and goes on as if the command had run, for
+that run only. With no file at all, it can pick only GDAP tenants.</p>
+<h2 id="sign-ins">Sign-ins<a class="headerlink" href="#sign-ins" title="Permanent link">&para;</a></h2>
+<h3 id="the-partner-sign-in">The partner sign-in<a class="headerlink" href="#the-partner-sign-in" title="Permanent link">&para;</a></h3>
+<p>The runner signs in at the partner tenant as <code>username</code>, once per client in <code>CLIENTS</code>, since
+each client uses a different Microsoft app; <code>client_id</code> names one app for all of them
+instead.</p>
+<p>Every selected tenant in the partner's cloud is then checked silently through that sign-in,
+<code>jobs</code> at a time; every 30 seconds, a log line says how many are done and about how long the
+rest will take. Each tenant's <code>run()</code> starts as soon as its access is settled.</p>
+<p>Every sign-in, the partner's and each tenant's own, asks Microsoft for a new token for each
+client rather than trusting one saved by an earlier run. A saved token says nothing about
+whether Microsoft will still issue one: a Conditional Access policy may have started refusing
+the sign-in since. So that failure happens in the check, where a window may open, instead of
+inside <code>run()</code>, where none may.</p>
+<p>Renewing your partner sign-in keeps the time you first signed in, and did multi-factor
+authentication. A customer whose Conditional Access policy allows less time refuses it
+however often it is renewed (AADSTS70043, or AADSTS50078 for the multi-factor
+authentication). The first such customer in a run opens a new partner sign-in that asks for
+your password, and multi-factor authentication, again: one window per client in <code>CLIENTS</code>.
+That customer, and every later one refused for the same reason, is then checked through the
+partner sign-in again. Only a tenant still refused goes to its own sign-in. Ctrl+C during
+that window, then Enter, skips it, and those customers go to their own sign-in.</p>
+<h3 id="sign-in-windows">Sign-in windows<a class="headerlink" href="#sign-in-windows" title="Permanent link">&para;</a></h3>
+<p>Sign-ins open the system's default browser. The Windows sign-in window (the broker) is not
+offered: GDAP does not work through it. To use another browser, or another profile of it:</p>
+<ul>
+<li><code>browser_path</code>: the browser, as a full path (recommended) or a program on <code>PATH</code>.</li>
+<li><code>browser_args</code>: a list of arguments for it, such as <code>["--profile-directory=Profile 2"]</code>.
+  The sign-in address is added last. Needs <code>browser_path</code>.</li>
+</ul>
+<p>A sign-in window waits <code>browser_timeout</code> seconds (default 120) to be completed. After that,
+the sign-in fails: the partner sign-in ends the run, and a tenant's own leaves that tenant
+<code>auth_failed</code>.</p>
+<p>To give up on a tenant's own sign-in without waiting, press Ctrl+C, then Enter: that tenant
+is <code>auth_failed</code> and the run goes on. Ctrl+C twice stops the run.</p>
+<h3 id="tenants-outside-gdap">Tenants outside GDAP<a class="headerlink" href="#tenants-outside-gdap" title="Permanent link">&para;</a></h3>
+<p>A tenant the partner sign-in cannot reach still runs. That covers a row of the tenants file
+with no GDAP relationship, a tenant in another cloud (the partner sign-in reaches its own
+cloud only), and a GDAP tenant where consent is missing or a policy wants a fresh sign-in.</p>
+<p>Each tenant that fails the partner check, and each tenant in another cloud, gets a sign-in of
+its own, in its own cloud, as the account in its <code>m365_username</code> cell: one sign-in per client
+in <code>CLIENTS</code>. Sign-in windows open one at a time, as soon as a tenant needs one, while the
+other checks go on. A tenant's <code>run()</code> never opens a sign-in window. With <code>--cache disk</code>,
+later runs are silent. A sign-in that fails, is cancelled, times out or is skipped with
+Ctrl+C then Enter leaves that tenant <code>auth_failed</code>; the rest run.</p>
+<p>A tenant whose <code>m365_username</code> cell is blank gets no sign-in of its own: it is <code>auth_failed</code>,
+with the reason, and no sign-in window opens for it.</p>
+<p><code>m365_pw_url</code> is optional: the address of the web page that holds that account's password,
+such as its entry in a password manager. When the tenant's own sign-in opens a window, the
+page opens right before it, once per tenant. It does not open when the sign-in comes from the
+cache. It opens in the system's default browser, or in <code>pw_browser_path</code>, started with
+<code>pw_browser_args</code>, such as <code>["--profile-directory=Default"]</code>; the address is added last.
+Only <code>http</code> and <code>https</code> addresses are accepted.</p>
+<p>The <code>m365_gdap</code> column says which tenants the partner sign-in reaches. TRUE, which every
+appended row gets, tries the partner sign-in first. FALSE or blank never tries it: the tenant
+goes straight to a sign-in of its own. GDAP can list a customer whose tenant it gives you no
+access to; put FALSE in that row's cell. With <code>m365_username</code> blank as well, the tenant is
+left out of the run, with a warning, instead of failing: that marks a customer you cannot
+reach at all but cannot remove from Partner Center. Anything else in the cell is an error.</p>
+<p><code>m365_gdap</code> is a group like any other, so <code>--include m365_gdap</code> runs only the tenants marked
+TRUE. A tenant there whose partner sign-in fails still gets a sign-in of its own when its
+<code>m365_username</code> is filled in.</p>
+<h3 id="consent">Consent<a class="headerlink" href="#consent" title="Permanent link">&para;</a></h3>
+<p>A GDAP tenant whose grant lacks some of the script's scopes, where the app cannot add them
+itself, goes to its own sign-in with Entra's consent screen, whatever the cache holds. Tick
+"Consent on behalf of your organization" there. An administrator who consents for themselves
+alone leaves the partner sign-in without the scopes, and Entra never shows the screen again
+by itself for consent that exists. Granted for the organization, the tenant passes the
+partner check on the next run.</p>
+<h3 id="granting-missing-scopes">Granting missing scopes<a class="headerlink" href="#granting-missing-scopes" title="Permanent link">&para;</a></h3>
+<p>A tenant whose grant lacks some of the script's <code>SCOPES</code> fails the check before the run. A
+script that sets <code>GRANT_WHEN_POSSIBLE = True</code> has the check add them instead, where the app
+holds <code>DelegatedPermissionGrant.ReadWrite.All</code> in that tenant. They go into the app's
+tenant-wide grant, so every user of the app there gets them, each still limited by their own
+roles. azure-auth logs each grant, which shows with <code>-vv</code> and in the debug log. The check
+then waits for a token that carries the new scopes: about a minute, three at most. Where
+the app does not hold that permission, the tenant gets a sign-in of its own as before.
+<code>--grant-when-possible</code> and <code>--no-grant-when-possible</code> override the script.</p>
+<h3 id="keeping-sign-ins-between-runs">Keeping sign-ins between runs<a class="headerlink" href="#keeping-sign-ins-between-runs" title="Permanent link">&para;</a></h3>
+<p>Sign-ins are kept in memory and end with the run. To keep them, opt in to the disk cache:
+the <code>cache</code> setting, or <code>--cache</code>, set to <code>disk</code> keeps them in an encrypted file, and later
+runs skip the sign-in. That includes each tenant's own sign-in: a tenant the partner sign-in
+cannot reach uses its cached sign-in, and opens the browser only when there is none.</p>
+<p>The file is written after each sign-in, after each tenant, and when the run ends, so a run
+that is killed keeps what was written before. A run that finds the file empty, which a run
+killed while writing it could once leave, says so and names the file: delete it and sign in
+again.</p>
+<p>The file holds refresh tokens, which sign in without a password. Two settings help keep
+track of it:</p>
+<ul>
+<li><code>cache_path</code>: the file to keep it in. Empty uses azure-auth's file in the per-user cache
+  directory.</li>
+<li><code>cache_reminder_path</code>: a folder in plain sight, such as the Desktop. Every run with the
+  disk cache puts <code>M365-GDAP-RUNNER_MSAL_CACHE_DELETEME</code> there, a link to the folder that
+  holds the cache: a <code>.url</code> shortcut on Windows, a symbolic link elsewhere. It holds only a
+  path, so it is safe in a synced folder; the cache itself is not.</li>
+</ul>
+<h2 id="running">Running<a class="headerlink" href="#running" title="Permanent link">&para;</a></h2>
+<h3 id="tenants-at-once">Tenants at once<a class="headerlink" href="#tenants-at-once" title="Permanent link">&para;</a></h3>
+<p>A run works on one tenant at a time. The <code>jobs</code> setting changes that, and <code>--jobs</code> changes
+it for one run; the silent checks before each <code>run()</code> use the same number. 5-8 suits
+read-only reports; keep 1 for scripts that write unless they are idempotent.</p>
+<h3 id="errors-in-run">Errors in run()<a class="headerlink" href="#errors-in-run" title="Permanent link">&para;</a></h3>
+<p>An error raised in <code>run()</code> stops the run: that tenant is <code>error</code>, tenants already running
+finish, and the tenants not yet started are <code>skipped</code>. That keeps a script that changes
+things from repeating a broken change in every tenant. A script that only reads sets
+<code>CONTINUE_ON_ERROR = True</code> to keep going. <code>--continue-on-error</code> and <code>--no-continue-on-error</code>
+override the script.</p>
+<p>A tenant that could not be reached is <code>auth_failed</code> and never stops the run.</p>
+<h3 id="stopping-a-run">Stopping a run<a class="headerlink" href="#stopping-a-run" title="Permanent link">&para;</a></h3>
+<p>Ctrl+C stops the run. A tenant it interrupts is <code>error</code>; with <code>jobs</code> above 1, the tenants
+already running finish first. The tenants not yet started are <code>skipped</code>, and the summary is
+printed. During a tenant's own sign-in window, Ctrl+C asks first: Enter skips that tenant,
+and a second Ctrl+C stops the run.</p>
+<h2 id="reports">Reports<a class="headerlink" href="#reports" title="Permanent link">&para;</a></h2>
+<p>The library writes no output of its own; reports belong to the script, in whatever form it
+needs.</p>
+<ul>
+<li><strong>Per tenant:</strong> <code>run(ctx)</code> writes it, with <code>ctx.tenant</code> for the tenant's name and ID.</li>
+<li><strong>Per run:</strong> <code>report(results)</code>, when the script has one, is called once after the last
+  tenant. It gets one <code>TenantResult</code> per tenant in run order, failed ones included: <code>tenant</code>,
+  <code>status</code> (<code>ok</code>, <code>auth_failed</code>, <code>error</code> or <code>skipped</code>), <code>result</code> (whatever <code>run()</code> returned,
+  as it is) and <code>error</code>.</li>
+</ul>
+<p><code>report()</code> is not called after Ctrl+C, since a report of part of a run would look complete.
+If it raises, the error is logged and the run exits with code 2. Logs and the summary go to
+stderr, so stdout is the script's.</p>
+<h3 id="logs">Logs<a class="headerlink" href="#logs" title="Permanent link">&para;</a></h3>
+<p>Each log line names the tenant it belongs to, or <code>-</code> outside one, so lines from tenants run
+at once can be told apart. A script logs with Python's <code>logging</code> like any other program, and
+its records go to the same place, named the same way. <code>-v</code> adds debug lines from the runner
+and the script; <code>-vv</code> adds those of the libraries underneath, such as azure-auth and MSAL.</p>
+<p>After the summary line, every warning and error the run logged is printed again, so none is
+lost in a long run's output. That includes the script's own warnings, and each tenant that
+failed, which logs an error.</p>
+<p>A tenant's error, in the log and in its <code>TenantResult</code>, is one short line. For a tenant that
+could not be reached, it names each sign-in tried: <code>partner: &lt;why&gt;; direct: &lt;why&gt;</code>, such as
+<code>partner: missing 5 of 19 Graph scopes, self-grant failed; direct: no m365_username</code>. Missing
+consent is counted, not listed. Microsoft's Trace ID, Correlation ID and Timestamp are left
+out, and a message over 300 characters is cut to its first sentence.</p>
+<p>The <code>debug_log_path</code> setting appends every log record to a file, debug and library ones
+included, whatever <code>-v</code> says, and keeps every error in full. A folder there means
+<code>m365_gdap_runner_debug.log</code> in it. Past <code>debug_log_max_mb</code> megabytes (default 10; 0 for no
+limit), the file is compressed to <code>&lt;name&gt;.1.gz</code> and a new one started; the newest
+<code>debug_log_keep</code> compressed files (default 5) are kept, and older ones deleted.</p>
+<h3 id="exit-codes">Exit codes<a class="headerlink" href="#exit-codes" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>0</code>: every tenant was <code>ok</code>.</li>
+<li><code>1</code>: at least one tenant was not.</li>
+<li><code>2</code>: the run could not start, or <code>report()</code> failed: a usage, configuration, script,
+  sign-in, tenant listing, tenants file or tenant selection error.</li>
+<li><code>130</code>: the run was stopped with Ctrl+C.</li>
+</ul>
+<h2 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">&para;</a></h2>
+<p>Settings live in <code>config.toml</code> in the per-user config directory:</p>
+<ul>
+<li>Windows: <code>%LOCALAPPDATA%\m365_gdap_runner\config.toml</code></li>
+<li>Linux: <code>~/.config/m365_gdap_runner/config.toml</code></li>
+<li>macOS: <code>~/Library/Application Support/m365_gdap_runner/config.toml</code></li>
+</ul>
+<p>The <code>M365_GDAP_RUNNER_CONFIG_DIR</code> environment variable points at another directory instead.
+The tenants file lives in the same directory unless <code>tenants_file</code> says otherwise.</p>
+<h3 id="the-config-command">The config command<a class="headerlink" href="#the-config-command" title="Permanent link">&para;</a></h3>
+<p><code>m365-gdap-runner-config</code> creates and edits the file; it never needs editing by hand.</p>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>init</code></td>
+<td>Asks for each setting in turn and writes the file. <code>--force</code> starts over.</td>
+</tr>
+<tr>
+<td><code>show</code></td>
+<td>Shows every setting's value and where it came from.</td>
+</tr>
+<tr>
+<td><code>set KEY VALUE</code></td>
+<td>Sets one setting. A list takes commas between its items.</td>
+</tr>
+<tr>
+<td><code>unset KEY</code></td>
+<td>Removes a setting, so its default applies.</td>
+</tr>
+<tr>
+<td><code>path</code></td>
+<td>Prints the file's path.</td>
+</tr>
+<tr>
+<td><code>open</code></td>
+<td>Opens the file in the program the system has for it.</td>
+</tr>
+<tr>
+<td><code>list-profiles</code></td>
+<td>Lists the profiles, marking the default.</td>
+</tr>
+<tr>
+<td><code>use PROFILE</code></td>
+<td>Makes a profile the default.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="every-setting">Every setting<a class="headerlink" href="#every-setting" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+<th>What it is</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>partner_tenant_id</code></td>
+<td>required</td>
+<td>The partner tenant's ID or verified domain name.</td>
+</tr>
+<tr>
+<td><code>username</code></td>
+<td>required</td>
+<td>The partner account that signs in.</td>
+</tr>
+<tr>
+<td><code>client_id</code></td>
+<td>empty</td>
+<td>One app to sign in with for every client; empty uses Microsoft's first-party apps.</td>
+</tr>
+<tr>
+<td><code>cloud</code></td>
+<td>empty</td>
+<td>The partner tenant's cloud: <code>Commercial</code>, <code>USGov</code>, <code>USGovDoD</code> or <code>China</code>; empty looks it up.</td>
+</tr>
+<tr>
+<td><code>tenants_file</code></td>
+<td>empty</td>
+<td>The <a href="#the-tenants-file">tenants file</a>; empty uses <code>tenants.csv</code> in the config directory.</td>
+</tr>
+<tr>
+<td><code>jobs</code></td>
+<td><code>1</code></td>
+<td><a href="#tenants-at-once">Tenants at once</a>.</td>
+</tr>
+<tr>
+<td><code>cache</code></td>
+<td><code>memory</code></td>
+<td><code>memory</code>, or <code>disk</code> to <a href="#keeping-sign-ins-between-runs">keep sign-ins between runs</a>.</td>
+</tr>
+<tr>
+<td><code>cache_path</code></td>
+<td>empty</td>
+<td>The disk cache's file; empty uses azure-auth's.</td>
+</tr>
+<tr>
+<td><code>cache_reminder_path</code></td>
+<td>empty</td>
+<td>A folder for the cache's DELETEME link; empty puts none.</td>
+</tr>
+<tr>
+<td><code>browser_path</code></td>
+<td>empty</td>
+<td>The browser <a href="#sign-in-windows">sign-in windows</a> open in; empty uses the system default.</td>
+</tr>
+<tr>
+<td><code>browser_args</code></td>
+<td>empty</td>
+<td>Arguments for <code>browser_path</code>.</td>
+</tr>
+<tr>
+<td><code>browser_timeout</code></td>
+<td><code>120</code></td>
+<td>Seconds a sign-in window waits to be completed.</td>
+</tr>
+<tr>
+<td><code>pw_browser_path</code></td>
+<td>empty</td>
+<td>The browser a tenant's <code>m365_pw_url</code> opens in; empty uses the system default.</td>
+</tr>
+<tr>
+<td><code>pw_browser_args</code></td>
+<td>empty</td>
+<td>Arguments for <code>pw_browser_path</code>.</td>
+</tr>
+<tr>
+<td><code>debug_log_path</code></td>
+<td>empty</td>
+<td>The <a href="#logs">debug log</a> file or folder; empty writes none.</td>
+</tr>
+<tr>
+<td><code>debug_log_max_mb</code></td>
+<td><code>10</code></td>
+<td>Megabytes the debug log grows to before it is compressed; 0 for no limit.</td>
+</tr>
+<tr>
+<td><code>debug_log_keep</code></td>
+<td><code>5</code></td>
+<td>Compressed debug logs kept besides the current one.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="overrides">Overrides<a class="headerlink" href="#overrides" title="Permanent link">&para;</a></h3>
+<p>A flag beats an environment variable, which beats <code>config.toml</code>, which beats the default.
+Every setting has an environment variable, its name upper-cased after
+<code>M365_GDAP_RUNNER_</code>: <code>M365_GDAP_RUNNER_JOBS=5</code>. A list takes commas there too. These
+settings also have a flag: <code>--partner-tenant-id</code>, <code>--username</code>, <code>--client-id</code>, <code>--cloud</code>,
+<code>--tenants-file</code>, <code>--cache</code> and <code>--jobs</code>.</p>
+<h3 id="profiles">Profiles<a class="headerlink" href="#profiles" title="Permanent link">&para;</a></h3>
+<p>A profile is a named set of settings in the same file, for more than one partner tenant or
+account. <code>m365-gdap-runner-config init --profile NAME</code> creates one, and <code>--profile NAME</code> on
+<code>set</code>, <code>unset</code> and <code>show</code> works on it. A run uses <code>--profile</code>, else the
+<code>M365_GDAP_RUNNER_PROFILE</code> environment variable, else the default profile that <code>use</code> sets.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.sections", "navigation.expand", "content.code.copy", "search.highlight"], "search": "../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.c21346df.min.js"></script>
+      
+    
+  </body>
+</html>
