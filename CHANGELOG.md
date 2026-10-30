@@ -7,13 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- `examples/service_principal_enabled.py`: `--delete` deletes every service principal the
-  patterns match, enabled or not, asking for `Application.ReadWrite.All` as `--disable`
-  does. The workbook shows each as `deleted`, and `--export-json` writes them as they were
-  before. It cannot be combined with `--disable`. A deleted service principal stays in the
-  tenant's deleted items for 30 days, where it can be restored.
+## [0.2.0] - 2026-10-29 - azure-auth 0.10.0 network errors
 
 ### Changed
 
@@ -161,5 +155,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Supports Python 3.11 and newer. CI tests every supported version, 3.11 through 3.14, on
   Ubuntu, macOS and Windows.
 
-[Unreleased]: https://github.com/DrollRobot/m365-gdap-runner/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/DrollRobot/m365-gdap-runner/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/DrollRobot/m365-gdap-runner/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/DrollRobot/m365-gdap-runner/releases/tag/v0.1.0
