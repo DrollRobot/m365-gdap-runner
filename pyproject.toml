@@ -7,7 +7,7 @@ package-data = { m365_gdap_runner = ["py.typed"] }
 
 [project]
 name = "m365-gdap-runner"
-version = "0.1.0"
+version = "0.2.0"
 description = "Run Python scripts across GDAP customer tenants from a single partner sign-in."
 readme = "README.md"
 requires-python = ">=3.11"
