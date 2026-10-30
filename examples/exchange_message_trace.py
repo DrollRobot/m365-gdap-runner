@@ -22,9 +22,14 @@ Where Exchange refuses ``Get-MessageTraceV2`` with a 403, as it does in GCC High
 not take, and the workbook says so: only ``Get-MessageTraceV2`` takes ``Subject`` and
 ``SubjectFilterType``, and only ``Get-MessageTrace`` takes ``Page``.
 
-Writes one JSON file per tenant with matches, and one workbook of match counts per tenant
-with the filter in its title row, in the current folder or ``--out``. A file never replaces
-another: where its name is taken, it gets the first free ``_2``, ``_3``, and so on.
+Writes one JSON file per tenant with matches, one workbook of match counts per tenant, and one
+workbook of every record from every tenant, in the current folder or ``--out``. Both workbooks
+have the filter in their title row. A file never replaces another: where its name is taken, it
+gets the first free ``_2``, ``_3``, and so on.
+
+The records workbook starts each row with the tenant's name and its ``m365_domain`` cell in the
+tenants file, then has a column for each property of the records. Properties that only state
+another's type, such as ``Received@data.type``, stay in the JSON.
 
 Needs a GDAP role such as Exchange Administrator. A record is one message to one recipient.
 
@@ -104,14 +109,17 @@ FILTER = "{}"
 # The most records to ask each tenant for: the most a query returns. ``--size`` replaces it.
 SIZE = 5000
 
-# Where the JSON files and the workbook go: the current folder. ``--out`` replaces it.
+# Where the JSON files and the workbooks go: the current folder. ``--out`` replaces it.
 OUT_DIR = Path()
 
 # Output files are named this, then the tenant for a JSON file, then today's date.
 FILE_STEM = "ExchangeMessageTrace"
 
-# The workbook's columns, in order, below the title row.
+# The counts workbook's columns, in order, below the title row.
 COLUMNS = ["Tenant", "TenantId", "Status", "Records", "Error"]
+
+# The records workbook's first columns. A column for each property of the records follows.
+RECORD_COLUMNS = ["Tenant", "Domain"]
 
 # Widest a column is made to fit its longest value, in characters.
 MAX_COLUMN_WIDTH = 80
@@ -122,46 +130,78 @@ FONT_SIZE = 11
 TITLE_FONT_SIZE = 20
 
 
-def run(ctx: TenantContext) -> int:
+def run(ctx: TenantContext) -> list[dict[str, Any]]:
     """Read the tenant's matching records, and write them as JSON when there are any.
 
     Args:
         ctx: The tenant context supplied by the runner.
 
     Returns:
-        How many records match.
+        The records, whole, as the cmdlet returns them, for the workbooks.
     """
     records = _read_records(ctx)
     if not records:
         logger.info("No records match")
-        return 0
+        return records
     path, file = _create(f"{FILE_STEM}_{_file_safe(ctx.tenant.display_name)}_{_today()}", ".json")
     with file:
         file.write(json.dumps(records, indent=2).encode("utf-8"))
     logger.info("%d records match; wrote %s", len(records), path)
-    return len(records)
+    return records
 
 
 def report(results: list[TenantResult]) -> None:
-    """Write one workbook with each tenant's count of matches, under the filter as its title.
+    """Write a workbook of each tenant's count of matches, and one of every record.
 
     Args:
         results: Every tenant's result, in run order. A tenant that failed has its status
-            and error, and a blank count.
+            and error, and a blank count, and no records.
     """
     if not results:
         print("No tenants ran; no workbook written.")
         return
-    rows = [
+    counts = [
         [
             result.tenant.display_name,
             result.tenant.tenant_id,
             result.status,
-            result.result if isinstance(result.result, int) else None,
+            len(result.result) if isinstance(result.result, list) else None,
             result.error,
         ]
         for result in results
     ]
+    _write_workbook(FILE_STEM, "Tenants", COLUMNS, counts)
+
+    matches = [
+        (result.tenant.display_name, result.tenant.domain, record)
+        for result in results
+        if isinstance(result.result, list)
+        for record in result.result
+    ]
+    if not matches:
+        print("No records match; no records workbook written.")
+        return
+    # Every property any record has, in the order they first appear. A name with an ``@`` only
+    # states another property's type.
+    properties = list(
+        dict.fromkeys(name for _, _, record in matches for name in record if "@" not in name)
+    )
+    rows = [
+        [tenant, domain, *(_cell(record.get(name)) for name in properties)]
+        for tenant, domain, record in matches
+    ]
+    _write_workbook(f"{FILE_STEM}Records", "Records", [*RECORD_COLUMNS, *properties], rows)
+
+
+def _write_workbook(stem: str, name: str, columns: list[str], rows: list[list[Any]]) -> None:
+    """Write one workbook: the filter as its title, and a filterable table below it.
+
+    Args:
+        stem: The file name before today's date.
+        name: The name of the sheet, and of the table on it.
+        columns: The table's columns, in order.
+        rows: The table's rows, at least one.
+    """
     options = {
         # Every cell's font, unless its format says otherwise. With no font scheme, Excel shows
         # FONT itself, not the theme's font, Calibri.
@@ -176,31 +216,43 @@ def report(results: list[TenantResult]) -> None:
     }
     data = io.BytesIO()
     with xlsxwriter.Workbook(data, options) as workbook:
-        sheet = workbook.add_worksheet("Tenants")
+        sheet = workbook.add_worksheet(name)
         title = workbook.add_format({"bold": True, "font_size": TITLE_FONT_SIZE})
         sheet.write(0, 0, FILTER, title)
         sheet.add_table(
             1,
             0,
             len(rows) + 1,
-            len(COLUMNS) - 1,
+            len(columns) - 1,
             {
-                "name": "Tenants",
+                "name": name,
                 "style": "Table Style Medium 8",
-                "columns": [{"header": column} for column in COLUMNS],
+                "columns": [{"header": column} for column in columns],
                 "data": rows,
             },
         )
         sheet.freeze_panes(2, 0)
         # The title runs on across the empty cells to its right, so it is left out of the widths.
-        for number, column in enumerate(zip(COLUMNS, *rows, strict=True)):
+        for number, column in enumerate(zip(columns, *rows, strict=True)):
             longest = max(len(str(value)) for value in column if value is not None)
             sheet.set_column(number, number, min(longest + 2, MAX_COLUMN_WIDTH))
 
-    path, file = _create(f"{FILE_STEM}_{_today()}", ".xlsx")
+    path, file = _create(f"{stem}_{_today()}", ".xlsx")
     with file:
         file.write(data.getvalue())
     print(f"Wrote {path}")
+
+
+def _cell(value: Any) -> Any:
+    """Return a record's value as a cell can hold it.
+
+    Args:
+        value: The value, as the cmdlet returned it.
+
+    Returns:
+        The value, or its JSON if it is a list or an object.
+    """
+    return json.dumps(value) if isinstance(value, (list, dict)) else value
 
 
 def _read_records(ctx: TenantContext) -> list[dict[str, Any]]:
@@ -306,7 +358,7 @@ if __name__ == "__main__":
         type=Path,
         default=OUT_DIR,
         metavar="DIR",
-        help="Folder for the JSON files and the workbook (default: the current folder).",
+        help="Folder for the JSON files and the workbooks (default: the current folder).",
     )
     add_arguments(parser)
     args = parser.parse_args()

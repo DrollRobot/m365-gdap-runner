@@ -16,6 +16,8 @@ import pytest
 from openpyxl import load_workbook
 
 from m365_gdap_runner import cli
+from m365_gdap_runner.config import Settings
+from m365_gdap_runner.tenants import TenantFile, tenants_file_path
 from tests._gdap_fakes import load_script
 
 pytestmark = [pytest.mark.e2e, pytest.mark.live, pytest.mark.usefixtures("settings")]
@@ -59,7 +61,7 @@ def _run_trace(
     parser = argparse.ArgumentParser()
     cli.add_arguments(parser)
     code = cli.main(module, parser.parse_args(["--include", "pilot"]))
-    (workbook,) = out.glob("*.xlsx")
+    (workbook,) = out.glob("ExchangeMessageTrace_*.xlsx")
     rows = list(load_workbook(workbook)["Tenants"].iter_rows(min_row=3, values_only=True))
     records = [
         record
@@ -81,6 +83,29 @@ def test_message_trace_writes_every_record_the_cmdlet_returns(
     assert code == 0
     assert {row[2] for row in rows} == {"ok"}
     assert sum(row[3] for row in rows) == len(records)
+
+
+def test_message_trace_records_workbook_holds_every_record_under_its_files_domain(
+    monkeypatch: pytest.MonkeyPatch, settings: Settings, tmp_path: Path
+) -> None:
+    _, _, records = _run_trace(monkeypatch, tmp_path, _window())
+    if not records:
+        pytest.skip("The pilot tenants have no mail in the window to put in a workbook.")
+
+    (workbook,) = tmp_path.glob("ExchangeMessageTraceRecords_*.xlsx")
+    sheet: list[tuple[Any, ...]] = list(
+        load_workbook(workbook)["Records"].iter_rows(values_only=True)
+    )
+    _, columns, *rows = sheet
+    assert columns[:2] == ("Tenant", "Domain")
+    assert {"MessageTraceId", "Received", "SenderAddress", "RecipientAddress"} <= set(columns)
+    assert not [column for column in columns if "@" in column]
+    assert len(rows) == len(records)
+    tenant_file = TenantFile.load(tenants_file_path(settings))
+    domains = {row.get("m365_domain", "").strip() or None for row in tenant_file.rows}
+    assert {row[1] for row in rows} <= domains
+    trace_ids = [row[columns.index("MessageTraceId")] for row in rows]
+    assert sorted(trace_ids) == sorted(record["MessageTraceId"] for record in records)
 
 
 def test_message_trace_empty_filter_runs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

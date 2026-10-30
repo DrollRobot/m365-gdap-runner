@@ -1077,10 +1077,16 @@ def _trace_record(number: int) -> dict[str, Any]:
     """Build a record as the cmdlet returns it, in part."""
     return {
         "MessageTraceId": f"mt-{number}",
+        "Received@data.type": "System.DateTime",
         "Received": f"2026-10-28T12:00:{number:02}.0000000Z",
         "RecipientAddress": f"user{number}@contoso.com",
         "Status": "Failed",
     }
+
+
+def _trace_domain(tenant: str) -> str:
+    """Return the ``m365_domain`` the example's tenants file gives *tenant*."""
+    return f"{tenant}.example"
 
 
 def _trace_services(
@@ -1100,12 +1106,11 @@ def _trace_services(
         if request.url.path == f"/adminapi/beta/{tenant}/InvokeCommand":
             cmdlet = json.loads(request.content)["CmdletInput"]
             name = cmdlet["CmdletName"]
-            if name in (TRACE_V2, TRACE_V1):
-                queries.append((tenant, name, cmdlet["Parameters"]))
-                refusal = (refusals or {}).get((tenant, name))
-                if refusal is not None:
-                    return refusal
-                return httpx2.Response(200, json={"value": records.get(tenant, [])})
+            queries.append((tenant, name, cmdlet["Parameters"]))
+            refusal = (refusals or {}).get((tenant, name))
+            if refusal is not None:
+                return refusal
+            return httpx2.Response(200, json={"value": records.get(tenant, [])})
         return fake_services(request)
 
     return httpx2.MockTransport(handler)
@@ -1130,8 +1135,18 @@ def _cmdlet_error(reason: str) -> httpx2.Response:
 def message_trace(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
     """The example, run through ``main()`` with ``--include all``, writing to a temp dir.
 
-    Its filter is :data:`TRACE_FILTER`, as the command line would set it.
+    Its filter is :data:`TRACE_FILTER`, as the command line would set it, and a tenants file
+    gives each tenant its domain.
     """
+    tenants_file = tmp_path / "tenants.csv"
+    tenants_file.write_text(
+        "m365_tenant_id,m365_tenant_name,m365_domain,m365_cloud,m365_username,m365_gdap,"
+        "m365_pw_url\n"
+        f"{TENANT_A},Alpha,{_trace_domain(TENANT_A)},Commercial,,TRUE,\n"
+        f"{TENANT_B},beta corp,{_trace_domain(TENANT_B)},Commercial,,TRUE,\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(ENV_PREFIX + "TENANTS_FILE", str(tenants_file))
     monkeypatch.setenv(ENV_PREFIX + "PARTNER_TENANT_ID", PARTNER_TENANT)
     monkeypatch.setenv(ENV_PREFIX + "USERNAME", USER)
     monkeypatch.setattr(cli, "configure_logging", lambda verbosity: None)
@@ -1147,6 +1162,12 @@ def _trace_output(tmp_path: Path, tenant: str | None = None) -> Path:
     if tenant is None:
         return tmp_path / "reports" / f"ExchangeMessageTrace_{today}.xlsx"
     return tmp_path / "reports" / f"ExchangeMessageTrace_{tenant}_{today}.json"
+
+
+def _trace_records_output(tmp_path: Path) -> Path:
+    """Return where the example writes today's records workbook."""
+    today = datetime.date.today().isoformat()
+    return tmp_path / "reports" / f"ExchangeMessageTraceRecords_{today}.xlsx"
 
 
 def test_message_trace_sends_the_filter_and_the_size_and_writes_json_and_a_count_workbook(
@@ -1167,12 +1188,13 @@ def test_message_trace_sends_the_filter_and_the_size_and_writes_json_and_a_count
     assert queries == [(TENANT_A, TRACE_V2, sent), (TENANT_B, TRACE_V2, sent)]
     alpha_json = _trace_output(tmp_path, "Alpha")
     workbook = _trace_output(tmp_path)
+    records_workbook = _trace_records_output(tmp_path)
     assert sorted(p.name for p in (tmp_path / "reports").iterdir()) == sorted(
-        [alpha_json.name, workbook.name]
+        [alpha_json.name, workbook.name, records_workbook.name]
     )
     # Every record, whole, as the cmdlet returned it.
     assert json.loads(alpha_json.read_text(encoding="utf-8")) == held
-    assert capsys.readouterr().out == f"Wrote {workbook}\n"
+    assert capsys.readouterr().out == f"Wrote {workbook}\nWrote {records_workbook}\n"
     assert _sheets(workbook) == {
         "Tenants": [
             (TRACE_FILTER, None, None, None, None),
@@ -1320,12 +1342,116 @@ def test_message_trace_report_goes_on_after_a_tenant_error(
     assert not _trace_output(tmp_path, "Alpha").exists()
 
 
+def test_message_trace_records_workbook_lists_every_record_under_its_tenant_and_domain(
+    fake_msal: FakeMsal, message_trace: Any, tmp_path: Path
+) -> None:
+    other = {"MessageTraceId": "mt-3", "FromIP": "203.0.113.10", "Subject": "=1+1"}
+    held = {TENANT_A: [_trace_record(1), _trace_record(2)], TENANT_B: [other]}
+
+    assert _run_all(message_trace, _trace_services(held, [])) == 0
+
+    path = _trace_records_output(tmp_path)
+    # Every property any record has, in the order they first appear, without the type notes.
+    assert _sheets(path) == {
+        "Records": [
+            (TRACE_FILTER, *[None] * 7),
+            (
+                "Tenant",
+                "Domain",
+                "MessageTraceId",
+                "Received",
+                "RecipientAddress",
+                "Status",
+                "FromIP",
+                "Subject",
+            ),
+            (
+                "Alpha",
+                _trace_domain(TENANT_A),
+                "mt-1",
+                _trace_record(1)["Received"],
+                "user1@contoso.com",
+                "Failed",
+                None,
+                None,
+            ),
+            (
+                "Alpha",
+                _trace_domain(TENANT_A),
+                "mt-2",
+                _trace_record(2)["Received"],
+                "user2@contoso.com",
+                "Failed",
+                None,
+                None,
+            ),
+            (
+                "beta corp",
+                _trace_domain(TENANT_B),
+                "mt-3",
+                None,
+                None,
+                None,
+                "203.0.113.10",
+                "=1+1",
+            ),
+        ]
+    }
+    sheet = load_workbook(path)["Records"]
+    # A subject that looks like a formula stays text.
+    assert sheet["H5"].data_type == "s"
+    assert sheet["A1"].font.b
+    assert sheet.freeze_panes == "A3"
+    (table,) = sheet.tables.values()
+    assert table.ref == "A2:H5"
+    assert table.tableStyleInfo is not None
+    assert table.tableStyleInfo.name == "TableStyleMedium8"
+    _assert_consolas(path)
+
+
+def test_message_trace_records_workbook_leaves_out_failed_tenants_and_writes_lists_as_json(
+    message_trace: Any, tmp_path: Path
+) -> None:
+    record = {"MessageTraceId": "mt-1", "Recipients": ["a@contoso.com", "b@contoso.com"]}
+    message_trace.report(
+        [
+            TenantResult(Tenant(TENANT_A, "Alpha", domain="a.example"), "ok", [record]),
+            TenantResult(Tenant(TENANT_B, "beta corp"), "auth_failed", error="AADSTS65001"),
+        ]
+    )
+    assert _sheets(_trace_records_output(tmp_path))["Records"][2:] == [
+        ("Alpha", "a.example", "mt-1", '["a@contoso.com", "b@contoso.com"]'),
+    ]
+
+
+def test_message_trace_leaves_the_domain_blank_where_the_tenants_file_has_none(
+    message_trace: Any, tmp_path: Path
+) -> None:
+    message_trace.report([TenantResult(Tenant(TENANT_A, "Alpha"), "ok", [_trace_record(1)])])
+    assert _sheets(_trace_records_output(tmp_path))["Records"][2][:3] == ("Alpha", None, "mt-1")
+
+
+def test_message_trace_writes_no_records_workbook_when_nothing_matches(
+    fake_msal: FakeMsal,
+    message_trace: Any,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert _run_all(message_trace, _trace_services({}, [])) == 0
+
+    workbook = _trace_output(tmp_path)
+    assert [p.name for p in (tmp_path / "reports").iterdir()] == [workbook.name]
+    assert capsys.readouterr().out == (
+        f"Wrote {workbook}\nNo records match; no records workbook written.\n"
+    )
+
+
 def test_message_trace_workbook_has_the_filter_title_and_a_table_below_it(
     message_trace: Any, tmp_path: Path
 ) -> None:
     message_trace.report(
         [
-            TenantResult(Tenant(TENANT_A, "Alpha"), "ok", 2),
+            TenantResult(Tenant(TENANT_A, "Alpha"), "ok", [_trace_record(1), _trace_record(2)]),
             TenantResult(Tenant(TENANT_B, "beta corp"), "auth_failed", error="AADSTS65001"),
         ]
     )
@@ -1366,22 +1492,28 @@ def test_message_trace_keeps_an_earlier_runs_files(
     caplog.set_level(logging.INFO)
     earlier_json = _trace_output(tmp_path, "Alpha")
     earlier_workbook = _trace_output(tmp_path)
+    earlier_records = _trace_records_output(tmp_path)
     earlier_json.parent.mkdir(parents=True)
     earlier_json.write_bytes(b"earlier records")
     earlier_workbook.write_bytes(b"earlier workbook")
+    earlier_records.write_bytes(b"earlier records workbook")
 
     transport = _trace_services({TENANT_A: [_trace_record(1)]}, [])
     assert _run_all(message_trace, transport) == 0
 
     assert earlier_json.read_bytes() == b"earlier records"
     assert earlier_workbook.read_bytes() == b"earlier workbook"
+    assert earlier_records.read_bytes() == b"earlier records workbook"
     new_json = earlier_json.with_name(f"{earlier_json.stem}_2.json")
     new_workbook = earlier_workbook.with_name(f"{earlier_workbook.stem}_2.xlsx")
+    new_records = earlier_records.with_name(f"{earlier_records.stem}_2.xlsx")
     assert json.loads(new_json.read_text(encoding="utf-8")) == [_trace_record(1)]
     assert _sheets(new_workbook)["Tenants"][0][0] == TRACE_FILTER
-    assert capsys.readouterr().out == f"Wrote {new_workbook}\n"
+    assert _sheets(new_records)["Records"][0][0] == TRACE_FILTER
+    assert capsys.readouterr().out == f"Wrote {new_workbook}\nWrote {new_records}\n"
     assert f"1 records match; wrote {new_json}" in caplog.messages
     _assert_consolas(new_workbook)
+    _assert_consolas(new_records)
 
 
 # --- graph_scopes.py ---------------------------------------------------------------------
