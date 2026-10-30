@@ -43,6 +43,7 @@ UNIFIED_AUDIT_LOG = EXAMPLES / "unified_audit_log.py"
 SERVICE_PRINCIPAL_ENABLED = EXAMPLES / "service_principal_enabled.py"
 ENTRA_SIGN_IN_LOGS = EXAMPLES / "entra_sign_in_logs.py"
 ENTRA_AUDIT_LOGS = EXAMPLES / "entra_audit_logs.py"
+MESSAGE_TRACE = EXAMPLES / "exchange_message_trace.py"
 GRAPH_SCOPES = EXAMPLES / "graph_scopes.py"
 
 
@@ -1061,6 +1062,218 @@ def test_audit_logs_keeps_an_earlier_runs_files(
     assert _sheets(new_workbook)["Tenants"][0][0] == AUDIT_FILTER
     assert capsys.readouterr().out == f"Wrote {new_workbook}\n"
     assert f"1 audit events match; wrote {new_json}" in caplog.messages
+    _assert_consolas(new_workbook)
+
+
+# --- exchange_message_trace.py -----------------------------------------------------------
+
+TRACE_PARAMETERS = {
+    "SenderAddress": "admin@contoso.com",
+    "Status": ["Failed", "Quarantined"],
+    "ResultSize": 100,
+}
+TRACE_FILTER = json.dumps(TRACE_PARAMETERS)
+
+
+def _trace_record(number: int) -> dict[str, Any]:
+    """Build a record as the cmdlet returns it, in part."""
+    return {
+        "MessageTraceId": f"mt-{number}",
+        "Received": f"2026-10-28T12:00:{number:02}.0000000Z",
+        "RecipientAddress": f"user{number}@contoso.com",
+        "Status": "Failed",
+    }
+
+
+def _trace_services(
+    records: dict[str, list[dict[str, Any]]], queries: list[tuple[str, dict[str, Any]]]
+) -> httpx2.MockTransport:
+    """Fake Exchange holding *records* per tenant, recording the parameters of each query."""
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        tenant = bearer_tenant(request)
+        if request.url.path == f"/adminapi/beta/{tenant}/InvokeCommand":
+            cmdlet = json.loads(request.content)["CmdletInput"]
+            if cmdlet["CmdletName"] == "Get-MessageTraceV2":
+                queries.append((tenant, cmdlet["Parameters"]))
+                return httpx2.Response(200, json={"value": records.get(tenant, [])})
+        return fake_services(request)
+
+    return httpx2.MockTransport(handler)
+
+
+@pytest.fixture
+def message_trace(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
+    """The example, run through ``main()`` with ``--include all``, writing to a temp dir.
+
+    Its filter is :data:`TRACE_FILTER`, as the command line would set it.
+    """
+    monkeypatch.setenv(ENV_PREFIX + "PARTNER_TENANT_ID", PARTNER_TENANT)
+    monkeypatch.setenv(ENV_PREFIX + "USERNAME", USER)
+    monkeypatch.setattr(cli, "configure_logging", lambda verbosity: None)
+    module = load_script(MESSAGE_TRACE)
+    monkeypatch.setattr(module, "OUT_DIR", tmp_path / "reports")
+    monkeypatch.setattr(module, "FILTER", TRACE_FILTER)
+    return module
+
+
+def _trace_output(tmp_path: Path, tenant: str | None = None) -> Path:
+    """Return where the example writes today's workbook, or with *tenant* that tenant's JSON."""
+    today = datetime.date.today().isoformat()
+    if tenant is None:
+        return tmp_path / "reports" / f"ExchangeMessageTrace_{today}.xlsx"
+    return tmp_path / "reports" / f"ExchangeMessageTrace_{tenant}_{today}.json"
+
+
+def test_message_trace_sends_the_filter_as_given_and_writes_json_and_a_count_workbook(
+    fake_msal: FakeMsal,
+    message_trace: Any,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO)
+    queries: list[tuple[str, dict[str, Any]]] = []
+    held = [_trace_record(1), _trace_record(2), _trace_record(3)]
+
+    assert _run_all(message_trace, _trace_services({TENANT_A: held}, queries)) == 0
+
+    # One query per tenant, with exactly the parameters given and nothing else.
+    assert queries == [(TENANT_A, TRACE_PARAMETERS), (TENANT_B, TRACE_PARAMETERS)]
+    alpha_json = _trace_output(tmp_path, "Alpha")
+    workbook = _trace_output(tmp_path)
+    assert sorted(p.name for p in (tmp_path / "reports").iterdir()) == sorted(
+        [alpha_json.name, workbook.name]
+    )
+    # Every record, whole, as the cmdlet returned it.
+    assert json.loads(alpha_json.read_text(encoding="utf-8")) == held
+    assert capsys.readouterr().out == f"Wrote {workbook}\n"
+    assert _sheets(workbook) == {
+        "Tenants": [
+            (TRACE_FILTER, None, None, None, None),
+            ("Tenant", "TenantId", "Status", "Records", "Error"),
+            ("Alpha", TENANT_A, "ok", 3, None),
+            ("beta corp", TENANT_B, "ok", 0, None),
+        ]
+    }
+    assert sorted(r.getMessage() for r in caplog.records if r.filename == MESSAGE_TRACE.name) == [
+        f"3 records match; wrote {alpha_json}",
+        "No records match",
+    ]
+
+
+def test_message_trace_empty_filter_sends_no_parameters(
+    fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, message_trace: Any
+) -> None:
+    monkeypatch.setattr(message_trace, "FILTER", "{}")
+    queries: list[tuple[str, dict[str, Any]]] = []
+
+    assert _run_all(message_trace, _trace_services({}, queries)) == 0
+
+    assert queries == [(TENANT_A, {}), (TENANT_B, {})]
+
+
+def test_message_trace_reports_a_filter_that_is_not_json(
+    fake_msal: FakeMsal, monkeypatch: pytest.MonkeyPatch, message_trace: Any, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(message_trace, "FILTER", "not json")
+    queries: list[tuple[str, dict[str, Any]]] = []
+
+    assert _run_all(message_trace, _trace_services({}, queries)) == 1
+
+    assert not queries
+    alpha, beta = _sheets(_trace_output(tmp_path))["Tenants"][2:]
+    assert alpha[:4] == ("Alpha", TENANT_A, "error", None)
+    assert beta[:4] == ("beta corp", TENANT_B, "error", None)
+    assert "Expecting value" in alpha[4]
+
+
+def test_message_trace_report_goes_on_after_a_tenant_error(
+    fake_msal: FakeMsal, message_trace: Any, tmp_path: Path
+) -> None:
+    held = _trace_services({TENANT_B: [_trace_record(1)]}, [])
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        if bearer_tenant(request) == TENANT_A and request.url.path.endswith("/InvokeCommand"):
+            reason = "Ex1|Exception|The interval between StartDate and EndDate is too long."
+            error = {
+                "code": "BadRequest",
+                "message": "Error executing cmdlet",
+                "details": [{"message": reason}],
+            }
+            return httpx2.Response(400, json={"error": error})
+        return held.handle_request(request)
+
+    assert _run_all(message_trace, httpx2.MockTransport(handler)) == 1
+
+    alpha, beta = _sheets(_trace_output(tmp_path))["Tenants"][2:]
+    assert alpha[:4] == ("Alpha", TENANT_A, "error", None)
+    assert "The interval between StartDate and EndDate is too long." in alpha[4]
+    assert beta == ("beta corp", TENANT_B, "ok", 1, None)
+    assert not _trace_output(tmp_path, "Alpha").exists()
+
+
+def test_message_trace_workbook_has_the_filter_title_and_a_table_below_it(
+    message_trace: Any, tmp_path: Path
+) -> None:
+    message_trace.report(
+        [
+            TenantResult(Tenant(TENANT_A, "Alpha"), "ok", 2),
+            TenantResult(Tenant(TENANT_B, "beta corp"), "auth_failed", error="AADSTS65001"),
+        ]
+    )
+    sheet = load_workbook(_trace_output(tmp_path))["Tenants"]
+    assert sheet["A1"].value == TRACE_FILTER
+    assert sheet["A1"].font.b
+    assert (sheet["A1"].font.sz, sheet["B3"].font.sz) == (20, 11)
+    # The title is in A1 alone, and runs on across B1:E1, which stay empty.
+    assert not sheet.merged_cells.ranges
+    assert [cell.value for cell in sheet[1][1:]] == [None] * 4
+    assert list(sheet.iter_rows(min_row=3, values_only=True)) == [
+        ("Alpha", TENANT_A, "ok", 2, None),
+        ("beta corp", TENANT_B, "auth_failed", None, "AADSTS65001"),
+    ]
+    assert sheet.freeze_panes == "A3"
+    (table,) = sheet.tables.values()
+    assert table.ref == "A2:E4"
+    assert table.tableStyleInfo is not None
+    assert table.tableStyleInfo.name == "TableStyleMedium8"
+    _assert_consolas(_trace_output(tmp_path))
+
+
+def test_message_trace_writes_nothing_when_no_tenant_ran(
+    message_trace: Any, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    message_trace.report([])
+    assert not (tmp_path / "reports").exists()
+    assert capsys.readouterr().out == "No tenants ran; no workbook written.\n"
+
+
+def test_message_trace_keeps_an_earlier_runs_files(
+    fake_msal: FakeMsal,
+    message_trace: Any,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO)
+    earlier_json = _trace_output(tmp_path, "Alpha")
+    earlier_workbook = _trace_output(tmp_path)
+    earlier_json.parent.mkdir(parents=True)
+    earlier_json.write_bytes(b"earlier records")
+    earlier_workbook.write_bytes(b"earlier workbook")
+
+    transport = _trace_services({TENANT_A: [_trace_record(1)]}, [])
+    assert _run_all(message_trace, transport) == 0
+
+    assert earlier_json.read_bytes() == b"earlier records"
+    assert earlier_workbook.read_bytes() == b"earlier workbook"
+    new_json = earlier_json.with_name(f"{earlier_json.stem}_2.json")
+    new_workbook = earlier_workbook.with_name(f"{earlier_workbook.stem}_2.xlsx")
+    assert json.loads(new_json.read_text(encoding="utf-8")) == [_trace_record(1)]
+    assert _sheets(new_workbook)["Tenants"][0][0] == TRACE_FILTER
+    assert capsys.readouterr().out == f"Wrote {new_workbook}\n"
+    assert f"1 records match; wrote {new_json}" in caplog.messages
     _assert_consolas(new_workbook)
 
 

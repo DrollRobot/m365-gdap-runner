@@ -20,6 +20,7 @@ pytestmark = pytest.mark.unit
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = sorted((ROOT / "examples").glob("*.py"))
 SERVICE_PRINCIPAL_ENABLED = ROOT / "examples" / "service_principal_enabled.py"
+MESSAGE_TRACE = ROOT / "examples" / "exchange_message_trace.py"
 
 # The block a script's header lives in, as PEP 723 gives the pattern.
 BLOCK = re.compile(r"(?m)^# /// (?P<type>[a-zA-Z0-9-]+)$\s(?P<content>(^#(| .*)$\s)+)^# ///$")
@@ -99,3 +100,22 @@ def test_service_principal_refuses_disable_with_delete(
         runpy.run_path(str(SERVICE_PRINCIPAL_ENABLED), run_name="__main__")
     assert exc.value.code == 2
     assert "argument --delete: not allowed with argument --disable" in capsys.readouterr().err
+
+
+def test_message_trace_command_line_takes_the_filter_as_given(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    given = '{"SenderAddress": "admin@contoso.com"}'
+    seen: list[tuple[str, Path]] = []
+
+    def fake_main(name: str, args: argparse.Namespace) -> int:
+        script = sys.modules[name]
+        seen.append((script.FILTER, script.OUT_DIR))
+        return 0
+
+    monkeypatch.setattr(m365_gdap_runner, "main", fake_main)
+    monkeypatch.setattr(sys, "argv", ["exchange_message_trace.py", given, "--out", "x"])
+    with pytest.raises(SystemExit) as exc:
+        runpy.run_path(str(MESSAGE_TRACE), run_name="__main__")
+    assert exc.value.code == 0
+    assert seen == [(given, Path("x"))]
